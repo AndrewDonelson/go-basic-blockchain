@@ -14,6 +14,7 @@ import (
 	"io"
 	"io/ioutil"
 	"log"
+	"math"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -26,6 +27,9 @@ import (
 )
 
 const (
+	// proofOfWorkDifficulty is the number of leading zeros that must be found in the hash of a block
+	proofOfWorkDifficulty = 4
+
 	// transaction fee is 5 hunderths of a coin (a nickle-ish)
 	transactionFee = 0.05
 
@@ -55,6 +59,9 @@ const (
 
 	// Log Date/Time format
 	logDateTimeFormat = "2006-01-02 15:04:05"
+
+	// maxNonce is the maximum value for a nonce
+	maxNonce = math.MaxInt64
 )
 
 // Wallet represents a user's wallet.
@@ -425,6 +432,44 @@ func (bc *Blockchain) AddTransaction(transaction Transaction) {
 	fmt.Printf("[%s] Added TX to que: %v\n", time.Now().Format(logDateTimeFormat), transaction)
 }
 
+// Mine mines a new block with the given transactions and difficulty.
+func (bc *Blockchain) Mine(block *Block, difficulty int) *Block {
+	// Prepare difficulty string for comparison. It is a string consisting of `difficulty` number of zeros.
+	prefix := strings.Repeat("0", difficulty)
+
+	// Try different nonces until we get a hash with `difficulty` leading zeros.
+	for i := 0; i < maxNonce; i++ {
+		block.Nonce = strconv.Itoa(i)
+		block.Hash = block.calculateHash()
+
+		// Compare the prefix of the hash and our difficulty string.
+		// If they are equal, we've mined a block.
+		if strings.HasPrefix(block.Hash, prefix) {
+			block.save() // Save the block to the disk
+			bc.Blocks = append(bc.Blocks, block)
+			bc.TransactionQueue = []Transaction{} // Clear the transaction queue
+
+			fmt.Printf("[%s] Mined a new Block with Hash [%s]\n", time.Now().Format(logDateTimeFormat), block.Hash)
+			break
+		}
+	}
+
+	return block
+}
+
+// Mine mines a block.
+func (bc *Blockchain) oldMine(block *Block, difficulty int) *Block {
+	prefix := strings.Repeat("0", difficulty)
+	for i := 0; ; i++ {
+		block.Nonce = strconv.Itoa(i)
+		block.Hash = bc.generateHash(block)
+		if strings.HasPrefix(block.Hash, prefix) {
+			fmt.Printf("[%s] Block [%d] mined with Hash [%s]\n", time.Now().Format(logDateTimeFormat), block.Index, block.Hash)
+			return block
+		}
+	}
+}
+
 // Run runs the blockchain.
 func (bc *Blockchain) Run(difficulty int) {
 	// Create a ticker that fires every second
@@ -457,8 +502,12 @@ func (bc *Blockchain) Run(difficulty int) {
 				previousHash = bc.Blocks[index-1].Hash
 			}
 
-			block := &Block{index, time.Now(), bc.TransactionQueue, "", "", previousHash}
-			block = bc.Mine(block, difficulty)
+			// block := &Block{index, time.Now(), bc.TransactionQueue, "", "", previousHash}
+			// block = bc.Mine(block, difficulty)
+
+			// Mine a new block with the current transaction queue and given difficulty
+			block := &Block{Index: index, Timestamp: time.Now(), Transactions: bc.TransactionQueue, Nonce: "", Hash: "", PreviousHash: previousHash}
+			bc.Mine(block, difficulty)
 
 			// add the block to the blockchain
 			bc.Blocks = append(bc.Blocks, block)
@@ -471,19 +520,6 @@ func (bc *Blockchain) Run(difficulty int) {
 			bc.mux.Unlock()
 		}
 	}()
-}
-
-// Mine mines a block.
-func (bc *Blockchain) Mine(block *Block, difficulty int) *Block {
-	prefix := strings.Repeat("0", difficulty)
-	for i := 0; ; i++ {
-		block.Nonce = strconv.Itoa(i)
-		block.Hash = bc.generateHash(block)
-		if strings.HasPrefix(block.Hash, prefix) {
-			fmt.Printf("[%s] Block [%d] mined with Hash [%s]\n", time.Now().Format(logDateTimeFormat), block.Index, block.Hash)
-			return block
-		}
-	}
 }
 
 // generateHash generates a hash for a block.

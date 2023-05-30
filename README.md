@@ -10,7 +10,7 @@ A Basic Blockchain written from scratch and not using any 3rd party blockchain (
 ## What is currently included
 
 - [x] Basic Blockchain
-- [ ] Proof of Work
+- [x] Proof of Work
 - [x] Transactions
 - [x] Wallets
 - [ ] Mining Rewards
