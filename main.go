@@ -13,6 +13,8 @@ import (
 	"fmt"
 	"io"
 	"io/ioutil"
+	"log"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -24,11 +26,35 @@ import (
 )
 
 const (
-	TransactionFee   = 0.05   // transaction fee is 5 hunderths of a coin (a nickle-ish)
-	saltSize         = 16     // salt size is 16 bytes
-	fundWalletAmount = 100.0  // default Amount to fund new wallets is 100 coins
-	blockTimeInSec   = 5      // block time is 5 seconds
-	dataFolder       = "data" // data folder is the folder where the blockchain data is stored
+	// transaction fee is 5 hunderths of a coin (a nickle-ish)
+	transactionFee = 0.05
+
+	// miner reward is 50% of the transaction fee
+	minerRewardPCT = 50.0
+
+	// minerAddress is the address of the miner (will be supplied by the environment)
+	minerAddress = "MINER"
+
+	// devreward is 50% of the transaction fee
+	devRewardPCT = 50.0
+
+	// devAddress is the address of the developer
+	devAddress = "DEV" // will be supplied by the genesis block
+
+	// salt size is 16 bytes
+	saltSize = 16
+
+	// default Amount to fund new wallets is 100 coins
+	fundWalletAmount = 100.0
+
+	// block time is 5 seconds
+	blockTimeInSec = 5
+
+	// data folder is the folder where the blockchain data is stored
+	dataFolder = "data"
+
+	// Log Date/Time format
+	logDateTimeFormat = "2006-01-02 15:04:05"
 )
 
 // Wallet represents a user's wallet.
@@ -60,14 +86,23 @@ func NewWallet(name string, tags []string) (*Wallet, error) {
 	}
 
 	// Create a new wallet with a unique ID, name, and set of tags.
-	return &Wallet{
+	wallet := &Wallet{
 		ID:         uuid.New(),
 		Name:       name,
 		Tags:       tags,
 		PrivateKey: privateKeyBytes,
 		PublicKey:  publicKeyBytes,
 		Balance:    fundWalletAmount,
-	}, nil
+	}
+
+	if err != nil {
+		return nil, err
+	}
+
+	wallet.GetAddress()
+	fmt.Printf("[%s] Created new Wallet: %+v\n", time.Now().Format(logDateTimeFormat), wallet)
+
+	return wallet, nil
 }
 
 // GetAddress generates and returns the wallet address.
@@ -84,6 +119,7 @@ func (w *Wallet) GetAddress() string {
 	return w.Address
 }
 
+// EncryptPrivateKey encrypts the wallet's private key using the passphrase.
 func (w *Wallet) EncryptPrivateKey(passphrase string) error {
 	// Generate a new salt
 	salt := make([]byte, saltSize)
@@ -170,8 +206,15 @@ type Bank struct {
 
 // NewBankTransaction creates a new bank transaction.
 func NewBankTransaction(from *Wallet, to *Wallet, amount float64) (*Bank, error) {
+	fmt.Printf("[%s] Creating TX (BANK) - FROM: %s, TO: %s, Amount: %f\n", time.Now().Format(logDateTimeFormat), from.Address, to.Address, amount)
+
+	// Validate if wallets exist
+	if from == nil || to == nil {
+		return nil, fmt.Errorf("wallets can't be nil")
+	}
+
 	// Check if the from wallet has enough balance
-	if from.Balance < amount+TransactionFee {
+	if from.Balance < amount+transactionFee {
 		return nil, fmt.Errorf("insufficient balance in the wallet")
 	}
 
@@ -179,7 +222,7 @@ func NewBankTransaction(from *Wallet, to *Wallet, amount float64) (*Bank, error)
 		Tx: Tx{
 			From: from,
 			To:   to,
-			Fee:  TransactionFee,
+			Fee:  transactionFee,
 		},
 		Amount: amount,
 	}, nil
@@ -187,14 +230,16 @@ func NewBankTransaction(from *Wallet, to *Wallet, amount float64) (*Bank, error)
 
 // Process processes the bank transaction.
 func (b *Bank) Process() string {
-	// Check if From wallet has enough balance for the transaction
-	if b.From.Balance < b.Amount {
-		return fmt.Sprintf("Insufficient balance in wallet %s", b.From.Address)
+	// Check if From wallet has enough balance for the transaction + fee
+	if b.From.Balance < (b.Amount * transactionFee) {
+		return fmt.Sprintf("Insufficient balance in wallet %s", b.From.GetAddress())
 	}
 
 	// Subtract the amount from the From wallet and add it to the To wallet
 	b.From.Balance -= b.Amount
 	b.To.Balance += b.Amount
+
+	//TODO: Disperse fee to the miner & dev wallet's (if applicable)
 
 	return fmt.Sprintf("Transferred %f from %s to %s", b.Amount, b.From.Address, b.To.Address)
 }
@@ -207,6 +252,8 @@ type Message struct {
 
 // NewMessageTransaction creates a new message transaction.
 func NewMessageTransaction(from *Wallet, to *Wallet, message string) (*Message, error) {
+	fmt.Printf("[%s] Creating TX (MESSAGE) - FROM: %s, TO: %s, Message: %s\n", time.Now().Format(logDateTimeFormat), from.GetAddress(), to.GetAddress(), message)
+
 	// Validate if wallets exist
 	if from == nil || to == nil {
 		return nil, fmt.Errorf("wallets can't be nil")
@@ -222,7 +269,7 @@ func NewMessageTransaction(from *Wallet, to *Wallet, message string) (*Message, 
 		Tx: Tx{
 			From: from,
 			To:   to,
-			Fee:  TransactionFee,
+			Fee:  transactionFee,
 		},
 		Message: message,
 	}
@@ -245,6 +292,43 @@ type Block struct {
 	PreviousHash string
 }
 
+func (b *Block) String() string {
+	return fmt.Sprintf("Index: %d, Timestamp: %s, Transactions: %d, Nonce: %s, Hash: %s, PreviousHash: %s", b.Index, b.Timestamp.Format(logDateTimeFormat), len(b.Transactions), b.Nonce, b.Hash, b.PreviousHash)
+}
+
+func (b *Block) calculateHash() string {
+	// Convert the block to a string
+	blockString := fmt.Sprintf("%d%s%s%s%s", b.Index, b.Timestamp.Format(logDateTimeFormat), b.Transactions, b.Nonce, b.PreviousHash)
+
+	// Hash the string
+	hash := sha256.Sum256([]byte(blockString))
+
+	// Return the hash as a string
+
+	return hex.EncodeToString(hash[:])
+}
+
+func (b *Block) save() error {
+	filename := fmt.Sprintf("%s/%010d.json", dataFolder, b.Index)
+	file, _ := json.MarshalIndent(b, "", " ")
+
+	_ = ioutil.WriteFile(filename, file, 0644)
+	fmt.Printf("[%s] Block [%d] saved to disk.\n", time.Now().Format(logDateTimeFormat), b.Index)
+
+	return nil
+}
+
+func (b *Block) load(file string) error {
+	blockData, err := ioutil.ReadFile(file)
+	if err != nil {
+		return err
+	}
+
+	json.Unmarshal(blockData, &b)
+
+	return nil
+}
+
 // Blockchain is a blockchain.
 type Blockchain struct {
 	Blocks           []*Block
@@ -255,25 +339,82 @@ type Blockchain struct {
 // NewBlockchain returns a new blockchain.
 func NewBlockchain() *Blockchain {
 	bc := &Blockchain{}
-	bc.LoadExistingBlocks()
+
+	err := bc.LoadExistingBlocks()
+	if err != nil {
+		log.Fatalln(err)
+	}
+
 	return bc
 }
 
+// DisplayStatus displays the status of the blockchain.
 func (bc *Blockchain) DisplayStatus() {
-	fmt.Println("Blockchain Status:")
-	fmt.Println("- Blocks:", len(bc.Blocks))
-	fmt.Println("- Transaction Queue:", len(bc.TransactionQueue))
+	fmt.Printf("[%s] Blockchain Status: Blocks: %d, Transaction Queue: %d\n",
+		time.Now().Format(logDateTimeFormat), len(bc.Blocks), len(bc.TransactionQueue))
+}
+
+// GenerateGenesisBlock generates the genesis block if there are no existing blocks.
+func (bc *Blockchain) GenerateGenesisBlock() {
+	if len(bc.Blocks) == 0 {
+		fmt.Printf("[%s] Generating Genesis Block...\n", time.Now().Format(logDateTimeFormat))
+
+		genesisBlock := &Block{
+			Index:        0,
+			Timestamp:    time.Now(),
+			Transactions: []Transaction{}, // Genesis block usually does not contain transactions
+			Nonce:        "",
+			Hash:         "",
+			PreviousHash: "", // There is no previous block for the genesis block
+		}
+
+		genesisBlock.Hash = bc.generateHash(genesisBlock)
+
+		genesisBlock.save()
+
+		bc.Blocks = append(bc.Blocks, genesisBlock)
+
+		fmt.Printf("[%s] Genesis Block created with Hash [%s]\n", time.Now().Format(logDateTimeFormat), genesisBlock.Hash)
+	}
 }
 
 // LoadExistingBlocks loads existing blocks from disk.
-func (bc *Blockchain) LoadExistingBlocks() {
-	files, _ := filepath.Glob("*.json")
+func (bc *Blockchain) LoadExistingBlocks() error {
+	// Check if the dataFolder exists, if not, create it
+	if _, err := os.Stat(dataFolder); os.IsNotExist(err) {
+		err := os.MkdirAll(dataFolder, 0755)
+		if err != nil {
+			return fmt.Errorf("[%s] Error creating directory: %s", time.Now().Format(logDateTimeFormat), err)
+		}
+		fmt.Printf("[%s] Data directory '%s' created.\n", time.Now().Format(logDateTimeFormat), dataFolder)
+	}
+
+	files, _ := filepath.Glob(fmt.Sprintf("%s/*.json", dataFolder))
+	if len(files) == 0 {
+		fmt.Printf("[%s] No existing Blocks\n", time.Now().Format(logDateTimeFormat))
+
+		// If no blocks loaded, generate Genesis Block.
+		bc.GenerateGenesisBlock()
+
+		return nil
+	}
+
+	fmt.Printf("[%s] Loading Blockchain [%d]...\n", time.Now().Format(logDateTimeFormat), len(files))
+
+	// Load all the blocks
 	for _, file := range files {
-		blockData, _ := ioutil.ReadFile(file)
-		var block Block
-		json.Unmarshal(blockData, &block)
+		block := Block{}
+		err := block.load(file)
+		if err != nil {
+			return err
+		}
+
 		bc.Blocks = append(bc.Blocks, &block)
 	}
+
+	fmt.Printf("[%s] Done\n", time.Now().Format(logDateTimeFormat))
+
+	return nil
 }
 
 // AddTransaction adds a transaction to the transaction queue.
@@ -281,44 +422,55 @@ func (bc *Blockchain) AddTransaction(transaction Transaction) {
 	bc.mux.Lock()
 	bc.TransactionQueue = append(bc.TransactionQueue, transaction)
 	bc.mux.Unlock()
+	fmt.Printf("[%s] Added TX to que: %v\n", time.Now().Format(logDateTimeFormat), transaction)
 }
 
 // Run runs the blockchain.
 func (bc *Blockchain) Run(difficulty int) {
-	for {
-		// check the queue for transactions
-		bc.mux.Lock()
-		if len(bc.TransactionQueue) == 0 {
+	// Create a ticker that fires every second
+	statusTicker := time.NewTicker(time.Second)
+
+	// Create a ticker that fires every 5 seconds
+	blockTicker := time.NewTicker(blockTimeInSec * time.Second)
+
+	// Run a goroutine that calls DisplayStatus() every second
+	go func() {
+		for range statusTicker.C {
+			bc.DisplayStatus()
+		}
+	}()
+
+	// Run a goroutine that checks for transactions every 5 seconds
+	go func() {
+		for range blockTicker.C {
+			// check the queue for transactions
+			bc.mux.Lock()
+			if len(bc.TransactionQueue) == 0 {
+				bc.mux.Unlock()
+				continue
+			}
+
+			// create a new block
+			index := len(bc.Blocks)
+			previousHash := ""
+			if index > 0 {
+				previousHash = bc.Blocks[index-1].Hash
+			}
+
+			block := &Block{index, time.Now(), bc.TransactionQueue, "", "", previousHash}
+			block = bc.Mine(block, difficulty)
+
+			// add the block to the blockchain
+			bc.Blocks = append(bc.Blocks, block)
+			bc.TransactionQueue = nil // clear the transaction queue
+
+			// save the block to disk
+			block.save()
+
+			// unlock the mutex
 			bc.mux.Unlock()
-			time.Sleep(5 * time.Second)
-			continue
 		}
-
-		// create a new block
-		index := len(bc.Blocks)
-		previousHash := ""
-		if index > 0 {
-			previousHash = bc.Blocks[index-1].Hash
-		}
-
-		block := &Block{index, time.Now(), bc.TransactionQueue, "", "", previousHash}
-		block = bc.Mine(block, difficulty)
-
-		// add the block to the blockchain
-		bc.Blocks = append(bc.Blocks, block)
-		bc.TransactionQueue = nil // clear the transaction queue
-
-		// save the block to disk
-		filename := fmt.Sprintf("%s/%010d.json", dataFolder, index)
-		file, _ := json.MarshalIndent(block, "", " ")
-
-		_ = ioutil.WriteFile(filename, file, 0644)
-		fmt.Printf("Block [%d] saved to disk.\n", block.Index)
-
-		// unlock the mutex and wait for 5 seconds
-		bc.mux.Unlock()
-		time.Sleep(5 * time.Second) // wait for 5 seconds
-	}
+	}()
 }
 
 // Mine mines a block.
@@ -328,7 +480,7 @@ func (bc *Blockchain) Mine(block *Block, difficulty int) *Block {
 		block.Nonce = strconv.Itoa(i)
 		block.Hash = bc.generateHash(block)
 		if strings.HasPrefix(block.Hash, prefix) {
-			fmt.Printf("Block [%d] mined with Hash [%s]\n", block.Index, block.Hash)
+			fmt.Printf("[%s] Block [%d] mined with Hash [%s]\n", time.Now().Format(logDateTimeFormat), block.Index, block.Hash)
 			return block
 		}
 	}
