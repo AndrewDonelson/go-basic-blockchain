@@ -19,6 +19,7 @@ A Basic Blockchain written from scratch and not using any 3rd party blockchain (
 - [x] Persistence
 - [ ] CLI
 - [ ] Web Interface
+- [x] Makefile (build, run, test, etc)
 - [ ] Docker
 - [x] Tests
 - [ ] Documentation
