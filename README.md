@@ -11,16 +11,16 @@ A Basic Blockchain written from scratch and not using any 3rd party blockchain (
 
 - [x] Basic Blockchain
 - [ ] Proof of Work
-- [ ] Transactions
-- [ ] Wallets
+- [x] Transactions
+- [x] Wallets
 - [ ] Mining Rewards
 - [ ] Network
 - [ ] Consensus
-- [ ] Persistence
+- [x] Persistence
 - [ ] CLI
 - [ ] Web Interface
 - [ ] Docker
-- [ ] Tests
+- [x] Tests
 - [ ] Documentation
 
 ## What is a Blockchain
