@@ -28,15 +28,37 @@ func NewMessageTransaction(from *Wallet, to *Wallet, message string) (*Message, 
 	// Create the new Message transaction
 	messageTx := &Message{
 		Tx: Tx{
-			From: from,
-			To:   to,
-			Fee:  transactionFee,
+			Version:  TransactionProtocolVersion,
+			Protocol: MessageProtocolID,
+			From:     from,
+			To:       to,
+			Fee:      transactionFee,
 		},
 		Message: message,
 	}
 
 	return messageTx, nil
 }
+
+// GetProtocol returns the protocol ID of the transaction. message in this case.
+func (m *Message) GetProtocol() string {
+	return m.Protocol
+}
+
+// // Verify returns an error if the transaction is not valid.
+// func (m *Message) Verify(signature []byte) error {
+// 	return nil
+// }
+
+// // Send sends the filled and signed transaction to the network que to be added to the blockchain.
+// func (m *Message) Send() error {
+// 	return nil
+// }
+
+// // Sign signs the transaction with the private key of the sender.
+// func (m *Message) Sign(signature []byte) error {
+// 	return nil
+// }
 
 // Process returns a string representation of the message.
 func (m *Message) Process() string {

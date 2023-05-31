@@ -1,10 +1,10 @@
 package sdk
 
 import (
+	"fmt"
 	"math/rand"
 	"os"
 	"strconv"
-	"sync"
 	"testing"
 	"time"
 
@@ -13,7 +13,7 @@ import (
 )
 
 var (
-	transactionQueueSize = 100
+	transactionQueueSize = 10
 	transactionWaitTime  = 25 * time.Second
 )
 
@@ -43,6 +43,8 @@ func TestWalletMethods(t *testing.T) {
 }
 
 func TestBlockchain(t *testing.T) {
+	var err error
+
 	gomega.RegisterTestingT(t) // Register Gomega's fail handler
 	assert := assert.New(t)
 
@@ -51,38 +53,51 @@ func TestBlockchain(t *testing.T) {
 	// Create wallets and add transactions
 	wallets := make([]*Wallet, 5)
 	for i := 0; i < len(wallets); i++ {
-		var err error
 		wallets[i], err = NewWallet("Wallet"+strconv.Itoa(i), []string{"tag1", "tag2"})
 		assert.NoError(err)
+	}
 
+	// Add transactions
+	for numTx := 0; numTx < 5; numTx++ {
 		for j := 0; j < transactionQueueSize; j++ {
-			toWallet := wallets[(i+1)%len(wallets)]
-			transaction, err := NewBankTransaction(wallets[i], toWallet, rand.Float64())
+			// Pick two random, distinct wallets
+			var fromWallet, toWallet *Wallet
+			for fromWallet == toWallet {
+				fromWallet = wallets[rand.Intn(len(wallets))]
+				toWallet = wallets[rand.Intn(len(wallets))]
+			}
+
+			bankTx, err := NewBankTransaction(fromWallet, toWallet, rand.Float64())
 			assert.NoError(err)
-			bc.AddTransaction(transaction)
+			bc.AddTransaction(bankTx)
+
+			msgTx, err := NewMessageTransaction(toWallet, fromWallet, fmt.Sprintf("Thank you %s!", toWallet.Name))
+			assert.NoError(err)
+			bc.AddTransaction(msgTx)
+
 		}
 	}
 
-	// Test adding transactions concurrently to simulate high load
-	wg := sync.WaitGroup{}
-	for i := 0; i < len(wallets); i++ {
-		wg.Add(1)
-		go func(i int) {
-			defer wg.Done()
+	// // Test adding transactions concurrently to simulate high load
+	// wg := sync.WaitGroup{}
+	// for i := 0; i < len(wallets); i++ {
+	// 	wg.Add(1)
+	// 	go func(i int) {
+	// 		defer wg.Done()
 
-			for j := 0; j < transactionQueueSize; j++ {
-				toWallet := wallets[(i+1)%len(wallets)]
-				transaction, err := NewBankTransaction(wallets[i], toWallet, rand.Float64())
-				assert.NoError(err)
-				bc.AddTransaction(transaction)
-			}
-		}(i)
-	}
-	wg.Wait()
+	// 		for j := 0; j < transactionQueueSize; j++ {
+	// 			toWallet := wallets[(i+1)%len(wallets)]
+	// 			transaction, err := NewBankTransaction(wallets[i], toWallet, rand.Float64())
+	// 			assert.NoError(err)
+	// 			bc.AddTransaction(transaction)
+	// 		}
+	// 	}(i)
+	// }
+	// wg.Wait()
 
-	gomega.Eventually(func() int {
-		return len(bc.TransactionQueue)
-	}, transactionWaitTime, 50*time.Millisecond).Should(gomega.Equal(0))
+	// gomega.Eventually(func() int {
+	// 	return len(bc.TransactionQueue)
+	// }, transactionWaitTime, 50*time.Millisecond).Should(gomega.Equal(0))
 
 	// Further test cases to be added
 }

@@ -38,4 +38,12 @@ const (
 
 	// maxNonce is the maximum value for a nonce
 	maxNonce = math.MaxInt64
+
+	// Tranasction Protocol Version
+	TransactionProtocolVersion = "1.0"
+
+	// Transaction Protocol IDs
+	BankProtocolID     = "BANK"
+	MessageProtocolID  = "MESSAGE"
+	CoinbaseProtocolID = "COINBASE"
 )

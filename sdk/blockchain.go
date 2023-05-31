@@ -106,7 +106,7 @@ func (bc *Blockchain) AddTransaction(transaction Transaction) {
 	bc.mux.Lock()
 	bc.TransactionQueue = append(bc.TransactionQueue, transaction)
 	bc.mux.Unlock()
-	fmt.Printf("[%s] Added TX to que: %v\n", time.Now().Format(logDateTimeFormat), transaction)
+	fmt.Printf("[%s] Added TX to que: %v\n", time.Now().Format(logDateTimeFormat), PrettyPrint(transaction))
 }
 
 // Mine mines a new block with the given transactions and difficulty.
