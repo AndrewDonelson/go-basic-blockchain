@@ -3,6 +3,10 @@ package sdk
 import "math"
 
 const (
+	// TODO:
+	//	- Move these to a config file (most of them)
+	//  - Move the a few into the genesis block (minerAddress, devAddress)
+
 	// BlockchainVersion is the version of the blockchain
 	BlockchainVersion = "0.1.0"
 

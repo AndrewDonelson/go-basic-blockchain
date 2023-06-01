@@ -32,6 +32,21 @@ func NewBlockchain() *Blockchain {
 	return bc
 }
 
+func CreateBLockchain() *Blockchain {
+	bc := &Blockchain{}
+
+	genesisTxs := []Transaction{}
+
+	// TODO: Create the DEV Wallet & add the genesis block
+	// TODO: Add the transactionFee to the genesis block
+	// TODO: Add the ProtocolVersion to use, to the genesis block
+	// TODO: Add the BlockInterval to the genesis block
+
+	bc.GenerateGenesisBlock(genesisTxs)
+
+	return bc
+}
+
 // DisplayStatus displays the status of the blockchain.
 func (bc *Blockchain) DisplayStatus() {
 	fmt.Printf("[%s] Blockchain Status: Blocks: %d, Transaction Queue: %d\n",
@@ -39,7 +54,7 @@ func (bc *Blockchain) DisplayStatus() {
 }
 
 // GenerateGenesisBlock generates the genesis block if there are no existing blocks.
-func (bc *Blockchain) GenerateGenesisBlock() {
+func (bc *Blockchain) GenerateGenesisBlock(txs []Transaction) {
 	if len(bc.Blocks) == 0 {
 		fmt.Printf("[%s] Generating Genesis Block...\n", time.Now().Format(logDateTimeFormat))
 
@@ -50,6 +65,11 @@ func (bc *Blockchain) GenerateGenesisBlock() {
 			Nonce:        "",
 			Hash:         "",
 			PreviousHash: "", // There is no previous block for the genesis block
+		}
+
+		// if we have any transactions, add them to the genesis block
+		if len(txs) > 0 {
+			genesisBlock.Transactions = txs
 		}
 
 		genesisBlock.Hash = bc.generateHash(genesisBlock)
@@ -78,7 +98,7 @@ func (bc *Blockchain) LoadExistingBlocks() error {
 		fmt.Printf("[%s] No existing Blocks\n", time.Now().Format(logDateTimeFormat))
 
 		// If no blocks loaded, generate Genesis Block.
-		bc.GenerateGenesisBlock()
+		bc.GenerateGenesisBlock([]Transaction{})
 
 		return nil
 	}
