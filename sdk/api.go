@@ -3,8 +3,10 @@ package sdk
 import (
 	"encoding/json"
 	"fmt"
+	"html/template"
 	"log"
 	"net/http"
+	"time"
 
 	"github.com/gorilla/mux"
 )
@@ -65,6 +67,8 @@ func NewAPI() *API {
 		router: mux.NewRouter(),
 	}
 
+	fmt.Printf("Initializing API...\n")
+
 	// Register the API endpoints
 	api.registerRoutes()
 
@@ -82,8 +86,51 @@ func authenticateNode(next http.Handler) http.Handler {
 	})
 }
 
+// Logging middleware logs the request and response details
+func loggingMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+
+		// Get the user's remote IP address
+		ip := GetUserIP(r)
+
+		// Log the request details
+		cacheReqStr := fmt.Sprintf("[%s] Request: %s %s %s", time.Now().Format(logDateTimeFormat), ip, r.Method, r.URL.Path)
+
+		// Create a response writer wrapper to capture the response status code
+		ww := &responseWriterWrapper{ResponseWriter: w}
+
+		// Call the next handler
+		next.ServeHTTP(ww, r)
+
+		// Log the response details
+		//api.logger.Printf("%s -> Response: %d %d bytes", cacheReqStr, ww.statusCode, ww.bytesWritten)
+		fmt.Printf("%s -> Response: %d %d bytes\n", cacheReqStr, ww.statusCode, ww.bytesWritten)
+	})
+}
+
+// responseWriterWrapper is a wrapper around http.ResponseWriter to capture the response status code.
+type responseWriterWrapper struct {
+	http.ResponseWriter
+	statusCode   int
+	bytesWritten int
+}
+
+func (ww *responseWriterWrapper) WriteHeader(code int) {
+	ww.statusCode = code
+	ww.ResponseWriter.WriteHeader(code)
+}
+
+func (ww *responseWriterWrapper) Write(data []byte) (int, error) {
+	n, err := ww.ResponseWriter.Write(data)
+	ww.bytesWritten += n
+	return n, err
+}
+
 // Start starts the API and listens for incoming requests
 func (api *API) Start(addr string) {
+	// Create a logging middleware
+	api.router.Use(loggingMiddleware)
+
 	// Start the HTTP server
 	fmt.Printf("API listening on %s\n", addr)
 	log.Fatal(http.ListenAndServe(addr, api.router))
@@ -91,9 +138,9 @@ func (api *API) Start(addr string) {
 
 // registerRoutes registers the API routes.
 func (api *API) registerRoutes() {
-	api.router.HandleFunc("/", api.handleHome).Methods("GET")
+	api.router.HandleFunc("/", api.handleHome).Methods("GET") // same as /info but HTML only
 	api.router.HandleFunc("/version", api.handleVersion).Methods("GET")
-	api.router.HandleFunc("/info", api.handleInfo).Methods("GET")
+	api.router.HandleFunc("/info", api.handleInfo).Methods("GET") // Same as / but JSON only
 	api.router.HandleFunc("/health", api.handleHealth).Methods("GET")
 	api.router.HandleFunc("/blockchain", api.handleBlockchain).Methods("GET")
 	api.router.HandleFunc("/blockchain/blocks", api.handleBrowseBlocks).Methods("GET")
@@ -136,6 +183,71 @@ func (api *API) handleHome(w http.ResponseWriter, r *http.Request) {
 		Fee:        transactionFee,
 	}
 
+	// Define the HTML template
+	const homeTemplate = `
+		<!DOCTYPE html>
+		<html>
+		<head>
+			<title>Blockchain Info</title>
+			<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css">
+			<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.15.4/css/all.min.css">
+		</head>
+		<body>
+			<div class="container">
+				<h1>Blockchain Info</h1>
+				<table class="table">
+					<tr>
+						<th>Version</th>
+						<td>{{.Version}}</td>
+					</tr>
+					<tr>
+						<th>Name</th>
+						<td>{{.Name}}</td>
+					</tr>
+					<tr>
+						<th>Symbol</th>
+						<td>{{.Symbol}}</td>
+					</tr>
+					<tr>
+						<th>Block Time (s)</th>
+						<td>{{.BlockTime}}</td>
+					</tr>
+					<tr>
+						<th>Difficulty</th>
+						<td>{{.Difficulty}}</td>
+					</tr>
+					<tr>
+						<th>Transaction Fee</th>
+						<td>{{.Fee}}</td>
+					</tr>
+				</table>
+			</div>
+			<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+		</body>
+		</html>
+	`
+
+	// Parse the HTML template
+	tmpl, err := template.New("home").Parse(homeTemplate)
+	if err != nil {
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		return
+	}
+
+	// Render the HTML template with the data
+	err = tmpl.Execute(w, info)
+	if err != nil {
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		return
+	}
+}
+
+// handleVersion handles the version endpoint.
+func (api *API) handleVersion(w http.ResponseWriter, r *http.Request) {
+	info := BlockchainInfo{
+		Version: BlockchainVersion,
+	}
+
 	// Set response headers
 	w.Header().Set("Content-Type", "application/json")
 
@@ -151,16 +263,30 @@ func (api *API) handleHome(w http.ResponseWriter, r *http.Request) {
 	w.Write(data)
 }
 
-// handleVersion handles the version endpoint.
-func (api *API) handleVersion(w http.ResponseWriter, r *http.Request) {
-	// Return "Not Yet Implemented"
-	w.Write([]byte("Not Yet Implemented"))
-}
-
 // handleInfo handles the info endpoint.
 func (api *API) handleInfo(w http.ResponseWriter, r *http.Request) {
-	// Return "Not Yet Implemented"
-	w.Write([]byte("Not Yet Implemented"))
+	info := BlockchainInfo{
+		Version:    BlockchainVersion,
+		Name:       BlockchainName,
+		Symbol:     BlockchainSymbol,
+		BlockTime:  blockTimeInSec,
+		Difficulty: proofOfWorkDifficulty,
+		Fee:        transactionFee,
+	}
+
+	// Set response headers
+	w.Header().Set("Content-Type", "application/json")
+
+	// Marshal the info struct to JSON
+	data, err := json.Marshal(info)
+	if err != nil {
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		return
+	}
+
+	// Write the JSON response
+	w.WriteHeader(http.StatusOK)
+	w.Write(data)
 }
 
 // handleHealth handles the health endpoint.

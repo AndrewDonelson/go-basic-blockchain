@@ -3,7 +3,10 @@ package sdk
 import (
 	"encoding/json"
 	"fmt"
+	"net"
+	"net/http"
 	"reflect"
+	"strings"
 )
 
 // PrettyPrint is used to display any type nicely in the log output
@@ -26,4 +29,25 @@ func GetType(i interface{}) string {
 	}
 
 	return t.Name()
+}
+
+func GetUserIP(r *http.Request) string {
+	// Check if the request comes through a proxy
+	if forwardedFor := r.Header.Get("X-Forwarded-For"); forwardedFor != "" {
+		// The X-Forwarded-For header may contain a comma-separated list of IP addresses
+		// where the left-most address is the original client IP and the rest are proxy addresses.
+		// Split the header value and return the left-most IP address.
+		ips := strings.Split(forwardedFor, ",")
+		return strings.TrimSpace(ips[0])
+	}
+
+	// If X-Forwarded-For header is not set, fallback to RemoteAddr
+	// RemoteAddr typically has the format "IP:Port"
+	ip, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		// In case of error, return an empty string or handle the error as needed
+		return ""
+	}
+
+	return ip
 }

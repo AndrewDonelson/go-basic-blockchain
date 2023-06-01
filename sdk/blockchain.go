@@ -48,9 +48,24 @@ func CreateBLockchain() *Blockchain {
 }
 
 // DisplayStatus displays the status of the blockchain.
+// func (bc *Blockchain) DisplayStatus() {
+// 	fmt.Printf("[%s] Blockchain Status: Blocks: %d, Transaction Queue: %d\n",
+// 		time.Now().Format(logDateTimeFormat), len(bc.Blocks), len(bc.TransactionQueue))
+// }
+
+// DisplayStatus displays the status of the blockchain.
 func (bc *Blockchain) DisplayStatus() {
-	fmt.Printf("[%s] Blockchain Status: Blocks: %d, Transaction Queue: %d\n",
-		time.Now().Format(logDateTimeFormat), len(bc.Blocks), len(bc.TransactionQueue))
+	bc.mux.Lock()
+	defer bc.mux.Unlock()
+
+	staticBlocksLen := len(bc.Blocks)
+	staticTransactionQueueLen := len(bc.TransactionQueue)
+
+	// Check if the length of Blocks or TransactionQueue has changed
+	if staticBlocksLen != len(bc.Blocks) || staticTransactionQueueLen != len(bc.TransactionQueue) {
+		fmt.Printf("[%s] Blockchain Activity: Blocks: %d, Transaction Queue: %d\n",
+			time.Now().Format(logDateTimeFormat), len(bc.Blocks), len(bc.TransactionQueue))
+	}
 }
 
 // GenerateGenesisBlock generates the genesis block if there are no existing blocks.
