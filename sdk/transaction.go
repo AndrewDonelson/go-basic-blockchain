@@ -70,6 +70,7 @@ func (t *Tx) IsMessage() bool {
 	return t.Protocol == MessageProtocolID
 }
 
+// Process returns a string with the process of the transaction.
 func (t *Tx) Process() string {
 	return fmt.Sprintf("Transaction from %s to %s", t.From.Name, t.To.Name)
 }
@@ -89,6 +90,7 @@ func (t *Tx) Sign(signature []byte) error {
 	return nil
 }
 
+// VerifyTransactionSignature verifies the signature of the transaction.
 func (t *Tx) VerifyTransactionSignature(signature []byte, pubKeyBytes []byte) error {
 	// Convert the public key to rsa.PublicKey
 	block, _ := pem.Decode(pubKeyBytes)

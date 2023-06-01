@@ -28,6 +28,12 @@ export GO111MODULE=on
 .PHONY: deploy
 deploy: version clean test-race test-coverage all ## Execute everything
 
+build:
+	$Q $(GO) build \
+		-tags release \
+		-ldflags '-X $(MODULE)/cmd.Version=$(VERSION) -X $(MODULE)/cmd.BuildDate=$(DATE)' \
+		-o $(BIN)/$(basename $(notdir $(MODULE))) src/main.go
+
 .PHONY: all
 all: setup fmt lint | $(BIN) ; $(info $(M) building executable…) @ ## Build binary
 	$Q $(GO) build \

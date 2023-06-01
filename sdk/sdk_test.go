@@ -13,7 +13,7 @@ import (
 )
 
 var (
-	transactionQueueSize = 10
+	transactionQueueSize = 5
 	transactionWaitTime  = 25 * time.Second
 )
 
