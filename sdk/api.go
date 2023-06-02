@@ -6,6 +6,7 @@ import (
 	"html/template"
 	"log"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/gorilla/mux"
@@ -57,13 +58,15 @@ import (
 
 // API is the blockchain API.
 type API struct {
+	bc     *Blockchain
 	router *mux.Router
 }
 
 // NewAPI creates a new instance of the blockchain API.
-func NewAPI() *API {
+func NewAPI(bc *Blockchain) *API {
 	// Initialize the Gorilla Mux router
 	api := &API{
+		bc:     bc,
 		router: mux.NewRouter(),
 	}
 
@@ -309,32 +312,198 @@ func (api *API) handleConsensusBlock(w http.ResponseWriter, r *http.Request) {
 
 // handleBlockchain handles the blockchain endpoint.
 func (api *API) handleBlockchain(w http.ResponseWriter, r *http.Request) {
-	// Return "Not Yet Implemented"
-	w.Write([]byte("Not Yet Implemented"))
+
+	// Create a response struct
+	response := struct {
+		NumBlocks              int `json:"num_blocks"`
+		NumTransactionsInQueue int `json:"num_transactions_in_queue"`
+	}{
+		NumBlocks:              len(api.bc.Blocks),
+		NumTransactionsInQueue: len(api.bc.TransactionQueue),
+	}
+
+	// Set response headers
+	w.Header().Set("Content-Type", "application/json")
+
+	// Marshal the response struct to JSON
+	data, err := json.Marshal(response)
+	if err != nil {
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		return
+	}
+
+	// Write the JSON response
+	w.WriteHeader(http.StatusOK)
+	w.Write(data)
 }
 
 // handleBrowseBlocks handles the /blockchain/blocks endpoint.
 func (api *API) handleBrowseBlocks(w http.ResponseWriter, r *http.Request) {
-	// Return "Not Yet Implemented"
-	w.Write([]byte("Not Yet Implemented"))
+
+	// Parse the query parameters
+	queryParams := r.URL.Query()
+	page, err := strconv.Atoi(queryParams.Get("page"))
+	if err != nil {
+		page = 1
+	}
+	limit, err := strconv.Atoi(queryParams.Get("limit"))
+	if err != nil {
+		limit = 10
+	}
+
+	// Calculate the start and end indices for pagination
+	startIndex := (page - 1) * limit
+	endIndex := startIndex + limit
+	if startIndex >= len(api.bc.Blocks) {
+		startIndex = len(api.bc.Blocks) - 1
+	}
+	if endIndex >= len(api.bc.Blocks) {
+		endIndex = len(api.bc.Blocks)
+	}
+
+	// Get the requested blocks based on the pagination
+	requestedBlocks := api.bc.Blocks[startIndex:endIndex]
+
+	// Set response headers
+	w.Header().Set("Content-Type", "application/json")
+
+	// Marshal the requested blocks to JSON
+	data, err := json.Marshal(requestedBlocks)
+	if err != nil {
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		return
+	}
+
+	// Write the JSON response
+	w.WriteHeader(http.StatusOK)
+	w.Write(data)
 }
 
 // handleViewBlock handles the /blockchain/blocks/{index} endpoint.
 func (api *API) handleViewBlock(w http.ResponseWriter, r *http.Request) {
-	// Return "Not Yet Implemented"
-	w.Write([]byte("Not Yet Implemented"))
+	// Get the block index from the request URL path parameters
+	vars := mux.Vars(r)
+	indexStr := vars["index"]
+	index, err := strconv.Atoi(indexStr)
+	if err != nil {
+		http.Error(w, "Invalid block index", http.StatusBadRequest)
+		return
+	}
+
+	// Check if the requested block index is valid
+	if index < 0 || index >= len(api.bc.Blocks) {
+		http.Error(w, "Block not found", http.StatusNotFound)
+		return
+	}
+
+	// Get the requested block
+	block := api.bc.Blocks[index]
+
+	// Set response headers
+	w.Header().Set("Content-Type", "application/json")
+
+	// Marshal the block to JSON
+	data, err := json.Marshal(block)
+	if err != nil {
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		return
+	}
+
+	// Write the JSON response
+	w.WriteHeader(http.StatusOK)
+	w.Write(data)
 }
 
 // handleBrowseTransactionsInBlock handles the /blockchain/blocks/{index}/transactions endpoint.
 func (api *API) handleBrowseTransactionsInBlock(w http.ResponseWriter, r *http.Request) {
-	// Return "Not Yet Implemented"
-	w.Write([]byte("Not Yet Implemented"))
+	// Get the block index from the path parameters
+	vars := mux.Vars(r)
+	indexStr := vars["index"]
+	index, err := strconv.Atoi(indexStr)
+	if err != nil {
+		http.Error(w, "Invalid block index", http.StatusBadRequest)
+		return
+	}
+
+	// Check if the requested block index is valid
+	if index < 0 || index >= len(api.bc.Blocks) {
+		http.Error(w, "Block index out of range", http.StatusBadRequest)
+		return
+	}
+
+	// Get the transactions of the requested block
+	transactions := api.bc.Blocks[index].Transactions
+
+	// Set response headers
+	w.Header().Set("Content-Type", "application/json")
+
+	// Marshal the transactions to JSON
+	data, err := json.Marshal(transactions)
+	if err != nil {
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		return
+	}
+
+	// Write the JSON response
+	w.WriteHeader(http.StatusOK)
+	w.Write(data)
 }
 
 // handleViewTransactionInBlock handles the /blockchain/blocks/{index}/transactions/{id} endpoint.
 func (api *API) handleViewTransactionInBlock(w http.ResponseWriter, r *http.Request) {
+	// 	// Get the index and transaction ID from the URL path parameters
+	// 	vars := mux.Vars(r)
+	// 	indexStr := vars["index"]
+	// 	idStr := vars["id"]
+
+	// 	// Parse the index and transaction ID
+	// 	index, err := strconv.Atoi(indexStr)
+	// 	if err != nil {
+	// 		http.Error(w, "Invalid block index", http.StatusBadRequest)
+	// 		return
+	// 	}
+
+	// 	// Check if the block index is valid
+	// 	if index < 0 || index >= len(api.bc.Blocks) {
+	// 		http.Error(w, "Block not found", http.StatusNotFound)
+	// 		return
+	// 	}
+
+	// 	// Get the block at the specified index
+	// 	block := api.bc.Blocks[index]
+
+	// 	// Find the transaction with the specified ID in the block
+	// 	var transaction *Transaction
+	// 	for _, tx := range block.Transactions {
+	// 		if tx.ID == idStr {
+	// 			transaction = tx
+	// 			break
+	// 		}
+	// 	}
+
+	// 	// Check if the transaction was found
+	// 	if transaction == nil {
+	// 		http.Error(w, "Transaction not found", http.StatusNotFound)
+	// 		return
+	// 	}
+
+	// 	// Set response headers
+	// 	w.Header().Set("Content-Type", "application/json")
+
+	// 	// Marshal the transaction to JSON
+	// 	data, err := json.Marshal(transaction)
+	// 	if err != nil {
+	// 		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+	// 		return
+	// 	}
+
+	// 	// Write the JSON response
+	// 	w.WriteHeader(http.StatusOK)
+	// 	w.Write(data)
+
 	// Return "Not Yet Implemented"
 	w.Write([]byte("Not Yet Implemented"))
+
 }
 
 // handleBrowseTransactionsByProtocolInBlock handles the /blockchain/blocks/{index}/transactions/{protocol} endpoint.

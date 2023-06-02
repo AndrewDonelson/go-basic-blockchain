@@ -8,6 +8,8 @@ import (
 	"encoding/pem"
 	"fmt"
 	"time"
+
+	"github.com/pborman/uuid"
 )
 
 // Transaction is an interface that defines the Processes for the different types of protocol transactions.
@@ -21,12 +23,16 @@ type Transaction interface {
 
 // Tx is a transaction that represents a generic transaction.
 type Tx struct {
-	Version   string  // Version of the transaction
-	Protocol  string  // Protocol ID (coinbase, bank, message, etc)
-	From      *Wallet // Wallet sending the transaction
-	To        *Wallet // Wallet receiving the transaction
-	Fee       float64 // Fee for the transaction
-	Signature []byte  // Signature of the transaction
+	ID        string    // Unit ID of the transaction
+	Time      time.Time // Time the transaction was created
+	Version   string    // Version of the transaction
+	Protocol  string    // Protocol ID (coinbase, bank, message, etc)
+	From      *Wallet   // Wallet sending the transaction
+	To        *Wallet   // Wallet receiving the transaction
+	Fee       float64   // Fee for the transaction
+	status    string    // Status of the transaction (pending, confirmed, inserted, failed)
+	Signature []byte    // Signature of the transaction
+	Hash      []byte    // Hash of the transaction
 }
 
 // NewTransaction creates a new Base transaction with no protocol. This is used for coinbase transactions.
@@ -40,6 +46,8 @@ func NewTransaction(from *Wallet, to *Wallet) (*Tx, error) {
 
 	// Create the new Message transaction
 	tx := &Tx{
+		ID:       uuid.New(),
+		Time:     time.Now(),
 		Version:  TransactionProtocolVersion,
 		Protocol: CoinbaseProtocolID,
 		From:     from,

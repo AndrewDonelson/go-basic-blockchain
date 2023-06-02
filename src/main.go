@@ -14,7 +14,7 @@ func main() {
 	// Start the API server if enabled
 	if sdk.EnableAPI {
 		// Start the API server
-		sdk.NewAPI().Start(":8080")
+		sdk.NewAPI(bc).Start(":8080")
 	} else {
 		// This is to keep the main goroutine alive if API not enabled.
 		select {}
