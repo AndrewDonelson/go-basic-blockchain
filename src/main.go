@@ -5,18 +5,9 @@ import (
 )
 
 func main() {
-	// Create a blockchain instance
-	bc := sdk.NewBlockchain()
+	// Create a new node iunstance
+	node := sdk.NewNode()
 
-	// Run the blockchain as a goroutine
-	go bc.Run(1)
-
-	// Start the API server if enabled
-	if sdk.EnableAPI {
-		// Start the API server
-		sdk.NewAPI(bc).Start(":8080")
-	} else {
-		// This is to keep the main goroutine alive if API not enabled.
-		select {}
-	}
+	// Run the node
+	node.Run()
 }
