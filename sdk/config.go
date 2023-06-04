@@ -10,19 +10,18 @@ import (
 )
 
 type Config struct {
-	blockchainVersion string
-	blockchainName    string
-	blockchainSymbol  string
-	blockTime         int
-	difficulty        int
-	transactionFee    float64
-	minerRewardPCT    float64
-	minerAddress      string
-	devRewardPCT      float64
-	devAddress        string
-	apiHostname       string
-	enableAPI         bool
-	fundWalletAmount  float64
+	blockchainName   string
+	blockchainSymbol string
+	blockTime        int
+	difficulty       int
+	transactionFee   float64
+	minerRewardPCT   float64
+	minerAddress     string
+	devRewardPCT     float64
+	devAddress       string
+	apiHostname      string
+	enableAPI        bool
+	fundWalletAmount float64
 }
 
 func NewConfig() *Config {
