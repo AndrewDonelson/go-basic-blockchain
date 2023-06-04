@@ -1,3 +1,4 @@
+// file: sdk/block.go - Block in the blockchain
 package sdk
 
 import (

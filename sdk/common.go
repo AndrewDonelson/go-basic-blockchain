@@ -1,13 +1,34 @@
 package sdk
 
 import (
+	"crypto/ecdsa"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"math/big"
 	"net"
 	"net/http"
 	"reflect"
 	"strings"
 )
+
+// VerifySignature verifies the signature against the provided message and public key.
+func VerifySignature(message []byte, signature []byte, publicKey *ecdsa.PublicKey) bool {
+	// Verify the signature logic here
+
+	// Extract the r and s components from the signature
+	r := big.Int{}
+	s := big.Int{}
+	sigLen := len(signature)
+	r.SetBytes(signature[:(sigLen / 2)])
+	s.SetBytes(signature[(sigLen / 2):])
+
+	// Prepare the hashed message
+	hash := sha256.Sum256(message)
+
+	// Verify the signature using the public key
+	return ecdsa.Verify(publicKey, hash[:], &r, &s)
+}
 
 // PrettyPrint is used to display any type nicely in the log output
 func PrettyPrint(v interface{}) string {

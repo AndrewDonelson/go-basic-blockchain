@@ -1,3 +1,4 @@
+// file: sdk/blockchain.go - The main Blockchain file
 package sdk
 
 import (
@@ -136,7 +137,7 @@ func (bc *Blockchain) LoadExistingBlocks() error {
 	return nil
 }
 
-// AddTransaction adds a transaction to the transaction queue.
+// AddTransaction adds a transaction to the transaction queue. All transactions in the queue will be added to the next block based ont he Blockchain's BlockInterval.
 func (bc *Blockchain) AddTransaction(transaction Transaction) {
 	bc.mux.Lock()
 	bc.TransactionQueue = append(bc.TransactionQueue, transaction)

@@ -41,6 +41,9 @@ const (
 	TransactionProtocolVersion = "1.0"
 
 	// BankProtocolID is the Bank Protocol ID
+	PersistProtocolID = "PERSIST"
+
+	// BankProtocolID is the Bank Protocol ID
 	BankProtocolID = "BANK"
 
 	// MessageProtocolID is the Message Protocol ID
@@ -48,9 +51,6 @@ const (
 
 	// CoinbaseProtocolID is the Coinbase Protocol ID
 	CoinbaseProtocolID = "COINBASE"
-
-	// AvailableProtocols is the list of available protocols
-	AvailableProtocols = BankProtocolID + "," + MessageProtocolID + "," + CoinbaseProtocolID
 
 	// saltSize is 16 bytes
 	saltSize = 16
@@ -70,3 +70,10 @@ const (
 	// maxNonce is the maximum value for a nonce
 	maxNonce = math.MaxInt64
 )
+
+var AvailableProtocols = []string{
+	CoinbaseProtocolID,
+	BankProtocolID,
+	MessageProtocolID,
+	PersistProtocolID,
+}
