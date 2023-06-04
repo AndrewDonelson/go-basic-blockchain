@@ -14,6 +14,7 @@ require (
 
 require (
 	github.com/gorilla/mux v1.8.0
+	github.com/joho/godotenv v1.5.1
 	github.com/onsi/gomega v1.27.7
 	github.com/pborman/uuid v1.2.1
 	github.com/stretchr/testify v1.8.4

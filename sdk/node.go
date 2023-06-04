@@ -2,8 +2,12 @@ package sdk
 
 // Node is a node in the blockchain network.
 type Node struct {
+	// Config is the node configuration
+	Config *Config
+
 	// Blockchain is the blockchain
 	Blockchain *Blockchain
+
 	// API is the API server
 	API *API
 }
@@ -14,6 +18,7 @@ var node *Node
 // NewNode returns a new node instance.
 func NewNode() *Node {
 	node = &Node{}
+	node.Config = NewConfig()
 	node.Blockchain = NewBlockchain()
 	node.API = NewAPI(node.Blockchain)
 

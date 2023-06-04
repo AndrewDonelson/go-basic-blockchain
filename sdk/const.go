@@ -3,12 +3,6 @@ package sdk
 import "math"
 
 const (
-	// TODO:
-	//	- Move these to a config file (most of them)
-	//  - Move the a few into the genesis block (minerAddress, devAddress)
-
-	// BlockchainVersion is the version of the blockchain
-	BlockchainVersion = "0.1.0"
 
 	// BlockchainName is the name of the blockchain
 	BlockchainName = "Go Basic Blockchain"
@@ -40,6 +34,29 @@ const (
 	// hostname & port for the API
 	apiHostname = ":8000"
 
+	// default Amount to fund new wallets is 100 coins
+	fundWalletAmount = 100.0
+
+	// data folder is the folder where the blockchain data is stored
+	dataFolder = "../data"
+
+	// EnableAPI is a flag to enable/disable the API
+	EnableAPI = true
+
+	/*************************************** Internal Constants ***************************************/
+
+	// BlockchainVersion is the version of the blockchain
+	BlockchainVersion = "0.1.0"
+
+	// cfgFolder is the folder where the config file is stored
+	cfgFile = "../.env"
+
+	// Log Date/Time format
+	logDateTimeFormat = "2006-01-02 15:04:05"
+
+	// maxNonce is the maximum value for a nonce
+	maxNonce = math.MaxInt64
+
 	// TransactionProtocolVersion is the Tranasction Protocol Version
 	TransactionProtocolVersion = "1.0"
 
@@ -54,24 +71,6 @@ const (
 
 	// CoinbaseProtocolID is the Coinbase Protocol ID
 	CoinbaseProtocolID = "COINBASE"
-
-	// saltSize is 16 bytes
-	saltSize = 16
-
-	// default Amount to fund new wallets is 100 coins
-	fundWalletAmount = 100.0
-
-	// data folder is the folder where the blockchain data is stored
-	dataFolder = "../data"
-
-	// Log Date/Time format
-	logDateTimeFormat = "2006-01-02 15:04:05"
-
-	// EnableAPI is a flag to enable/disable the API
-	EnableAPI = true
-
-	// maxNonce is the maximum value for a nonce
-	maxNonce = math.MaxInt64
 )
 
 var AvailableProtocols = []string{
