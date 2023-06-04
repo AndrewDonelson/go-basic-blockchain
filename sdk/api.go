@@ -130,13 +130,14 @@ func (ww *responseWriterWrapper) Write(data []byte) (int, error) {
 }
 
 // Start starts the API and listens for incoming requests
-func (api *API) Start(addr string) {
+func (api *API) Start() {
+
 	// Create a logging middleware
 	api.router.Use(loggingMiddleware)
 
 	// Start the HTTP server
-	fmt.Printf("API listening on %s\n", addr)
-	log.Fatal(http.ListenAndServe(addr, api.router))
+	fmt.Printf("API listening on %s\n", apiHostname)
+	log.Fatal(http.ListenAndServe(apiHostname, api.router))
 }
 
 // registerRoutes registers the API routes.

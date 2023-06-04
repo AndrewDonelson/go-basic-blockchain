@@ -37,6 +37,9 @@ const (
 	// devAddress is the address of the developer
 	devAddress = "DEV" // will be supplied by the genesis block
 
+	// hostname & port for the API
+	apiHostname = ":8000"
+
 	// TransactionProtocolVersion is the Tranasction Protocol Version
 	TransactionProtocolVersion = "1.0"
 

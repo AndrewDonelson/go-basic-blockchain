@@ -1,0 +1,335 @@
+{
+	"info": {
+		"_postman_id": "4337d054-17ff-4833-9a1a-cb6a4f6894a2",
+		"name": "Go Basic Blockchain",
+		"description": "Go Basic Blockchain (GBB) API",
+		"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+		"_exporter_id": "4458843"
+	},
+	"item": [
+		{
+			"name": "blockchain",
+			"item": [
+				{
+					"name": "root (status)",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"if (pm.response.code == 200) {\r",
+									"    // BEGIN: Common - Every Response\r",
+									"    pm.test(\"response must be ok and have a valid JSON body\", function () {\r",
+									"        \r",
+									"        // assert that the status code is 200\r",
+									"        pm.response.to.be.ok; // info, success, redirection, clientError,  serverError, are other variants\r",
+									"        // assert that the response has a valid JSON body\r",
+									"        pm.response.to.be.json;\r",
+									"    });\r",
+									"\r",
+									"    var jsonData = pm.response.json();\r",
+									"\r",
+									"    pm.test(\"JSON returned a num_blocks\", function () {\r",
+									"        pm.expect(jsonData.num_blocks).any;\r",
+									"    });\r",
+									"\r",
+									"    pm.test(\"JSON returned a num_transactions_in_queue\", function () {\r",
+									"        pm.expect(jsonData.num_transactions_in_queue).any;\r",
+									"    });\r",
+									"\r",
+									"    pm.test(\"Response time [\"+pm.response.responseTime+\"ms] is less than \" + pm.globals.get(\"MaxResponseTime\") + \"ms\", function () {\r",
+									"        pm.expect(pm.response.responseTime).to.be.below(eval(pm.globals.get(\"MaxResponseTime\")));\r",
+									"    });\r",
+									"    // END: Common Every Response\r",
+									"\r",
+									"}"
+								],
+								"type": "text/javascript"
+							}
+						}
+					],
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/blockchain",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"blockchain"
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "view blocks",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"if (pm.response.code == 200) {\r",
+									"    // BEGIN: Common - Every Response\r",
+									"    pm.test(\"response must be ok and have a valid JSON body\", function () {\r",
+									"        \r",
+									"        // assert that the status code is 200\r",
+									"        pm.response.to.be.ok; // info, success, redirection, clientError,  serverError, are other variants\r",
+									"        // assert that the response has a valid JSON body\r",
+									"        pm.response.to.be.json;\r",
+									"    });\r",
+									"\r",
+									"    var jsonData = pm.response.json();\r",
+									"\r",
+									"    pm.test(\"JSON returned a num_blocks\", function () {\r",
+									"        pm.expect(jsonData.num_blocks).any;\r",
+									"    });\r",
+									"\r",
+									"    pm.test(\"JSON returned a num_transactions_in_queue\", function () {\r",
+									"        pm.expect(jsonData.num_transactions_in_queue).any;\r",
+									"    });\r",
+									"\r",
+									"    pm.test(\"Response time [\"+pm.response.responseTime+\"ms] is less than \" + pm.globals.get(\"MaxResponseTime\") + \"ms\", function () {\r",
+									"        pm.expect(pm.response.responseTime).to.be.below(eval(pm.globals.get(\"MaxResponseTime\")));\r",
+									"    });\r",
+									"    // END: Common Every Response\r",
+									"\r",
+									"}"
+								],
+								"type": "text/javascript"
+							}
+						}
+					],
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/blockchain",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"blockchain"
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "view single block",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"if (pm.response.code == 200) {\r",
+									"    // BEGIN: Common - Every Response\r",
+									"    pm.test(\"response must be ok and have a valid JSON body\", function () {\r",
+									"        \r",
+									"        // assert that the status code is 200\r",
+									"        pm.response.to.be.ok; // info, success, redirection, clientError,  serverError, are other variants\r",
+									"        // assert that the response has a valid JSON body\r",
+									"        pm.response.to.be.json;\r",
+									"    });\r",
+									"\r",
+									"    var jsonData = pm.response.json();\r",
+									"\r",
+									"    pm.test(\"JSON returned a num_blocks\", function () {\r",
+									"        pm.expect(jsonData.num_blocks).any;\r",
+									"    });\r",
+									"\r",
+									"    pm.test(\"JSON returned a num_transactions_in_queue\", function () {\r",
+									"        pm.expect(jsonData.num_transactions_in_queue).any;\r",
+									"    });\r",
+									"\r",
+									"    pm.test(\"Response time [\"+pm.response.responseTime+\"ms] is less than \" + pm.globals.get(\"MaxResponseTime\") + \"ms\", function () {\r",
+									"        pm.expect(pm.response.responseTime).to.be.below(eval(pm.globals.get(\"MaxResponseTime\")));\r",
+									"    });\r",
+									"    // END: Common Every Response\r",
+									"\r",
+									"}"
+								],
+								"type": "text/javascript"
+							}
+						}
+					],
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/blockchain/blocks/:index",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"blockchain",
+								"blocks",
+								":index"
+							],
+							"variable": [
+								{
+									"key": "index",
+									"value": "0"
+								}
+							]
+						}
+					},
+					"response": []
+				}
+			]
+		},
+		{
+			"name": "home",
+			"event": [
+				{
+					"listen": "test",
+					"script": {
+						"exec": [
+							"if (pm.response.code == 200) {\r",
+							"    // BEGIN: Common - Every Response\r",
+							"    pm.test(\"Response time [\"+pm.response.responseTime+\"ms] is less than \" + pm.globals.get(\"MaxResponseTime\") + \"ms\", function () {\r",
+							"        pm.expect(pm.response.responseTime).to.be.below(eval(pm.globals.get(\"MaxResponseTime\")));\r",
+							"    });\r",
+							"    // END: Common Every Response\r",
+							"}"
+						],
+						"type": "text/javascript"
+					}
+				}
+			],
+			"request": {
+				"method": "GET",
+				"header": [],
+				"url": {
+					"raw": "{{baseUrl}}/",
+					"host": [
+						"{{baseUrl}}"
+					],
+					"path": [
+						""
+					]
+				}
+			},
+			"response": []
+		},
+		{
+			"name": "Version",
+			"event": [
+				{
+					"listen": "test",
+					"script": {
+						"exec": [
+							"if (pm.response.code == 200) {\r",
+							"    // BEGIN: Common - Every Response\r",
+							"    pm.test(\"response must be ok and have a valid JSON body\", function () {\r",
+							"        \r",
+							"        // assert that the status code is 200\r",
+							"        pm.response.to.be.ok; // info, success, redirection, clientError,  serverError, are other variants\r",
+							"        // assert that the response has a valid JSON body\r",
+							"        pm.response.to.be.json;\r",
+							"    });\r",
+							"\r",
+							"    var jsonData = pm.response.json();\r",
+							"\r",
+							"    pm.test(\"JSON returned a Version\", function () {\r",
+							"        pm.expect(jsonData.version).any;\r",
+							"    });\r",
+							"\r",
+							"    pm.test(\"Response time [\"+pm.response.responseTime+\"ms] is less than \" + pm.globals.get(\"MaxResponseTime\") + \"ms\", function () {\r",
+							"        pm.expect(pm.response.responseTime).to.be.below(eval(pm.globals.get(\"MaxResponseTime\")));\r",
+							"    });\r",
+							"    // END: Common Every Response\r",
+							"\r",
+							"}"
+						],
+						"type": "text/javascript"
+					}
+				}
+			],
+			"request": {
+				"method": "GET",
+				"header": [],
+				"url": {
+					"raw": "{{baseUrl}}/version",
+					"host": [
+						"{{baseUrl}}"
+					],
+					"path": [
+						"version"
+					]
+				}
+			},
+			"response": []
+		},
+		{
+			"name": "Information",
+			"event": [
+				{
+					"listen": "test",
+					"script": {
+						"exec": [
+							"if (pm.response.code == 200) {\r",
+							"    // BEGIN: Common - Every Response\r",
+							"    pm.test(\"response must be ok and have a valid JSON body\", function () {\r",
+							"        \r",
+							"        // assert that the status code is 200\r",
+							"        pm.response.to.be.ok; // info, success, redirection, clientError,  serverError, are other variants\r",
+							"        // assert that the response has a valid JSON body\r",
+							"        pm.response.to.be.json;\r",
+							"    });\r",
+							"\r",
+							"    var jsonData = pm.response.json();\r",
+							"\r",
+							"    pm.test(\"JSON returned a Version\", function () {\r",
+							"        pm.expect(jsonData.version).any;\r",
+							"    });\r",
+							"\r",
+							"    pm.test(\"JSON returned a name\", function () {\r",
+							"        pm.expect(jsonData.name).any;\r",
+							"    });\r",
+							"\r",
+							"    pm.test(\"JSON returned a symbol\", function () {\r",
+							"        pm.expect(jsonData.symbol).any;\r",
+							"    });\r",
+							"\r",
+							"    pm.test(\"JSON returned a block_time\", function () {\r",
+							"        pm.expect(jsonData.block_time).any;\r",
+							"    });\r",
+							"\r",
+							"    pm.test(\"JSON returned a difficulty\", function () {\r",
+							"        pm.expect(jsonData.difficulty).any;\r",
+							"    });\r",
+							"\r",
+							"    pm.test(\"JSON returned a transaction_fee\", function () {\r",
+							"        pm.expect(jsonData.transaction_fee).any;\r",
+							"    });\r",
+							"\r",
+							"    pm.test(\"Response time [\"+pm.response.responseTime+\"ms] is less than \" + pm.globals.get(\"MaxResponseTime\") + \"ms\", function () {\r",
+							"        pm.expect(pm.response.responseTime).to.be.below(eval(pm.globals.get(\"MaxResponseTime\")));\r",
+							"    });\r",
+							"    // END: Common Every Response\r",
+							"\r",
+							"}"
+						],
+						"type": "text/javascript"
+					}
+				}
+			],
+			"request": {
+				"method": "GET",
+				"header": [],
+				"url": {
+					"raw": "{{baseUrl}}/info",
+					"host": [
+						"{{baseUrl}}"
+					],
+					"path": [
+						"info"
+					]
+				}
+			},
+			"response": []
+		}
+	]
+}

@@ -28,7 +28,7 @@ func (n *Node) Run() {
 	// Start the API server if enabled
 	if EnableAPI {
 		// Start the API server
-		n.API.Start(":8080")
+		n.API.Start()
 	} else {
 		// This is to keep the main goroutine alive if API not enabled.
 		select {}
