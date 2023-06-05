@@ -1,34 +1,37 @@
+// file: sdk/wallet.go
+// package: sdk
+// description: Wallet represents a user's wallet.
 package sdk
 
 import (
-	"crypto"
 	"crypto/aes"
 	"crypto/cipher"
+	"crypto/ecdsa"
+	"crypto/elliptic"
 	"crypto/rand"
-	"crypto/rsa"
 	"crypto/sha256"
 	"crypto/x509"
 	"encoding/hex"
-	"encoding/pem"
+	"errors"
 	"fmt"
-	"io"
 	"time"
 
 	"github.com/pborman/uuid"
-	"golang.org/x/crypto/pbkdf2"
+	"github.com/xdg-go/pbkdf2"
 )
 
 // Wallet represents a user's wallet.
 type Wallet struct {
-	ID               string
-	Name             string
-	Tags             []string
-	PrivateKey       []byte
-	PublicKey        []byte
-	Address          string
-	Balance          float64
-	Encrypted        bool             // Flag to indicate if the private key is encrypted
-	EncryptionParams EncryptionParams // Encryption parameters for the private key
+	ID                  string
+	Name                string
+	Tags                []string
+	PrivateKey          *ecdsa.PrivateKey
+	PublicKey           *ecdsa.PublicKey
+	Address             string
+	Balance             float64
+	Encrypted           bool              // Flag to indicate if the private key is encrypted
+	EncryptedPrivateKey []byte            // Encrypted private key
+	EncryptionParams    *EncryptionParams // Encryption parameters for the private key
 }
 
 // EncryptionParams holds the encryption parameters for the private key.
@@ -37,33 +40,36 @@ type EncryptionParams struct {
 	NonceSize int // Size of the nonce used for encryption
 }
 
+func NewEncryptionParams(saltSize, nonceSize int) *EncryptionParams {
+	return &EncryptionParams{
+		SaltSize:  saltSize,
+		NonceSize: nonceSize,
+	}
+}
+
+func NewDefaultEncryptionParams() *EncryptionParams {
+	return NewEncryptionParams(saltSize, maxNonce)
+}
+
 // NewWallet creates a new wallet with a unique ID, name, and set of tags.
 func NewWallet(name string, tags []string) (*Wallet, error) {
 	// Generate a new private key.
-	privateKey, err := rsa.GenerateKey(rand.Reader, 2048)
-	if err != nil {
-		return nil, err
-	}
-
-	// Convert the private key to PEM format.
-	privateKeyBytes := x509.MarshalPKCS1PrivateKey(privateKey)
-
-	// Generate a new public key.
-	publicKeyBytes, err := x509.MarshalPKIXPublicKey(&privateKey.PublicKey)
+	privateKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		return nil, err
 	}
 
 	// Create a new wallet with a unique ID, name, and set of tags.
 	wallet := &Wallet{
-		ID:         uuid.New(),
-		Name:       name,
-		Tags:       tags,
-		PrivateKey: privateKeyBytes,
-		PublicKey:  publicKeyBytes,
-		Balance:    fundWalletAmount,
-		Address:    "",
-		Encrypted:  false,
+		ID:               uuid.New(),
+		Name:             name,
+		Tags:             tags,
+		PrivateKey:       privateKey,
+		PublicKey:        &privateKey.PublicKey,
+		Balance:          fundWalletAmount,
+		Address:          "",
+		Encrypted:        false,
+		EncryptionParams: NewDefaultEncryptionParams(),
 	}
 
 	wallet.GetAddress()
@@ -80,10 +86,44 @@ func (w *Wallet) GetAddress() string {
 	}
 
 	// Generate an address by hashing the public key and encoding it in hexadecimal.
-	hash := sha256.Sum256(w.PublicKey)
+	pubBytes, err := w.PublicBytes()
+	if err != nil {
+		fmt.Printf("[%s] Error getting public key bytes: %s\n", time.Now().Format(logDateTimeFormat), err)
+		return ""
+	}
+
+	hash := sha256.Sum256(pubBytes)
 	w.Address = hex.EncodeToString(hash[:])
 
 	return w.Address
+}
+
+// PrivateBytes returns the bytes representation of the private key.
+func (w *Wallet) PrivateBytes() ([]byte, error) {
+	if w.PrivateKey == nil {
+		return nil, errors.New("public key is nil")
+	}
+
+	bytes, err := x509.MarshalECPrivateKey(w.PrivateKey)
+	if err != nil {
+		return nil, err
+	}
+
+	return bytes, nil
+}
+
+// PublicBytes returns the bytes representation of the public key.
+func (w *Wallet) PublicBytes() ([]byte, error) {
+	if w.PublicKey == nil {
+		return nil, errors.New("public key is nil")
+	}
+
+	bytes, err := x509.MarshalPKIXPublicKey(w.PublicKey)
+	if err != nil {
+		return nil, err
+	}
+
+	return bytes, nil
 }
 
 // SendTransaction sends a new transaction from the sender's wallet to the recipient's address.
@@ -106,26 +146,16 @@ func (w *Wallet) SendTransaction(to string, tx Transaction, bc *Blockchain) (*Tr
 
 // SignTransaction signs the given transaction with the wallet's private key.
 func (w *Wallet) SignTransaction(tx Transaction) error {
-	// Convert the private key to rsa.PrivateKey.
-	block, _ := pem.Decode(w.PrivateKey)
-	if block == nil {
-		return fmt.Errorf("failed to parse PEM block containing the private key")
-	}
-
-	privKey, err := x509.ParsePKCS1PrivateKey(block.Bytes)
-	if err != nil {
-		return fmt.Errorf("failed to parse private key: %v", err)
-	}
-
 	// Get the SHA-256 hash of the transaction.
 	txHash := sha256.Sum256([]byte(fmt.Sprintf("%v", tx)))
 
 	// Sign the transaction hash.
-	signature, err := rsa.SignPKCS1v15(rand.Reader, privKey, crypto.SHA256, txHash[:])
+	r, s, err := ecdsa.Sign(rand.Reader, w.PrivateKey, txHash[:])
 	if err != nil {
 		return fmt.Errorf("failed to sign transaction: %v", err)
 	}
 
+	signature := append(r.Bytes(), s.Bytes()...)
 	err = tx.Sign(signature)
 	if err != nil {
 		return fmt.Errorf("failed to sign transaction: %v", err)
@@ -134,113 +164,112 @@ func (w *Wallet) SignTransaction(tx Transaction) error {
 	return nil
 }
 
-// VerifySignature verifies the signature of the given transaction using the wallet's public key.
-func (w *Wallet) VerifySignature(tx Transaction) error {
-	// Convert the public key to rsa.PublicKey.
-	block, _ := pem.Decode(w.PublicKey)
-	if block == nil {
-		return fmt.Errorf("failed to parse PEM block containing the public key")
-	}
-
-	pubKeyInterface, err := x509.ParsePKIXPublicKey(block.Bytes)
-	if err != nil {
-		return fmt.Errorf("failed to parse public key: %v", err)
-	}
-
-	pubKey, ok := pubKeyInterface.(*rsa.PublicKey)
-	if !ok {
-		return fmt.Errorf("invalid public key")
-	}
-
-	// Get the SHA-256 hash of the transaction.
-	txHash := sha256.Sum256([]byte(fmt.Sprintf("%v", tx)))
-
-	// Verify the signature.
-	err = rsa.VerifyPKCS1v15(pubKey, crypto.SHA256, txHash[:], tx.GetSignature())
-	if err != nil {
-		return fmt.Errorf("invalid signature: %v", err)
-	}
-
-	return nil
-}
-
-// EncryptPrivateKey encrypts the wallet's private key using the passphrase.
+// EncryptPrivateKey encrypts the wallet's private key using the provided passphrase.
 func (w *Wallet) EncryptPrivateKey(passphrase string) error {
-	// Check if the private key is already encrypted.
 	if w.Encrypted {
-		return fmt.Errorf("private key is already encrypted")
+		return errors.New("private key is already encrypted")
 	}
 
-	// Generate a new salt.
-	salt := make([]byte, w.EncryptionParams.SaltSize)
-	if _, err := io.ReadFull(rand.Reader, salt); err != nil {
-		return err
+	// Derive a symmetric encryption key from the passphrase.
+	key := w.deriveKey([]byte(passphrase))
+
+	// Generate a random nonce.
+	nonce := make([]byte, w.EncryptionParams.NonceSize)
+	_, err := rand.Read(nonce)
+	if err != nil {
+		return fmt.Errorf("failed to generate nonce: %v", err)
 	}
 
-	// Derive a new key from the passphrase.
-	key := pbkdf2.Key([]byte(passphrase), salt, 4096, 32, sha256.New)
+	// Create a new AES-GCM cipher block using the derived key.
 	block, err := aes.NewCipher(key)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to create cipher block: %v", err)
 	}
 
 	// Encrypt the private key.
-	gcm, err := cipher.NewGCM(block)
+	aesgcm, err := cipher.NewGCM(block)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to create AES-GCM cipher: %v", err)
 	}
 
-	// Generate a new nonce.
-	nonce := make([]byte, gcm.NonceSize())
-	if _, err = io.ReadFull(rand.Reader, nonce); err != nil {
-		return err
+	pvtBytes, err := w.PrivateBytes()
+	if err != nil {
+		return fmt.Errorf("failed to get private key bytes: %v", err)
 	}
 
-	// Encrypt the private key and prepend the salt and nonce to it.
-	w.PrivateKey = append(salt, append(nonce, gcm.Seal(nil, nonce, w.PrivateKey, nil)...)...)
+	ciphertext := aesgcm.Seal(nil, nonce, pvtBytes, nil)
+
+	// Update the wallet with the encrypted private key and encryption parameters.
+	w.EncryptedPrivateKey = append(nonce, ciphertext...)
 	w.Encrypted = true
+	w.EncryptionParams.NonceSize = len(nonce)
+	w.EncryptionParams.SaltSize = len(key)
 
 	return nil
 }
 
-// DecryptPrivateKey decrypts the wallet's private key using the passphrase.
+// DecryptPrivateKey decrypts the wallet's private key using the provided passphrase.
 func (w *Wallet) DecryptPrivateKey(passphrase string) error {
-	// Check if the private key is encrypted.
 	if !w.Encrypted {
-		return fmt.Errorf("private key is not encrypted")
+		return errors.New("private key is not encrypted")
 	}
 
-	// Extract the salt from the encrypted private key.
-	salt := w.PrivateKey[:w.EncryptionParams.SaltSize]
+	// Derive the symmetric encryption key from the passphrase.
+	key := w.deriveKey([]byte(passphrase))
 
-	// Derive the key from the passphrase.
-	key := pbkdf2.Key([]byte(passphrase), salt, 4096, 32, sha256.New)
+	// Create a new AES-GCM cipher block using the derived key.
 	block, err := aes.NewCipher(key)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to create cipher block: %v", err)
 	}
 
-	// Create a new GCM instance.
-	gcm, err := cipher.NewGCM(block)
-	if err != nil {
-		return err
+	// Get the nonce and ciphertext bytes.
+	nonceSize := w.EncryptionParams.NonceSize
+	if len(w.EncryptedPrivateKey) < nonceSize {
+		return errors.New("encrypted private key bytes are incomplete")
 	}
 
-	// Extract the nonce from the encrypted private key.
-	nonceSize := gcm.NonceSize()
-
-	// Extract the nonce and ciphertext from the encrypted private key.
-	nonce, ciphertext := w.PrivateKey[w.EncryptionParams.SaltSize:w.EncryptionParams.SaltSize+nonceSize], w.PrivateKey[w.EncryptionParams.SaltSize+nonceSize:]
+	nonceBytes := w.EncryptedPrivateKey[:nonceSize]
+	ciphertext := w.EncryptedPrivateKey[nonceSize:]
 
 	// Decrypt the private key.
-	plaintext, err := gcm.Open(nil, nonce, ciphertext, nil)
+	aesgcm, err := cipher.NewGCM(block)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to create AES-GCM cipher: %v", err)
 	}
 
-	// Set the plaintext private key.
-	w.PrivateKey = plaintext
+	plaintext, err := aesgcm.Open(nil, nonceBytes, ciphertext, nil)
+	if err != nil {
+		return fmt.Errorf("failed to decrypt private key: %v", err)
+	}
+
+	// Parse the decrypted private key.
+	parsedPrivateKey, err := x509.ParseECPrivateKey(plaintext)
+	if err != nil {
+		return fmt.Errorf("failed to parse decrypted private key: %v", err)
+	}
+
+	// Update the wallet with the decrypted private key and encryption parameters.
+	w.PrivateKey = parsedPrivateKey
 	w.Encrypted = false
+	w.EncryptionParams = NewDefaultEncryptionParams()
 
 	return nil
+}
+
+func (w *Wallet) deriveKey(passphrase []byte) []byte {
+	// Use a key derivation function (KDF) to derive a symmetric encryption key from the passphrase.
+	// You can use a suitable KDF, such as PBKDF2 or bcrypt, to derive the key. Here's an example using PBKDF2:
+
+	// Generate a salt.
+	salt := make([]byte, w.EncryptionParams.SaltSize)
+	_, err := rand.Read(salt)
+	if err != nil {
+		panic(fmt.Errorf("failed to generate salt: %v", err))
+	}
+
+	// Derive the key using PBKDF2 with SHA-256.
+	key := pbkdf2.Key(passphrase, salt, 100000, 32, sha256.New)
+
+	return key
 }

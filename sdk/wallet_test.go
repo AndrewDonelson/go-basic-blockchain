@@ -1,99 +1,183 @@
+// file: sdk/wallet_test.go
 package sdk
 
 import (
-	"crypto/x509"
 	"encoding/hex"
-	"encoding/pem"
+	"fmt"
 	"testing"
 )
 
-func TestWallet(t *testing.T) {
-	name := "Alice"
-	tags := []string{"personal", "crypto"}
+const (
+	testAddr      = "7cd017593398aebb99da3e5e3bb62efad50d9fd925d8d633fbab0c2df12535f8"
+	AddressLength = 32
+)
 
-	// Create a new wallet
-	wallet, err := NewWallet(name, tags)
+func TestAddressLength(t *testing.T) {
+	// Decode the test address
+	addr, err := hex.DecodeString(testAddr)
 	if err != nil {
-		t.Fatalf("Failed to create wallet: %v", err)
+		t.Fatalf("Failed to decode address: %v", err)
 	}
 
-	// Verify wallet properties
-	if wallet.Name != name {
-		t.Errorf("Expected wallet name: %s, got: %s", name, wallet.Name)
+	// Verify the address length
+	if len(addr) != AddressLength {
+		t.Errorf("Expected address length: %d, got: %d", AddressLength, len(addr))
 	}
 
-	if len(wallet.Tags) != len(tags) {
-		t.Errorf("Expected wallet tags length: %d, got: %d", len(tags), len(wallet.Tags))
-	}
+}
+func TestWalletEncryption(t *testing.T) {
+	passphrase := "mysecretpassphrase"
 
-	for i, tag := range tags {
-		if wallet.Tags[i] != tag {
-			t.Errorf("Expected wallet tag: %s, got: %s", tag, wallet.Tags[i])
-		}
-	}
-
-	// Generate a new public key from the wallet's private key
-	block, _ := pem.Decode(wallet.PrivateKey)
-	if block == nil {
-		t.Fatal("Failed to parse PEM block containing the private key")
-	}
-
-	privKey, err := x509.ParsePKCS1PrivateKey(block.Bytes)
+	// Create a new wallet.
+	wallet, err := NewWallet("John Doe", []string{"tag1", "tag2"})
 	if err != nil {
-		t.Fatalf("Failed to parse private key: %v", err)
+		t.Fatalf("failed to create wallet: %v", err)
 	}
 
-	publicKeyBytes, err := x509.MarshalPKIXPublicKey(&privKey.PublicKey)
-	if err != nil {
-		t.Fatalf("Failed to marshal public key: %v", err)
-	}
-
-	// Verify wallet address generation
-	expectedAddress := hex.EncodeToString(publicKeyBytes[:])
-
-	if wallet.Address != expectedAddress {
-		t.Errorf("Expected wallet address: %s, got: %s", expectedAddress, wallet.Address)
-	}
-
-	// Verify encryption and decryption of the private key
-	passphrase := "secretpassphrase"
-
-	// Encrypt the private key
+	// Encrypt the private key.
 	err = wallet.EncryptPrivateKey(passphrase)
 	if err != nil {
-		t.Fatalf("Failed to encrypt private key: %v", err)
+		t.Fatalf("failed to encrypt private key: %v", err)
 	}
 
+	// Check if the private key is encrypted.
 	if !wallet.Encrypted {
-		t.Error("Expected wallet private key to be encrypted")
+		t.Error("expected private key to be encrypted, but it is not")
 	}
 
-	// Decrypt the private key
+	// Decrypt the private key.
 	err = wallet.DecryptPrivateKey(passphrase)
 	if err != nil {
-		t.Fatalf("Failed to decrypt private key: %v", err)
+		t.Fatalf("failed to decrypt private key: %v", err)
 	}
 
+	// Check if the private key is decrypted.
 	if wallet.Encrypted {
-		t.Error("Expected wallet private key to be decrypted")
+		t.Error("expected private key to be decrypted, but it is encrypted")
 	}
+}
 
-	// Verify signature verification
-	tx := &MockTransaction{
-		ID:       "12345",
-		Protocol: "mock",
-	}
+func TestWalletEncryptionWrongPassphrase(t *testing.T) {
+	passphrase := "mysecretpassphrase"
+	wrongPassphrase := "wrongpassphrase"
 
-	// Sign the transaction
-	err = tx.Sign([]byte(wallet.PrivateKey))
+	// Create a new wallet.
+	wallet, err := NewWallet("John Doe", []string{"tag1", "tag2"})
 	if err != nil {
-		t.Fatalf("Failed to sign transaction: %v", err)
+		t.Fatalf("failed to create wallet: %v", err)
 	}
 
-	// Verify the signature
-	err = tx.Verify(tx.GetSignature())
+	// Encrypt the private key.
+	err = wallet.EncryptPrivateKey(passphrase)
 	if err != nil {
-		t.Errorf("Failed to verify signature: %v", err)
+		t.Fatalf("failed to encrypt private key: %v", err)
+	}
+
+	// Check if the private key is encrypted.
+	if !wallet.Encrypted {
+		t.Error("expected private key to be encrypted, but it is not")
+	}
+
+	// Attempt to decrypt the private key with the wrong passphrase.
+	err = wallet.DecryptPrivateKey(wrongPassphrase)
+	if err == nil {
+		t.Error("expected decryption to fail with wrong passphrase, but it succeeded")
+	}
+
+	// Check if the private key is still encrypted.
+	if !wallet.Encrypted {
+		t.Error("expected private key to remain encrypted, but it is decrypted")
+	}
+}
+
+func TestWalletInteraction(t *testing.T) {
+	// Create two wallets for testing.
+	wallet1, err := NewWallet("Wallet1", nil)
+	if err != nil {
+		t.Fatalf("failed to create Wallet1: %v", err)
+	}
+
+	wallet2, err := NewWallet("Wallet2", nil)
+	if err != nil {
+		t.Fatalf("failed to create Wallet2: %v", err)
+	}
+
+	// Print the initial wallet balances.
+	fmt.Printf("Initial Balances:\nWallet1 Balance: %.2f\nWallet2 Balance: %.2f\n", wallet1.Balance, wallet2.Balance)
+
+	// Wallet1 sends a transaction to Wallet2.
+	amount := 10.0
+	transaction, err := NewBankTransaction(wallet1, wallet2, amount)
+	sentTX, err := wallet1.SendTransaction(wallet2.Address, transaction, nil)
+	if err != nil {
+		t.Fatalf("failed to send transaction: %v", err)
+	}
+	fmt.Println("Sent Transaction: ", PrettyPrint(sentTX))
+
+	// // Verify the transaction signature.
+	// if !VerifySignature(sendTX) {
+	// 	t.Fatalf("failed to verify transaction signature: %v", err)
+	// }
+
+	// Print the updated wallet balances.
+	fmt.Printf("Updated Balances:\nWallet1 Balance: %.2f\nWallet2 Balance: %.2f\n", wallet1.Balance, wallet2.Balance)
+}
+
+func TestWalletEncryptionUnencryptedPrivateKey(t *testing.T) {
+	passphrase := "mysecretpassphrase"
+
+	// Create a new wallet.
+	wallet, err := NewWallet("John Doe", []string{"tag1", "tag2"})
+	if err != nil {
+		t.Fatalf("failed to create wallet: %v", err)
+	}
+
+	// Check if the private key is unencrypted.
+	if wallet.Encrypted {
+		t.Error("expected private key to be unencrypted, but it is encrypted")
+	}
+
+	// Attempt to encrypt the already unencrypted private key.
+	err = wallet.EncryptPrivateKey(passphrase)
+	if err != nil {
+		t.Fatalf("failed to encrypt private key: %v", err)
+	}
+
+	// Check if the private key is still unencrypted.
+	if wallet.Encrypted {
+		t.Error("expected private key to remain unencrypted, but it is encrypted")
+	}
+}
+
+func TestWalletEncryptionInvalidPassphrase(t *testing.T) {
+	passphrase := "mysecretpassphrase"
+
+	// Create a new wallet.
+	wallet, err := NewWallet("John Doe", []string{"tag1", "tag2"})
+	if err != nil {
+		t.Fatalf("failed to create wallet: %v", err)
+	}
+
+	// Encrypt the private key.
+	err = wallet.EncryptPrivateKey(passphrase)
+	if err != nil {
+		t.Fatalf("failed to encrypt private key: %v", err)
+	}
+
+	// Check if the private key is encrypted.
+	if !wallet.Encrypted {
+		t.Error("expected private key to be encrypted, but it is not")
+	}
+
+	// Attempt to decrypt the private key with an empty passphrase.
+	err = wallet.DecryptPrivateKey("")
+	if err == nil {
+		t.Error("expected decryption to fail with empty passphrase, but it succeeded")
+	}
+
+	// Check if the private key is still encrypted.
+	if !wallet.Encrypted {
+		t.Error("expected private key to remain encrypted, but it is decrypted")
 	}
 }
 

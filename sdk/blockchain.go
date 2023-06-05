@@ -1,4 +1,6 @@
 // file: sdk/blockchain.go - The main Blockchain file
+// package: sdk
+// description: This file contains the Blockchain struct and all the methods associated with it.
 package sdk
 
 import (
@@ -169,6 +171,21 @@ func (bc *Blockchain) Mine(block *Block, difficulty int) *Block {
 
 	return block
 }
+
+// VerifySignature verifies the signature of a transaction using the sender's public key.
+func (bc *Blockchain) VerifySignature(tx Transaction) error {
+	senderWallet := tx.GetSenderWallet()
+
+	if !VerifySignature(tx.GetHash(), tx.GetSignature(), senderWallet.PublicKey) {
+		return fmt.Errorf("failed to verify signature")
+	}
+
+	return nil
+}
+
+// Errors/Issues:
+// - cannot use tx.GetSenderWallet().PublicKey (variable of type *ecdsa.PublicKey) as []byte value in argument to VerifySignature
+// - invalid operation: cannot compare err != nil (mismatched types bool and untyped nil)
 
 // Run runs the blockchain.
 func (bc *Blockchain) Run(difficulty int) {

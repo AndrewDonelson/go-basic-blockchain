@@ -1,3 +1,6 @@
+// file: sdk/config.go - The main Config file
+// package: sdk
+// description: This file contains the Config struct and all the methods associated with it.
 package sdk
 
 import (
@@ -107,6 +110,7 @@ func NewConfig() *Config {
 	if os.Getenv("MINER_ADDRESS") != "" {
 		if os.Getenv("MINER_ADDRESS") == minerAddress {
 			fmt.Printf("Warning: Environment MINER_ADDRESS is set to the default value of %s and will be ignored\n", minerAddress)
+			log.Fatal("This is a required value and must be set")
 		} else {
 			fmt.Printf("Notice: Environment MINER_ADDRESS is set to %s\n", os.Getenv("MINER_ADDRESS"))
 			cfg.minerAddress = os.Getenv("MINER_ADDRESS")
@@ -125,6 +129,7 @@ func NewConfig() *Config {
 	if os.Getenv("DEV_ADDRESS") != "" {
 		if os.Getenv("DEV_ADDRESS") == devAddress {
 			fmt.Printf("Warning: Environment DEV_ADDRESS is set to the default value of %s and will be ignored\n", devAddress)
+			log.Fatal("This is a required value and must be set")
 		} else {
 			fmt.Printf("Notice: Environment DEV_ADDRESS is set to %s\n", os.Getenv("DEV_ADDRESS"))
 			cfg.devAddress = os.Getenv("DEV_ADDRESS")

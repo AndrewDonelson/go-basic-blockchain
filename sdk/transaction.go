@@ -1,4 +1,6 @@
 // file: sdk/transaction.go - Base Transaction for all Dynamic Protocol based transactions
+// package: sdk
+// description: This file contains the Transaction struct and all the methods associated with it.
 package sdk
 
 import (
@@ -19,9 +21,10 @@ type Transaction interface {
 	Process() string
 	GetProtocol() string
 	GetSignature() []byte
+	GetHash() []byte
+	GetSenderWallet() *Wallet
 	Send(bc *Blockchain) error
 	Sign(signature []byte) error
-	Verify(signature []byte) error
 }
 
 // Tx is a transaction that represents a generic transaction.
@@ -87,6 +90,16 @@ func (t *Tx) GetProtocol() string {
 	return t.Protocol
 }
 
+// GetSenderWallet retrieves the sender's wallet from the blockchain based on the sender's address.
+func (t *Tx) GetSenderWallet() *Wallet {
+	return t.From
+}
+
+// Gethash returns the hash of the transaction.
+func (t *Tx) GetHash() []byte {
+	return t.Hash
+}
+
 // IsCoinbase returns true if the transaction is a coinbase transaction.
 func (t *Tx) IsCoinbase() bool {
 	return t.Protocol == CoinbaseProtocolID
@@ -115,6 +128,7 @@ func (t *Tx) Sign(signature []byte) error {
 }
 
 func (t *Tx) Verify(signature []byte) error {
+	//func (t *Tx) Verify(fromWallet *Wallet) error {
 	// Verify the signature logic here
 	// This ensures that the transaction has not been tampered with
 
@@ -130,7 +144,13 @@ func (t *Tx) Verify(signature []byte) error {
 
 	// Create the public key from the sender's wallet
 	curve := elliptic.P256()
-	x, y := elliptic.Unmarshal(curve, t.From.PublicKey)
+
+	pubBytes, err := t.From.PublicBytes()
+	if err != nil {
+		return err
+	}
+
+	x, y := elliptic.Unmarshal(curve, pubBytes)
 	publicKey := ecdsa.PublicKey{Curve: curve, X: x, Y: y}
 
 	// Verify the signature using the public key

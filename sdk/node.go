@@ -1,3 +1,6 @@
+// file: sdk/node.go
+// package sdk
+// description: This file contains the Node struct and all the methods associated with it.
 package sdk
 
 // Node is a node in the blockchain network.

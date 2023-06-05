@@ -18,5 +18,6 @@ require (
 	github.com/onsi/gomega v1.27.7
 	github.com/pborman/uuid v1.2.1
 	github.com/stretchr/testify v1.8.4
+	github.com/xdg-go/pbkdf2 v1.0.0
 	golang.org/x/crypto v0.1.0
 )

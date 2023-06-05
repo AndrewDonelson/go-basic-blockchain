@@ -1,6 +1,7 @@
+// file: sdk/const.go
+// package: sdk
+// description: Constants for the blockchain
 package sdk
-
-import "math"
 
 const (
 
@@ -55,7 +56,10 @@ const (
 	logDateTimeFormat = "2006-01-02 15:04:05"
 
 	// maxNonce is the maximum value for a nonce
-	maxNonce = math.MaxInt64
+	maxNonce = 12 // bytes
+
+	// saltSize is the size of the salt used for hashing
+	saltSize = 32
 
 	// TransactionProtocolVersion is the Tranasction Protocol Version
 	TransactionProtocolVersion = "1.0"
