@@ -107,7 +107,7 @@ func (t *Tx) IsCoinbase() bool {
 
 // Process returns a string with the process of the transaction.
 func (t *Tx) Process() string {
-	return fmt.Sprintf("Transaction from %s to %s", t.From.Name, t.To.Name)
+	return fmt.Sprintf("Transaction from %s to %s", t.From.GetAddress(), t.To.GetAddress())
 }
 
 // Send sends the filled and signed transaction to the network queue to be added to the blockchain.

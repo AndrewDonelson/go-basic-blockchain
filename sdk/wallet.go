@@ -18,26 +18,25 @@ import (
 	"time"
 
 	"github.com/pborman/uuid"
-	"github.com/xdg-go/pbkdf2"
+	"golang.org/x/crypto/scrypt"
 )
 
 var RequiredWalletProperties = []string{
 	"name",
 	"tags",
 	"balance",
+	"public_key",
+	"private_key",
 }
 
 // Wallet represents a user's wallet.
 type Wallet struct {
-	ID                  string
-	Address             string
-	PrivateKey          *ecdsa.PrivateKey
-	PublicKey           *ecdsa.PublicKey
-	Encrypted           bool                   // Flag to indicate if the private key is encrypted
-	EncryptedPrivateKey []byte                 // Encrypted private key
-	EncryptionParams    *EncryptionParams      // Encryption parameters for the private key
-	data                map[string]interface{} // Data (keypairs) associated with the wallet
-	// TODO: Should I move Private & Public Keys in to the data map?
+	ID               string
+	Address          string
+	Encrypted        bool                   // Flag to indicate if the private key is encrypted
+	EncryptionParams *EncryptionParams      // Encryption parameters for the private key
+	data             map[string]interface{} // Data (keypairs) associated with the wallet
+	ciphertext       []byte                 // Encrypted data
 }
 
 // EncryptionParams holds the encryption parameters for the private key.
@@ -68,15 +67,17 @@ func NewWallet(name string, tags []string) (*Wallet, error) {
 	// Create a new wallet with a unique ID, name, and set of tags.
 	wallet := &Wallet{
 		ID:               uuid.New(),
-		PrivateKey:       privateKey,
-		PublicKey:        &privateKey.PublicKey,
 		Address:          "",
 		Encrypted:        false,
 		EncryptionParams: NewDefaultEncryptionParams(),
+		data:             make(map[string]interface{}),
 	}
+
 	wallet.SetData("name", name)
 	wallet.SetData("tags", tags)
 	wallet.SetData("balance", fundWalletAmount)
+	wallet.SetData("private_key", &privateKey)
+	wallet.SetData("public_key", &privateKey.PublicKey)
 	wallet.GetAddress()
 
 	fmt.Printf("[%s] Created new Wallet: %+v\n", time.Now().Format(logDateTimeFormat), PrettyPrint(wallet))
@@ -185,13 +186,40 @@ func (w *Wallet) bytesToData(bytes []byte) error {
 	return json.Unmarshal(bytes, &w.data)
 }
 
-// PrivateBytes returns the bytes representation of the private key.
-func (w *Wallet) PrivateBytes() ([]byte, error) {
-	if w.PrivateKey == nil {
+// PrivateKey returns the private key from the data (keypairs) associated with the wallet.
+func (w *Wallet) PrivateKey() (*ecdsa.PrivateKey, error) {
+	if w.Encrypted {
+		return nil, errors.New("cannot get private key from an encrypted wallet")
+	}
+
+	key, err := w.GetData("private_key")
+	if err != nil {
+		return nil, err
+	}
+
+	if key == nil {
 		return nil, errors.New("public key is nil")
 	}
 
-	bytes, err := x509.MarshalECPrivateKey(w.PrivateKey)
+	return key.(*ecdsa.PrivateKey), nil
+}
+
+// PrivateBytes returns the bytes representation of the private key.
+func (w *Wallet) PrivateBytes() ([]byte, error) {
+	if w.Encrypted {
+		return nil, errors.New("cannot get private key from an encrypted wallet")
+	}
+
+	key, err := w.GetData("private_key")
+	if err != nil {
+		return nil, err
+	}
+
+	if key == nil {
+		return nil, errors.New("public key is nil")
+	}
+
+	bytes, err := x509.MarshalECPrivateKey(key.(*ecdsa.PrivateKey))
 	if err != nil {
 		return nil, err
 	}
@@ -199,13 +227,36 @@ func (w *Wallet) PrivateBytes() ([]byte, error) {
 	return bytes, nil
 }
 
-// PublicBytes returns the bytes representation of the public key.
-func (w *Wallet) PublicBytes() ([]byte, error) {
-	if w.PublicKey == nil {
+// PublicKey returns the public key from the data (keypairs) associated with the wallet.
+func (w *Wallet) PublicKey() (*ecdsa.PublicKey, error) {
+	if w.Encrypted {
+		return nil, errors.New("cannot get public key from an encrypted wallet")
+	}
+
+	key, err := w.GetData("public_key")
+	if err != nil {
+		return nil, err
+	}
+
+	if key == nil {
 		return nil, errors.New("public key is nil")
 	}
 
-	bytes, err := x509.MarshalPKIXPublicKey(w.PublicKey)
+	return key.(*ecdsa.PublicKey), nil
+}
+
+// PublicBytes returns the bytes representation of the public key.
+func (w *Wallet) PublicBytes() ([]byte, error) {
+	if w.Encrypted {
+		return nil, errors.New("cannot get public key from an encrypted wallet")
+	}
+
+	key, err := w.GetData("public_key")
+	if key == nil {
+		return nil, errors.New("public key is nil")
+	}
+
+	bytes, err := x509.MarshalPKIXPublicKey(key.(*ecdsa.PublicKey))
 	if err != nil {
 		return nil, err
 	}
@@ -248,8 +299,18 @@ func (w *Wallet) SignTransaction(tx Transaction) error {
 	// Get the SHA-256 hash of the transaction.
 	txHash := sha256.Sum256([]byte(fmt.Sprintf("%v", tx)))
 
+	// key the Private key from the wallet's data (keypairs).
+	key, err := w.PrivateKey()
+	if err != nil {
+		return fmt.Errorf("failed to sign transaction: %v", err)
+	}
+
+	if key == nil {
+		return fmt.Errorf("failed to sign transaction: private key is nil")
+	}
+
 	// Sign the transaction hash.
-	r, s, err := ecdsa.Sign(rand.Reader, w.PrivateKey, txHash[:])
+	r, s, err := ecdsa.Sign(rand.Reader, key, txHash[:])
 	if err != nil {
 		return fmt.Errorf("failed to sign transaction: %v", err)
 	}
@@ -263,121 +324,138 @@ func (w *Wallet) SignTransaction(tx Transaction) error {
 	return nil
 }
 
-// Lock locks the wallet using the provided passphrase. Basically the wallet's private key & data (keypairs) are encrypted using the passphrase.
-func (w *Wallet) Lock(passphrase string) error {
+// encrypt is a private internal method that encrypts the data (keypairs) associated with the wallet.
+func (w *Wallet) encrypt(key, data []byte) ([]byte, error) {
+	key, salt, err := w.deriveKey(key, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	blockCipher, err := aes.NewCipher(key)
+	if err != nil {
+		return nil, err
+	}
+
+	gcm, err := cipher.NewGCM(blockCipher)
+	if err != nil {
+		return nil, err
+	}
+
+	nonce := make([]byte, gcm.NonceSize())
+	if _, err = rand.Read(nonce); err != nil {
+		return nil, err
+	}
+
+	ciphertext := gcm.Seal(nonce, nonce, data, nil)
+
+	ciphertext = append(ciphertext, salt...)
+
+	return ciphertext, nil
 }
 
-// Unlock unlocks the wallet using the provided passphrase. Basically the wallet's private key & data (keypairs) are decrypted using the passphrase.
+// decrypt is a private internal method that decrypts the data (keypairs) associated with the wallet.
+func (w *Wallet) decrypt(key, data []byte) ([]byte, error) {
+	salt, data := data[len(data)-32:], data[:len(data)-32]
+
+	key, _, err := w.deriveKey(key, salt)
+	if err != nil {
+		return nil, err
+	}
+
+	blockCipher, err := aes.NewCipher(key)
+	if err != nil {
+		return nil, err
+	}
+
+	gcm, err := cipher.NewGCM(blockCipher)
+	if err != nil {
+		return nil, err
+	}
+
+	nonce, ciphertext := data[:gcm.NonceSize()], data[gcm.NonceSize():]
+
+	plaintext, err := gcm.Open(nil, nonce, ciphertext, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return plaintext, nil
+}
+
+// deriveKey is a private internal method that derives a key from the provided password and salt.
+func (w *Wallet) deriveKey(password, salt []byte) ([]byte, []byte, error) {
+	if salt == nil {
+		salt = make([]byte, 32)
+		if _, err := rand.Read(salt); err != nil {
+			return nil, nil, err
+		}
+	}
+
+	key, err := scrypt.Key(password, salt, 1048576, 8, 1, 32)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	return key, salt, nil
+}
+
+// Lock locks the wallet using the provided passphrase. Basically the wallet's data (keypairs), including the private key are
+// encrypted using the passphrase.
+func (w *Wallet) Lock(passphrase string) error {
+
+	// Check if the wallet is already encrypted.
+	if w.Encrypted {
+		return errors.New("wallet is already encrypted")
+	}
+
+	// Check if the passphrase is strong enough.
+	if testPasswordStrength(passphrase) != nil {
+		return errors.New("password is too weak")
+	}
+	// Convert the passphrase to bytes.
+	pwAsBytes := []byte(passphrase)
+
+	// Get the wallet's data as bytes.
+	dataAsbytes, err := w.dataToBytes()
+	if err != nil {
+		return err
+	}
+
+	// Encrypt the wallet's data.
+	w.ciphertext, err = w.encrypt(pwAsBytes, dataAsbytes)
+	w.data = nil
+	w.Encrypted = true
+
+	return nil
+}
+
+// Unlock unlocks the wallet using the provided passphrase. Basically the wallet's data (keypairs), including the private key are
+// decrypted using the passphrase.
 func (w *Wallet) Unlock(passphrase string) error {
 
-}
-
-// EncryptPrivateKey encrypts the wallet's private key using the provided passphrase.
-func (w *Wallet) EncryptPrivateKey(passphrase string) error {
-	if w.Encrypted {
-		return errors.New("private key is already encrypted")
-	}
-
-	// Derive a symmetric encryption key from the passphrase.
-	key := w.deriveKey([]byte(passphrase))
-
-	// Generate a random nonce.
-	nonce := make([]byte, w.EncryptionParams.NonceSize)
-	_, err := rand.Read(nonce)
-	if err != nil {
-		return fmt.Errorf("failed to generate nonce: %v", err)
-	}
-
-	// Create a new AES-GCM cipher block using the derived key.
-	block, err := aes.NewCipher(key)
-	if err != nil {
-		return fmt.Errorf("failed to create cipher block: %v", err)
-	}
-
-	// Encrypt the private key.
-	aesgcm, err := cipher.NewGCM(block)
-	if err != nil {
-		return fmt.Errorf("failed to create AES-GCM cipher: %v", err)
-	}
-
-	pvtBytes, err := w.PrivateBytes()
-	if err != nil {
-		return fmt.Errorf("failed to get private key bytes: %v", err)
-	}
-
-	ciphertext := aesgcm.Seal(nil, nonce, pvtBytes, nil)
-
-	// Update the wallet with the encrypted private key and encryption parameters.
-	w.EncryptedPrivateKey = append(nonce, ciphertext...)
-	w.Encrypted = true
-	w.EncryptionParams.NonceSize = len(nonce)
-	w.EncryptionParams.SaltSize = len(key)
-
-	return nil
-}
-
-// DecryptPrivateKey decrypts the wallet's private key using the provided passphrase.
-func (w *Wallet) DecryptPrivateKey(passphrase string) error {
+	// Check if the wallet is already decrypted.
 	if !w.Encrypted {
-		return errors.New("private key is not encrypted")
+		return errors.New("wallet is already decrypted")
 	}
 
-	// Derive the symmetric encryption key from the passphrase.
-	key := w.deriveKey([]byte(passphrase))
+	// Convert the passphrase to bytes.
+	pwAsBytes := []byte(passphrase)
 
-	// Create a new AES-GCM cipher block using the derived key.
-	block, err := aes.NewCipher(key)
+	// Decrypt the wallet's data.
+	dataAsBytes, err := w.decrypt(pwAsBytes, w.ciphertext)
 	if err != nil {
-		return fmt.Errorf("failed to create cipher block: %v", err)
+		return err
 	}
 
-	// Get the nonce and ciphertext bytes.
-	nonceSize := w.EncryptionParams.NonceSize
-	if len(w.EncryptedPrivateKey) < nonceSize {
-		return errors.New("encrypted private key bytes are incomplete")
-	}
-
-	nonceBytes := w.EncryptedPrivateKey[:nonceSize]
-	ciphertext := w.EncryptedPrivateKey[nonceSize:]
-
-	// Decrypt the private key.
-	aesgcm, err := cipher.NewGCM(block)
+	// Convert the wallet's data to a map.
+	err = w.bytesToData(dataAsBytes)
 	if err != nil {
-		return fmt.Errorf("failed to create AES-GCM cipher: %v", err)
+		return err
 	}
 
-	plaintext, err := aesgcm.Open(nil, nonceBytes, ciphertext, nil)
-	if err != nil {
-		return fmt.Errorf("failed to decrypt private key: %v", err)
-	}
-
-	// Parse the decrypted private key.
-	parsedPrivateKey, err := x509.ParseECPrivateKey(plaintext)
-	if err != nil {
-		return fmt.Errorf("failed to parse decrypted private key: %v", err)
-	}
-
-	// Update the wallet with the decrypted private key and encryption parameters.
-	w.PrivateKey = parsedPrivateKey
+	// Set the wallet's data.
+	w.ciphertext = nil
 	w.Encrypted = false
-	w.EncryptionParams = NewDefaultEncryptionParams()
 
 	return nil
-}
-
-func (w *Wallet) deriveKey(passphrase []byte) []byte {
-	// Use a key derivation function (KDF) to derive a symmetric encryption key from the passphrase.
-	// You can use a suitable KDF, such as PBKDF2 or bcrypt, to derive the key. Here's an example using PBKDF2:
-
-	// Generate a salt.
-	salt := make([]byte, w.EncryptionParams.SaltSize)
-	_, err := rand.Read(salt)
-	if err != nil {
-		panic(fmt.Errorf("failed to generate salt: %v", err))
-	}
-
-	// Derive the key using PBKDF2 with SHA-256.
-	key := pbkdf2.Key(passphrase, salt, 100000, 32, sha256.New)
-
-	return key
 }

@@ -14,6 +14,7 @@ import (
 	"net"
 	"net/http"
 	"reflect"
+	"regexp"
 	"strings"
 )
 
@@ -104,4 +105,43 @@ func ValidateAddress(address string) error {
 	}
 
 	return nil
+}
+
+func testPasswordStrength(password string) error {
+	// Check password length
+	if len(password) < 12 || len(password) > 24 {
+		return fmt.Errorf("password length should be between 12 and 24 characters")
+	}
+
+	// Check for at least 2 uppercase letters
+	uppercaseCount := countMatches(password, "[A-Z]")
+	if uppercaseCount < 2 {
+		return fmt.Errorf("password should contain at least 2 uppercase letters")
+	}
+
+	// Check for at least 2 lowercase letters
+	lowercaseCount := countMatches(password, "[a-z]")
+	if lowercaseCount < 2 {
+		return fmt.Errorf("password should contain at least 2 lowercase letters")
+	}
+
+	// Check for at least 2 digits
+	digitCount := countMatches(password, "[0-9]")
+	if digitCount < 2 {
+		return fmt.Errorf("password should contain at least 2 digits")
+	}
+
+	// Check for at least 2 special characters
+	specialCharCount := countMatches(password, `[~!@#$%^&*()=+\[\]{}|\\/?<>]`)
+	if specialCharCount < 2 {
+		return fmt.Errorf("password should contain at least 2 special characters (~!@#$%%^&*()=+[]{}|\\/<>?)")
+	}
+
+	return nil
+}
+
+func countMatches(s, pattern string) int {
+	re := regexp.MustCompile(pattern)
+	matches := re.FindAllString(s, -1)
+	return len(matches)
 }

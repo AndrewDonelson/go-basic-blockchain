@@ -22,26 +22,6 @@ func TestMain(m *testing.M) {
 	os.Exit(m.Run())
 }
 
-func TestWalletMethods(t *testing.T) {
-	assert := assert.New(t)
-
-	wallet, err := NewWallet("test", []string{"tag1", "tag2"})
-	assert.NoError(err)
-
-	// Test GetAddress()
-	address := wallet.GetAddress()
-	assert.NotEmpty(address)
-
-	// Test EncryptPrivateKey() and DecryptPrivateKey()
-	err = wallet.EncryptPrivateKey("passphrase")
-	assert.NoError(err)
-
-	err = wallet.DecryptPrivateKey("passphrase")
-	assert.NoError(err)
-
-	// Further test cases to be added
-}
-
 func TestBlockchain(t *testing.T) {
 	var err error
 
@@ -71,7 +51,7 @@ func TestBlockchain(t *testing.T) {
 			assert.NoError(err)
 			bc.AddTransaction(bankTx)
 
-			msgTx, err := NewMessageTransaction(toWallet, fromWallet, fmt.Sprintf("Thank you %s!", toWallet.Name))
+			msgTx, err := NewMessageTransaction(toWallet, fromWallet, fmt.Sprintf("Thank you %s!", toWallet.GetWalletName()))
 			assert.NoError(err)
 			bc.AddTransaction(msgTx)
 

@@ -174,9 +174,12 @@ func (bc *Blockchain) Mine(block *Block, difficulty int) *Block {
 
 // VerifySignature verifies the signature of a transaction using the sender's public key.
 func (bc *Blockchain) VerifySignature(tx Transaction) error {
-	senderWallet := tx.GetSenderWallet()
+	senderPublicKey, err := tx.GetSenderWallet().PublicKey()
+	if err != nil {
+		return err
+	}
 
-	if !VerifySignature(tx.GetHash(), tx.GetSignature(), senderWallet.PublicKey) {
+	if !VerifySignature(tx.GetHash(), tx.GetSignature(), senderPublicKey) {
 		return fmt.Errorf("failed to verify signature")
 	}
 

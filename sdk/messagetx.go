@@ -31,5 +31,5 @@ func NewMessageTransaction(from *Wallet, to *Wallet, message string) (*Message, 
 
 // Process returns a string representation of the message.
 func (m *Message) Process() string {
-	return fmt.Sprintf("Message from %s to %s: %s", m.From.Name, m.To.Name, m.Message)
+	return fmt.Sprintf("Message from %s to %s: %s", m.From.GetWalletName(), m.To.GetWalletName(), m.Message)
 }
