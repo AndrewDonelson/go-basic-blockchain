@@ -12,6 +12,7 @@ import (
 	"crypto/sha256"
 	"crypto/x509"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -20,18 +21,23 @@ import (
 	"github.com/xdg-go/pbkdf2"
 )
 
+var RequiredWalletProperties = []string{
+	"name",
+	"tags",
+	"balance",
+}
+
 // Wallet represents a user's wallet.
 type Wallet struct {
 	ID                  string
-	Name                string
-	Tags                []string
+	Address             string
 	PrivateKey          *ecdsa.PrivateKey
 	PublicKey           *ecdsa.PublicKey
-	Address             string
-	Balance             float64
-	Encrypted           bool              // Flag to indicate if the private key is encrypted
-	EncryptedPrivateKey []byte            // Encrypted private key
-	EncryptionParams    *EncryptionParams // Encryption parameters for the private key
+	Encrypted           bool                   // Flag to indicate if the private key is encrypted
+	EncryptedPrivateKey []byte                 // Encrypted private key
+	EncryptionParams    *EncryptionParams      // Encryption parameters for the private key
+	data                map[string]interface{} // Data (keypairs) associated with the wallet
+	// TODO: Should I move Private & Public Keys in to the data map?
 }
 
 // EncryptionParams holds the encryption parameters for the private key.
@@ -62,20 +68,89 @@ func NewWallet(name string, tags []string) (*Wallet, error) {
 	// Create a new wallet with a unique ID, name, and set of tags.
 	wallet := &Wallet{
 		ID:               uuid.New(),
-		Name:             name,
-		Tags:             tags,
 		PrivateKey:       privateKey,
 		PublicKey:        &privateKey.PublicKey,
-		Balance:          fundWalletAmount,
 		Address:          "",
 		Encrypted:        false,
 		EncryptionParams: NewDefaultEncryptionParams(),
 	}
-
+	wallet.SetData("name", name)
+	wallet.SetData("tags", tags)
+	wallet.SetData("balance", fundWalletAmount)
 	wallet.GetAddress()
+
 	fmt.Printf("[%s] Created new Wallet: %+v\n", time.Now().Format(logDateTimeFormat), PrettyPrint(wallet))
 
 	return wallet, nil
+}
+
+// SetData sets the data (keypairs) associated with the wallet.
+// This wallet allows the user to store arbitrary data (keypairs) in the wallet.
+// The data included built-in data such as the wallet name, tags, and balance.
+func (w *Wallet) SetData(key string, value interface{}) error {
+	if w.Encrypted {
+		return errors.New("cannot set data on an encrypted wallet")
+	}
+
+	w.data[key] = value
+
+	return nil
+}
+
+// GetData returns the data (keypairs) associated with the wallet.
+// This wallet allows the user to store arbitrary data (keypairs) in the wallet.
+// The data included built-in data such as the wallet name, tags, and balance.
+func (w *Wallet) GetData(key string) (interface{}, error) {
+	if w.Encrypted {
+		return nil, errors.New("cannot get data from an encrypted wallet")
+	}
+
+	return w.data[key], nil
+}
+
+// GetWalletName returns the wallet name from the data (keypairs) associated with the wallet.
+func (w *Wallet) GetWalletName() string {
+	if w.Encrypted {
+		return ""
+	}
+
+	name, err := w.GetData("name")
+	if err != nil {
+		fmt.Println(err)
+		return ""
+	}
+
+	return name.(string)
+}
+
+// GetBalance returns the wallet balance from the data (keypairs) associated with the wallet.
+func (w *Wallet) GetBalance() float64 {
+	if w.Encrypted {
+		return 0
+	}
+
+	balance, err := w.GetData("balance")
+	if err != nil {
+		fmt.Println(err)
+		return 0
+	}
+
+	return balance.(float64)
+}
+
+// GetTags returns the wallet tags from the data (keypairs) associated with the wallet.
+func (w *Wallet) GetTags() []string {
+	if w.Encrypted {
+		return nil
+	}
+
+	tags, err := w.GetData("tags")
+	if err != nil {
+		fmt.Println(err)
+		return nil
+	}
+
+	return tags.([]string)
 }
 
 // GetAddress generates and returns the wallet address.
@@ -96,6 +171,18 @@ func (w *Wallet) GetAddress() string {
 	w.Address = hex.EncodeToString(hash[:])
 
 	return w.Address
+}
+
+// dataToBytes is an internal (private) method that converts the data (keypairs) associated with the wallet to bytes.
+// this is used by the wallet to encrypt the data (keypairs) associated with the wallet.
+func (w *Wallet) dataToBytes() ([]byte, error) {
+	return json.Marshal(w.data)
+}
+
+// bytesToData is an internal (private) method that converts the bytes representation of the data (keypairs) associated with the wallet to the data (keypairs) associated with the wallet.
+// this is used by the wallet to decrypt the data (keypairs) associated with the wallet.
+func (w *Wallet) bytesToData(bytes []byte) error {
+	return json.Unmarshal(bytes, &w.data)
 }
 
 // PrivateBytes returns the bytes representation of the private key.
@@ -128,8 +215,15 @@ func (w *Wallet) PublicBytes() ([]byte, error) {
 
 // SendTransaction sends a new transaction from the sender's wallet to the recipient's address.
 func (w *Wallet) SendTransaction(to string, tx Transaction, bc *Blockchain) (*Transaction, error) {
+	if w.Encrypted {
+		return nil, errors.New("cannot send transaction from an encrypted wallet")
+	}
+
+	// get the wallets balance
+	balance := w.GetBalance()
+
 	// Check if the wallet has enough balance.
-	if w.Balance < transactionFee {
+	if balance < transactionFee {
 		return nil, fmt.Errorf("insufficient funds")
 	}
 
@@ -146,6 +240,11 @@ func (w *Wallet) SendTransaction(to string, tx Transaction, bc *Blockchain) (*Tr
 
 // SignTransaction signs the given transaction with the wallet's private key.
 func (w *Wallet) SignTransaction(tx Transaction) error {
+
+	if w.Encrypted {
+		return errors.New("cannot sign transaction with an encrypted wallet")
+	}
+
 	// Get the SHA-256 hash of the transaction.
 	txHash := sha256.Sum256([]byte(fmt.Sprintf("%v", tx)))
 
@@ -162,6 +261,15 @@ func (w *Wallet) SignTransaction(tx Transaction) error {
 	}
 
 	return nil
+}
+
+// Lock locks the wallet using the provided passphrase. Basically the wallet's private key & data (keypairs) are encrypted using the passphrase.
+func (w *Wallet) Lock(passphrase string) error {
+}
+
+// Unlock unlocks the wallet using the provided passphrase. Basically the wallet's private key & data (keypairs) are decrypted using the passphrase.
+func (w *Wallet) Unlock(passphrase string) error {
+
 }
 
 // EncryptPrivateKey encrypts the wallet's private key using the provided passphrase.
