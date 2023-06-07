@@ -5,6 +5,7 @@ import (
 	"math/rand"
 	"os"
 	"strconv"
+	"sync"
 	"testing"
 	"time"
 
@@ -29,6 +30,7 @@ func TestBlockchain(t *testing.T) {
 	assert := assert.New(t)
 
 	bc := NewBlockchain()
+	bc.Run(1)
 
 	// Create wallets and add transactions
 	wallets := make([]*Wallet, 5)
@@ -58,26 +60,26 @@ func TestBlockchain(t *testing.T) {
 		}
 	}
 
-	// // Test adding transactions concurrently to simulate high load
-	// wg := sync.WaitGroup{}
-	// for i := 0; i < len(wallets); i++ {
-	// 	wg.Add(1)
-	// 	go func(i int) {
-	// 		defer wg.Done()
+	// Test adding transactions concurrently to simulate high load
+	wg := sync.WaitGroup{}
+	for i := 0; i < len(wallets); i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
 
-	// 		for j := 0; j < transactionQueueSize; j++ {
-	// 			toWallet := wallets[(i+1)%len(wallets)]
-	// 			transaction, err := NewBankTransaction(wallets[i], toWallet, rand.Float64())
-	// 			assert.NoError(err)
-	// 			bc.AddTransaction(transaction)
-	// 		}
-	// 	}(i)
-	// }
-	// wg.Wait()
+			for j := 0; j < transactionQueueSize; j++ {
+				toWallet := wallets[(i+1)%len(wallets)]
+				transaction, err := NewBankTransaction(wallets[i], toWallet, rand.Float64())
+				assert.NoError(err)
+				bc.AddTransaction(transaction)
+			}
+		}(i)
+	}
+	wg.Wait()
 
-	// gomega.Eventually(func() int {
-	// 	return len(bc.TransactionQueue)
-	// }, transactionWaitTime, 50*time.Millisecond).Should(gomega.Equal(0))
+	gomega.Eventually(func() int {
+		return len(bc.TransactionQueue)
+	}, transactionWaitTime, 50*time.Millisecond).Should(gomega.Equal(0))
 
 	// Further test cases to be added
 }

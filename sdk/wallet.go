@@ -7,7 +7,6 @@ import (
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/ecdsa"
-	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/x509"
@@ -37,6 +36,7 @@ type Wallet struct {
 	EncryptionParams *EncryptionParams      // Encryption parameters for the private key
 	data             map[string]interface{} // Data (keypairs) associated with the wallet
 	ciphertext       []byte                 // Encrypted data
+	vault            *Vault
 }
 
 // EncryptionParams holds the encryption parameters for the private key.
@@ -58,11 +58,6 @@ func NewDefaultEncryptionParams() *EncryptionParams {
 
 // NewWallet creates a new wallet with a unique ID, name, and set of tags.
 func NewWallet(name string, tags []string) (*Wallet, error) {
-	// Generate a new private key.
-	privateKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err != nil {
-		return nil, err
-	}
 
 	// Create a new wallet with a unique ID, name, and set of tags.
 	wallet := &Wallet{
@@ -70,14 +65,18 @@ func NewWallet(name string, tags []string) (*Wallet, error) {
 		Address:          "",
 		Encrypted:        false,
 		EncryptionParams: NewDefaultEncryptionParams(),
-		data:             make(map[string]interface{}),
+		vault:            NewVault(),
+	}
+
+	// Generate a new private key.
+	err := wallet.vault.NewKeyPair()
+	if err != nil {
+		return nil, err
 	}
 
 	wallet.SetData("name", name)
 	wallet.SetData("tags", tags)
 	wallet.SetData("balance", fundWalletAmount)
-	wallet.SetData("private_key", &privateKey)
-	wallet.SetData("public_key", &privateKey.PublicKey)
 	wallet.GetAddress()
 
 	fmt.Printf("[%s] Created new Wallet: %+v\n", time.Now().Format(logDateTimeFormat), PrettyPrint(wallet))
@@ -93,7 +92,10 @@ func (w *Wallet) SetData(key string, value interface{}) error {
 		return errors.New("cannot set data on an encrypted wallet")
 	}
 
-	w.data[key] = value
+	err := w.vault.SetData(key, value)
+	if err != nil {
+		return err
+	}
 
 	return nil
 }
@@ -106,7 +108,12 @@ func (w *Wallet) GetData(key string) (interface{}, error) {
 		return nil, errors.New("cannot get data from an encrypted wallet")
 	}
 
-	return w.data[key], nil
+	value, err := w.vault.GetData(key)
+	if err != nil {
+		return nil, err
+	}
+
+	return value, nil
 }
 
 // GetWalletName returns the wallet name from the data (keypairs) associated with the wallet.
@@ -176,32 +183,23 @@ func (w *Wallet) GetAddress() string {
 
 // dataToBytes is an internal (private) method that converts the data (keypairs) associated with the wallet to bytes.
 // this is used by the wallet to encrypt the data (keypairs) associated with the wallet.
-func (w *Wallet) dataToBytes() ([]byte, error) {
-	return json.Marshal(w.data)
+func (w *Wallet) vaultToBytes() ([]byte, error) {
+	return json.Marshal(w.vault)
 }
 
 // bytesToData is an internal (private) method that converts the bytes representation of the data (keypairs) associated with the wallet to the data (keypairs) associated with the wallet.
 // this is used by the wallet to decrypt the data (keypairs) associated with the wallet.
-func (w *Wallet) bytesToData(bytes []byte) error {
-	return json.Unmarshal(bytes, &w.data)
+func (w *Wallet) bytesToVault(bytes []byte) error {
+	return json.Unmarshal(bytes, &w.vault)
 }
 
-// PrivateKey returns the private key from the data (keypairs) associated with the wallet.
+// PrivateKey returns the private key from the vault associated with the wallet.
 func (w *Wallet) PrivateKey() (*ecdsa.PrivateKey, error) {
 	if w.Encrypted {
 		return nil, errors.New("cannot get private key from an encrypted wallet")
 	}
 
-	key, err := w.GetData("private_key")
-	if err != nil {
-		return nil, err
-	}
-
-	if key == nil {
-		return nil, errors.New("public key is nil")
-	}
-
-	return key.(*ecdsa.PrivateKey), nil
+	return w.vault.Key, nil
 }
 
 // PrivateBytes returns the bytes representation of the private key.
@@ -210,16 +208,11 @@ func (w *Wallet) PrivateBytes() ([]byte, error) {
 		return nil, errors.New("cannot get private key from an encrypted wallet")
 	}
 
-	key, err := w.GetData("private_key")
-	if err != nil {
-		return nil, err
+	if w.vault.Key == nil {
+		return nil, errors.New("private key is nil")
 	}
 
-	if key == nil {
-		return nil, errors.New("public key is nil")
-	}
-
-	bytes, err := x509.MarshalECPrivateKey(key.(*ecdsa.PrivateKey))
+	bytes, err := x509.MarshalECPrivateKey(w.vault.Key)
 	if err != nil {
 		return nil, err
 	}
@@ -233,16 +226,11 @@ func (w *Wallet) PublicKey() (*ecdsa.PublicKey, error) {
 		return nil, errors.New("cannot get public key from an encrypted wallet")
 	}
 
-	key, err := w.GetData("public_key")
-	if err != nil {
-		return nil, err
-	}
-
-	if key == nil {
+	if w.vault.Key.PublicKey == (ecdsa.PublicKey{}) {
 		return nil, errors.New("public key is nil")
 	}
 
-	return key.(*ecdsa.PublicKey), nil
+	return &w.vault.Key.PublicKey, nil
 }
 
 // PublicBytes returns the bytes representation of the public key.
@@ -251,12 +239,11 @@ func (w *Wallet) PublicBytes() ([]byte, error) {
 		return nil, errors.New("cannot get public key from an encrypted wallet")
 	}
 
-	key, err := w.GetData("public_key")
-	if key == nil {
+	if w.vault.Key.Public() == nil {
 		return nil, errors.New("public key is nil")
 	}
 
-	bytes, err := x509.MarshalPKIXPublicKey(key.(*ecdsa.PublicKey))
+	bytes, err := x509.MarshalPKIXPublicKey(w.vault.Key.Public())
 	if err != nil {
 		return nil, err
 	}
@@ -416,7 +403,7 @@ func (w *Wallet) Lock(passphrase string) error {
 	pwAsBytes := []byte(passphrase)
 
 	// Get the wallet's data as bytes.
-	dataAsbytes, err := w.dataToBytes()
+	dataAsbytes, err := w.vaultToBytes()
 	if err != nil {
 		return err
 	}
@@ -448,7 +435,7 @@ func (w *Wallet) Unlock(passphrase string) error {
 	}
 
 	// Convert the wallet's data to a map.
-	err = w.bytesToData(dataAsBytes)
+	err = w.bytesToVault(dataAsBytes)
 	if err != nil {
 		return err
 	}
