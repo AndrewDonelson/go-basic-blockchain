@@ -144,7 +144,7 @@ func (bc *Blockchain) AddTransaction(transaction Transaction) {
 	bc.mux.Lock()
 	bc.TransactionQueue = append(bc.TransactionQueue, transaction)
 	bc.mux.Unlock()
-	fmt.Printf("[%s] Added TX to que: %v\n", time.Now().Format(logDateTimeFormat), PrettyPrint(transaction))
+	fmt.Printf("[%s] Added TX to que: %v\n", time.Now().Format(logDateTimeFormat), transaction)
 }
 
 // Mine mines a new block with the given transactions and difficulty.
@@ -164,7 +164,7 @@ func (bc *Blockchain) Mine(block *Block, difficulty int) *Block {
 			bc.Blocks = append(bc.Blocks, block)
 			bc.TransactionQueue = []Transaction{} // Clear the transaction queue
 
-			fmt.Printf("[%s] Mined a new Block with Hash [%s]\n", time.Now().Format(logDateTimeFormat), block.Hash)
+			fmt.Printf("[%s] Mined a new Block with [%d] TXs & Hash [%s]\n", time.Now().Format(logDateTimeFormat), len(block.Transactions), block.Hash)
 			break
 		}
 	}

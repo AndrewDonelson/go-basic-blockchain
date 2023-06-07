@@ -283,6 +283,8 @@ func (w *Wallet) SignTransaction(tx Transaction) error {
 		return errors.New("cannot sign transaction with an encrypted wallet")
 	}
 
+	fmt.Printf("[%s] %s Signing %s-TX : %v\n", time.Now().Format(logDateTimeFormat), w.GetWalletName(), tx.GetProtocol(), tx)
+
 	// Get the SHA-256 hash of the transaction.
 	txHash := sha256.Sum256([]byte(fmt.Sprintf("%v", tx)))
 

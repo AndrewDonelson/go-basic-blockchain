@@ -53,7 +53,7 @@ func NewTransaction(protocol string, from *Wallet, to *Wallet) (*Tx, error) {
 		return nil, fmt.Errorf("wallets can't be nil")
 	}
 
-	fmt.Printf("[%s] Creating TX (%s) - FROM: %s, TO: %s\n", time.Now().Format(logDateTimeFormat), protocol, from.GetAddress(), to.GetAddress())
+	fmt.Printf("[%s] Creating %s-TX - FROM: %s, TO: %s\n", time.Now().Format(logDateTimeFormat), protocol, from.GetAddress(), to.GetAddress())
 
 	// Create the new Message transaction
 	tx := &Tx{
@@ -93,6 +93,11 @@ func (t *Tx) GetProtocol() string {
 // GetSenderWallet retrieves the sender's wallet from the blockchain based on the sender's address.
 func (t *Tx) GetSenderWallet() *Wallet {
 	return t.From
+}
+
+// GetId returns the ID of the transaction.
+func (t *Tx) GetId() string {
+	return t.ID
 }
 
 // Gethash returns the hash of the transaction.
