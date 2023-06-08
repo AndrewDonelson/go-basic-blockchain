@@ -11,11 +11,11 @@ type HTML5 struct {
 }
 
 var (
-	html5 *HTML5
+	HTML *HTML5
 )
 
 func init() {
-	html5 = &HTML5{}
+	HTML = &HTML5{initialized: true}
 }
 
 // HTML5_Page returns string content representing a valid HTML5 page with the given title set and the content provided placed in a

@@ -14,7 +14,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io/ioutil"
+	"os"
 	"time"
 
 	"github.com/pborman/uuid"
@@ -472,10 +472,15 @@ func (w *Wallet) Close(passphrase string) error {
 	}
 
 	filename := fmt.Sprintf("%s/%s.json", dataFolder, w.GetAddress())
-	file, _ := json.MarshalIndent(w, "", " ")
-
-	err = ioutil.WriteFile(filename, file, 0644)
+	file, err := os.Create(filename)
 	if err != nil {
+		return fmt.Errorf("failed to save wallet: %v", err)
+	}
+	defer file.Close()
+
+	enc := json.NewEncoder(file)
+	enc.SetIndent("", " ")
+	if err := enc.Encode(w); err != nil {
 		return fmt.Errorf("failed to save wallet: %v", err)
 	}
 
@@ -488,12 +493,14 @@ func (w *Wallet) Close(passphrase string) error {
 func (w *Wallet) Open(passphrase string) error {
 	filename := fmt.Sprintf("%s/%s.json", dataFolder, w.GetAddress())
 
-	fileData, err := ioutil.ReadFile(filename)
+	file, err := os.Open(filename)
 	if err != nil {
 		return fmt.Errorf("failed to load wallet: %v", err)
 	}
+	defer file.Close()
 
-	err = json.Unmarshal(fileData, w)
+	dec := json.NewDecoder(file)
+	err = dec.Decode(w)
 	if err != nil {
 		return fmt.Errorf("failed to load wallet: %v", err)
 	}

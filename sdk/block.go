@@ -8,7 +8,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"io/ioutil"
+	"os"
 	"time"
 )
 
@@ -43,9 +43,17 @@ func (b *Block) calculateHash() string {
 // save saves the block to disk as a JSON file.
 func (b *Block) save() error {
 	filename := fmt.Sprintf("%s/%010d.json", dataFolder, b.Index)
-	file, _ := json.MarshalIndent(b, "", " ")
+	file, err := os.Create(filename)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+	enc := json.NewEncoder(file)
+	enc.SetIndent("", " ")
+	if err := enc.Encode(b); err != nil {
+		return err
+	}
 
-	_ = ioutil.WriteFile(filename, file, 0644)
 	fmt.Printf("[%s] Block [%d] saved to disk.\n", time.Now().Format(logDateTimeFormat), b.Index)
 
 	return nil
@@ -53,12 +61,15 @@ func (b *Block) save() error {
 
 // load loads the block from disk.
 func (b *Block) load(file string) error {
-	blockData, err := ioutil.ReadFile(file)
+	blockFile, err := os.Open(file)
 	if err != nil {
 		return err
 	}
-
-	json.Unmarshal(blockData, &b)
+	defer blockFile.Close()
+	dec := json.NewDecoder(blockFile)
+	if err := dec.Decode(b); err != nil {
+		return err
+	}
 
 	return nil
 }
