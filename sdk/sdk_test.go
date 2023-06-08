@@ -14,7 +14,6 @@ import (
 
 var (
 	transactionQueueSize = 5
-	transactionWaitTime  = 25 * time.Second
 )
 
 func Sleepy() {
@@ -79,27 +78,6 @@ func TestBlockchain(t *testing.T) {
 
 		}
 	}
-
-	// Test adding transactions concurrently to simulate high load
-	// wg := sync.WaitGroup{}
-	// for i := 0; i < len(wallets); i++ {
-	// 	wg.Add(1)
-	// 	go func(i int) {
-	// 		defer wg.Done()
-
-	// 		for j := 0; j < transactionQueueSize; j++ {
-	// 			toWallet := wallets[(i+1)%len(wallets)]
-	// 			transaction, err := NewBankTransaction(wallets[i], toWallet, rand.Float64())
-	// 			assert.NoError(err)
-	// 			bc.AddTransaction(transaction)
-	// 		}
-	// 	}(i)
-	// }
-	// wg.Wait()
-
-	// gomega.Eventually(func() int {
-	// 	return len(bc.TransactionQueue)
-	// }, transactionWaitTime, 50*time.Millisecond).Should(gomega.Equal(0))
 
 	// Further test cases to be added
 }
