@@ -54,10 +54,8 @@ func NewConfig() *Config {
 	}
 
 	// step 4: set the values from the environment variables
-
 	if os.Getenv("BLOCKCHAIN_NAME") != "" {
 		if os.Getenv("BLOCKCHAIN_NAME") == BlockchainName {
-			//fmt.Printf("Warning: Environment BLOCKCHAIN_NAME is set to the default value of %s and will be ignored\n", BlockchainName)
 			cfg.blockchainName = cfg.promptValue("BLOCKCHAIN_NAME", BlockchainName, false, "string").(string)
 		} else {
 			fmt.Printf("Notice: Environment BLOCKCHAIN_NAME is set to %s\n", os.Getenv("BLOCKCHAIN_NAME"))
@@ -67,7 +65,6 @@ func NewConfig() *Config {
 
 	if os.Getenv("BLOCKCHAIN_SYMBOL") != "" {
 		if os.Getenv("BLOCKCHAIN_SYMBOL") == BlockchainSymbol {
-			//fmt.Printf("Warning: Environment BLOCKCHAIN_SYMBOL is set to the default value of %s and will be ignored\n", BlockchainSymbol)
 			cfg.blockchainSymbol = cfg.promptValue("BLOCKCHAIN_SYMBOL", BlockchainSymbol, false, "string").(string)
 		} else {
 			fmt.Printf("Notice: Environment BLOCKCHAIN_SYMBOL is set to %s\n", os.Getenv("BLOCKCHAIN_SYMBOL"))
@@ -77,7 +74,6 @@ func NewConfig() *Config {
 
 	if os.Getenv("BLOCK_TIME") != "" {
 		if os.Getenv("BLOCK_TIME") == strconv.Itoa(blockTimeInSec) {
-			//fmt.Printf("Warning: Environment BLOCK_TIME is set to the default value of %d and will be ignored\n", blockTimeInSec)
 			cfg.blockTime = cfg.promptValue("BLOCK_TIME", fmt.Sprintf("%d", blockTimeInSec), false, "int").(int)
 		} else {
 			fmt.Printf("Notice: Environment BLOCK_TIME is set to %s\n", os.Getenv("BLOCK_TIME"))
@@ -87,7 +83,6 @@ func NewConfig() *Config {
 
 	if os.Getenv("DIFFICULTY") != "" {
 		if os.Getenv("DIFFICULTY") == strconv.Itoa(proofOfWorkDifficulty) {
-			//fmt.Printf("Warning: Environment DIFFICULTY is set to the default value of %d and will be ignored\n", proofOfWorkDifficulty)
 			cfg.difficulty = cfg.promptValue("DIFFICULTY", fmt.Sprintf("%d", proofOfWorkDifficulty), false, "int").(int)
 		} else {
 			fmt.Printf("Notice: Environment DIFFICULTY is set to %s\n", os.Getenv("DIFFICULTY"))
@@ -97,7 +92,6 @@ func NewConfig() *Config {
 
 	if os.Getenv("TRANSACTION_FEE") != "" {
 		if os.Getenv("TRANSACTION_FEE") == fmt.Sprintf("%.2f", transactionFee) {
-			//fmt.Printf("Warning: Environment TRANSACTION_FEE is set to the default value of %.2f and will be ignored\n", transactionFee)
 			cfg.transactionFee = cfg.promptValue("TRANSACTION_FEE", fmt.Sprintf("%.2f", transactionFee), false, "float").(float64)
 		} else {
 			fmt.Printf("Notice: Environment TRANSACTION_FEE is set to %s\n", os.Getenv("TRANSACTION_FEE"))
@@ -105,9 +99,33 @@ func NewConfig() *Config {
 		}
 	}
 
+	// this is the node wallet (miner) address
+	if os.Getenv("MINER_ADDRESS") != "" {
+		if os.Getenv("MINER_ADDRESS") == minerAddress {
+			if cfg.PromptYesNo("Do you want have a miner address?") {
+				cfg.minerAddress = cfg.promptValue("MINER_ADDRESS", minerAddress, true, "string").(string)
+			} else {
+				if cfg.PromptYesNo("Do you want to crate a new wallet for the miner address?") {
+					walletName, walletPassPhrase, walletTags := cfg.PromptWalletInfo()
+					minerWallet, err := NewWallet(walletName, walletPassPhrase, walletTags)
+					if err != nil {
+						log.Fatal(err)
+					}
+					cfg.minerAddress = minerWallet.GetAddress()
+				}
+			}
+
+			if cfg.minerAddress == "" || cfg.minerAddress == minerAddress {
+				log.Fatal("Error: MINER_ADDRESS is required")
+			}
+		} else {
+			fmt.Printf("Notice: Environment MINER_ADDRESS is set to %s\n", os.Getenv("MINER_ADDRESS"))
+			cfg.minerAddress = os.Getenv("MINER_ADDRESS")
+		}
+	}
+
 	if os.Getenv("MINER_REWARD_PCT") != "" {
 		if os.Getenv("MINER_REWARD_PCT") == fmt.Sprintf("%.2f", minerRewardPCT) {
-			//fmt.Printf("Warning: Environment MINER_REWARD_PCT is set to the default value of %.2f and will be ignored\n", minerRewardPCT)
 			cfg.minerRewardPCT = cfg.promptValue("MINER_REWARD_PCT", fmt.Sprintf("%.2f", minerRewardPCT), false, "float").(float64)
 		} else {
 			fmt.Printf("Notice: Environment MINER_REWARD_PCT is set to %s\n", os.Getenv("MINER_REWARD_PCT"))
@@ -115,19 +133,10 @@ func NewConfig() *Config {
 		}
 	}
 
-	if os.Getenv("MINER_ADDRESS") != "" {
-		if os.Getenv("MINER_ADDRESS") == minerAddress {
-			//fmt.Printf("Warning: Environment MINER_ADDRESS is set to the default value of %s and will be ignored\n", minerAddress)
-			cfg.minerAddress = cfg.promptValue("MINER_ADDRESS", minerAddress, true, "string").(string)
-		} else {
-			fmt.Printf("Notice: Environment MINER_ADDRESS is set to %s\n", os.Getenv("MINER_ADDRESS"))
-			cfg.minerAddress = os.Getenv("MINER_ADDRESS")
-		}
-	}
-
+	// This is the blockchain developer's wallet address (not the node wallet) - it is used to support (reward) the developer || project
+	// TODO: move this into the genesis block - not here
 	if os.Getenv("DEV_REWARD_PCT") != "" {
 		if os.Getenv("DEV_REWARD_PCT") == fmt.Sprintf("%.2f", devRewardPCT) {
-			//fmt.Printf("Warning: Environment DEV_REWARD_PCT is set to the default value of %.2f and will be ignored\n", devRewardPCT)
 			cfg.devRewardPCT = cfg.promptValue("DEV_REWARD_PCT", fmt.Sprintf("%.2f", devRewardPCT), false, "float").(float64)
 		} else {
 			fmt.Printf("Notice: Environment DEV_REWARD_PCT is set to %s\n", os.Getenv("DEV_REWARD_PCT"))
@@ -137,7 +146,6 @@ func NewConfig() *Config {
 
 	if os.Getenv("DEV_ADDRESS") != "" {
 		if os.Getenv("DEV_ADDRESS") == devAddress {
-			//fmt.Printf("Warning: Environment DEV_ADDRESS is set to the default value of %s and will be ignored\n", devAddress)
 			cfg.devAddress = cfg.promptValue("DEV_ADDRESS", devAddress, true, "string").(string)
 		} else {
 			fmt.Printf("Notice: Environment DEV_ADDRESS is set to %s\n", os.Getenv("DEV_ADDRESS"))
@@ -147,7 +155,6 @@ func NewConfig() *Config {
 
 	if os.Getenv("API_HOSTNAME") != "" {
 		if os.Getenv("API_HOSTNAME") == apiHostname {
-			//fmt.Printf("Warning: Environment API_HOSTNAME is set to the default value of %s and will be ignored\n", apiHostname)
 			cfg.apiHostname = cfg.promptValue("API_HOSTNAME", apiHostname, false, "string").(string)
 		} else {
 			fmt.Printf("Notice: Environment API_HOSTNAME is set to %s\n", os.Getenv("API_HOSTNAME"))
@@ -157,7 +164,6 @@ func NewConfig() *Config {
 
 	if os.Getenv("ENABLE_API") != "" {
 		if os.Getenv("ENABLE_API") == strconv.FormatBool(EnableAPI) {
-			//fmt.Printf("Warning: Environment ENABLE_API is set to the default value of %t and will be ignored\n", EnableAPI)
 			cfg.enableAPI = cfg.promptValue("ENABLE_API", strconv.FormatBool(EnableAPI), false, "bool").(bool)
 		} else {
 			fmt.Printf("Notice: Environment ENABLE_API is set to %s\n", os.Getenv("ENABLE_API"))
@@ -167,7 +173,6 @@ func NewConfig() *Config {
 
 	if os.Getenv("FUND_WALLET_AMOUNT") != "" {
 		if os.Getenv("FUND_WALLET_AMOUNT") == fmt.Sprintf("%.2f", fundWalletAmount) {
-			//fmt.Printf("Warning: Environment FUND_WALLET_AMOUNT is set to the default value of %.2f and will be ignored\n", fundWalletAmount)
 			cfg.fundWalletAmount = cfg.promptValue("FUND_WALLET_AMOUNT", fmt.Sprintf("%.2f", fundWalletAmount), false, "float").(float64)
 		} else {
 			fmt.Printf("Notice: Environment FUND_WALLET_AMOUNT is set to %s\n", os.Getenv("FUND_WALLET_AMOUNT"))
@@ -248,6 +253,46 @@ func (c *Config) promptValue(key, defaultValue string, required bool, returnType
 	}
 
 	return value
+}
+
+// PromptYesNo prompts the user with a given question and returns a bool value based on their response.
+func (c *Config) PromptYesNo(question string) bool {
+	affirmativeResponses := []string{"yes", "y", "true", "t"}
+	negativeResponses := []string{"no", "n", "false", "f"}
+
+	for {
+		response := strings.ToLower(c.promptValue(question, "", true, "string").(string))
+		for _, affirmative := range affirmativeResponses {
+			if response == affirmative {
+				return true
+			}
+		}
+		for _, negative := range negativeResponses {
+			if response == negative {
+				return false
+			}
+		}
+		fmt.Println("Invalid response. Please enter a valid yes/no value.")
+	}
+}
+
+// PromptWalletInfo prompts the user to enter wallet information such as Name, passphrase, and comma-delimited list of tags.
+func (c *Config) PromptWalletInfo() (walletName string, walletPass string, walletTags []string) {
+	walletName = c.promptValue("Wallet Name", "", false, "string").(string)
+	walletPass = c.promptValue("Passphrase", "", true, "string").(string)
+	walletTags = c.promptTags()
+
+	return
+}
+
+// promptTags prompts the user to enter a comma-delimited list of tags for the wallet.
+func (c *Config) promptTags() []string {
+	tagsStr := c.promptValue("Tags (comma-separated)", "", false, "string").(string)
+	tags := strings.Split(tagsStr, ",")
+	for i := 0; i < len(tags); i++ {
+		tags[i] = strings.TrimSpace(tags[i])
+	}
+	return tags
 }
 
 func (c *Config) getIntEnv(key string, defaultValue int) int {
