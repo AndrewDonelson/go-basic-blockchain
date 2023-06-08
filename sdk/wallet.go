@@ -14,6 +14,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/ioutil"
 	"time"
 
 	"github.com/pborman/uuid"
@@ -57,7 +58,7 @@ func NewDefaultEncryptionParams() *EncryptionParams {
 }
 
 // NewWallet creates a new wallet with a unique ID, name, and set of tags.
-func NewWallet(name string, tags []string) (*Wallet, error) {
+func NewWallet(name string, passphrase string, tags []string) (*Wallet, error) {
 
 	// Create a new wallet with a unique ID, name, and set of tags.
 	wallet := &Wallet{
@@ -80,6 +81,12 @@ func NewWallet(name string, tags []string) (*Wallet, error) {
 	wallet.GetAddress()
 
 	fmt.Printf("[%s] Created new Wallet: %+v\n", time.Now().Format(logDateTimeFormat), PrettyPrint(wallet))
+
+	// close & save the new wallet
+	wallet.Close(passphrase)
+
+	// open & load the new wallet
+	wallet.Open(passphrase)
 
 	return wallet, nil
 }
@@ -412,6 +419,10 @@ func (w *Wallet) Lock(passphrase string) error {
 
 	// Encrypt the wallet's data.
 	w.ciphertext, err = w.encrypt(pwAsBytes, dataAsbytes)
+	if err != nil {
+		return err
+	}
+
 	w.data = nil
 	w.Encrypted = true
 
@@ -445,6 +456,54 @@ func (w *Wallet) Unlock(passphrase string) error {
 	// Set the wallet's data.
 	w.ciphertext = nil
 	w.Encrypted = false
+
+	return nil
+}
+
+// save encrypts and saves the wallet to disk as a JSON file.
+func (w *Wallet) Close(passphrase string) error {
+	if w.Encrypted {
+		return errors.New("cannot save an already encrypted wallet")
+	}
+
+	err := w.Lock(passphrase)
+	if err != nil {
+		return fmt.Errorf("failed to save wallet: %v", err)
+	}
+
+	filename := fmt.Sprintf("%s/%s.json", dataFolder, w.GetAddress())
+	file, _ := json.MarshalIndent(w, "", " ")
+
+	err = ioutil.WriteFile(filename, file, 0644)
+	if err != nil {
+		return fmt.Errorf("failed to save wallet: %v", err)
+	}
+
+	fmt.Printf("[%s] Wallet saved to disk: %s\n", time.Now().Format(logDateTimeFormat), filename)
+
+	return nil
+}
+
+// load loads and decrypts the wallet from disk.
+func (w *Wallet) Open(passphrase string) error {
+	filename := fmt.Sprintf("%s/%s.json", dataFolder, w.GetAddress())
+
+	fileData, err := ioutil.ReadFile(filename)
+	if err != nil {
+		return fmt.Errorf("failed to load wallet: %v", err)
+	}
+
+	err = json.Unmarshal(fileData, w)
+	if err != nil {
+		return fmt.Errorf("failed to load wallet: %v", err)
+	}
+
+	err = w.Unlock(passphrase)
+	if err != nil {
+		return fmt.Errorf("failed to load wallet: %v", err)
+	}
+
+	fmt.Printf("[%s] Wallet loaded from disk: %s\n", time.Now().Format(logDateTimeFormat), filename)
 
 	return nil
 }

@@ -9,8 +9,9 @@ import (
 )
 
 const (
-	testAddr      = "7cd017593398aebb99da3e5e3bb62efad50d9fd925d8d633fbab0c2df12535f8"
-	AddressLength = 32
+	testAddr       = "7cd017593398aebb99da3e5e3bb62efad50d9fd925d8d633fbab0c2df12535f8"
+	testPassPhrase = "te$tpaSS2023!"
+	AddressLength  = 32
 )
 
 func TestAddressLength(t *testing.T) {
@@ -29,11 +30,11 @@ func TestAddressLength(t *testing.T) {
 
 func TestWallet(t *testing.T) {
 	// Create two wallets with different data
-	wallet1, err := NewWallet("Wallet1", []string{"tag1", "tag2"})
+	wallet1, err := NewWallet("Wallet1", testPassPhrase, []string{"tag1", "tag2"})
 	assert.NoError(t, err)
 	assert.NotNil(t, wallet1)
 
-	wallet2, err := NewWallet("Wallet2", []string{"tag3", "tag4"})
+	wallet2, err := NewWallet("Wallet2", testPassPhrase, []string{"tag3", "tag4"})
 	assert.NoError(t, err)
 	assert.NotNil(t, wallet2)
 
@@ -62,12 +63,11 @@ func TestWallet(t *testing.T) {
 	assert.Error(t, err, "password is too weak")
 	assert.False(t, wallet1.Encrypted)
 
-	passphrase = "te$tpaSS2023!"
-	err = wallet1.Lock(passphrase)
+	err = wallet1.Lock(testPassPhrase)
 	assert.NoError(t, err)
 	assert.True(t, wallet1.Encrypted)
 
-	err = wallet1.Unlock(passphrase)
+	err = wallet1.Unlock(testPassPhrase)
 	assert.NoError(t, err)
 	assert.False(t, wallet1.Encrypted)
 
