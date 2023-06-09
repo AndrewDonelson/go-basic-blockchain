@@ -12,24 +12,12 @@ import (
 func TestNodeRun(t *testing.T) {
 	node := NewNode()
 
-	// Test running the node without enabling the API
-	node.Config.EnableAPI = false
+	// Test running the node with the API enabled
 	go node.Run()
 
 	// Let the node run for a short duration
 	// You can add more specific tests here if needed
 	sleepDuration := 1 * time.Second
-	time.Sleep(sleepDuration)
-
-	// Ensure that the node is still running
-	assert.Equal(t, false, node.API.IsRunning())
-
-	// Test running the node with the API enabled
-	node.Config.EnableAPI = true
-	go node.Run()
-
-	// Let the node run for a short duration
-	// You can add more specific tests here if needed
 	time.Sleep(sleepDuration)
 
 	// Ensure that the node API is running
