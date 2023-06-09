@@ -35,17 +35,13 @@ func TestPersistTransaction(t *testing.T) {
 	assert.Equal(t, "Persist transaction processed successfully", result)
 	assert.Equal(t, "processed", persist.Status)
 
-	// Verify the signature
-	err = persist.Verify([]byte("signature"))
-	assert.NoError(t, err)
-
 	// Create a new test chain
 	bc := NewBlockchain()
 
-	err = persist.Send(bc)
+	// sign the transaction
+	err = from.SignTransaction(persist)
 	assert.NoError(t, err)
 
-	// Sign the transaction
-	err = persist.Sign([]byte("signature"))
+	err = persist.Send(bc)
 	assert.NoError(t, err)
 }

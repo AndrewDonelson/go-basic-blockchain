@@ -8,7 +8,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/onsi/gomega"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -37,7 +36,6 @@ func TestMain(m *testing.M) {
 func TestBlockchain(t *testing.T) {
 	var err error
 
-	gomega.RegisterTestingT(t) // Register Gomega's fail handler
 	assert := assert.New(t)
 
 	bc := NewBlockchain()
