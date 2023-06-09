@@ -1,4 +1,5 @@
-// file: sdk/messagetx.go - Message Transaction for all Instant Messaging related Protocol based transactions
+// Package sdk is a software development kit for building blockchain applications.
+// File sdk/messagetx.go - Message Transaction for all Instant Messaging related Protocol based transactions
 package sdk
 
 import (

@@ -1,3 +1,5 @@
+// Package sdk is a software development kit for building blockchain applications.
+// File sdk/persisttx.go - Persist Transaction for all Persistence related Protocol based transactions
 package sdk
 
 import (

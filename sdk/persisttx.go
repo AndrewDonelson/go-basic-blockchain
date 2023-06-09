@@ -1,4 +1,5 @@
-// file: sdk/persisttx.go - Persistance Transaction for all On Chain Storage related Protocol based transactions
+// Package sdk is a software development kit for building blockchain applications.
+// File sdk/persisttx.go - Persistance Transaction for all On Chain Storage related Protocol based transactions
 package sdk
 
 // Persist is a transaction protocol for storing key/value pairs on the blockchain with indexing support.

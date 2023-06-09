@@ -1,7 +1,5 @@
-// file: address.go
-// package: sdk
-// description: Address represents a blockchain address.
-
+// Package sdk is a software development kit for building blockchain applications.
+// File sdk/address.go - Address for all Address related Protocol based transactions
 package sdk
 
 import (

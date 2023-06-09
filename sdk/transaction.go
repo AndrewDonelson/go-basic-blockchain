@@ -1,6 +1,5 @@
-// file: sdk/transaction.go - Base Transaction for all Dynamic Protocol based transactions
-// package: sdk
-// description: This file contains the Transaction struct and all the methods associated with it.
+// Package sdk is a software development kit for building blockchain applications.
+// File sdk/transaction.go - Base Transaction for all Dynamic Protocol based transactions
 package sdk
 
 import (
@@ -95,12 +94,12 @@ func (t *Tx) GetSenderWallet() *Wallet {
 	return t.From
 }
 
-// GetId returns the ID of the transaction.
-func (t *Tx) GetId() string {
+// GetID returns the ID of the transaction.
+func (t *Tx) GetID() string {
 	return t.ID
 }
 
-// Gethash returns the hash of the transaction.
+// GetHash returns the hash of the transaction.
 func (t *Tx) GetHash() []byte {
 	return t.Hash
 }
@@ -132,6 +131,7 @@ func (t *Tx) Sign(signature []byte) error {
 	return nil
 }
 
+// Verify verifies the signature of the transaction.
 func (t *Tx) Verify(signature []byte) error {
 	//func (t *Tx) Verify(fromWallet *Wallet) error {
 	// Verify the signature logic here

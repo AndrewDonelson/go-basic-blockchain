@@ -1,3 +1,5 @@
+// Package sdk is a software development kit for building blockchain applications.
+// File sdk/api.go - API for the blockchain
 package sdk
 
 import (
@@ -58,8 +60,9 @@ import (
 
 // API is the blockchain API.
 type API struct {
-	bc     *Blockchain
-	router *mux.Router
+	bc      *Blockchain
+	router  *mux.Router
+	running bool
 }
 
 // NewAPI creates a new instance of the blockchain API.
@@ -74,7 +77,6 @@ func NewAPI(bc *Blockchain) *API {
 
 	// Register the API endpoints
 	api.registerRoutes()
-
 	return api
 }
 
@@ -129,14 +131,24 @@ func (ww *responseWriterWrapper) Write(data []byte) (int, error) {
 	return n, err
 }
 
+// IsRunning returns true if the API is running
+func (api *API) IsRunning() bool {
+	return api.running
+}
+
 // Start starts the API and listens for incoming requests
 func (api *API) Start() {
+
+	if api.IsRunning() {
+		return
+	}
 
 	// Create a logging middleware
 	api.router.Use(loggingMiddleware)
 
 	// Start the HTTP server
 	fmt.Printf("API listening on %s\n", apiHostname)
+	api.running = true
 	log.Fatal(http.ListenAndServe(apiHostname, api.router))
 }
 

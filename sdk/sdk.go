@@ -1,3 +1,4 @@
+// Package sdk is a software development kit for building blockchain applications.
 package sdk
 
 // Version returns the version of the SDK

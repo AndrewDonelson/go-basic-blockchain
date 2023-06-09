@@ -1,4 +1,3 @@
-// file: sdk/wallet_test.go
 package sdk
 
 import (

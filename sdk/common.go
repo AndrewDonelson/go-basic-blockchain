@@ -1,6 +1,5 @@
-// file: sdk/common.go
-// package: sdk
-// description: common functions
+// Package sdk is a software development kit for building blockchain applications.
+// File sdk/common.go - Common functions for the sdk
 package sdk
 
 import (
@@ -63,6 +62,7 @@ func GetType(i interface{}) string {
 	return t.Name()
 }
 
+// GetUserIP returns the IP address of the user who sent the request
 func GetUserIP(r *http.Request) string {
 	// Check if the request comes through a proxy
 	if forwardedFor := r.Header.Get("X-Forwarded-For"); forwardedFor != "" {
@@ -84,6 +84,7 @@ func GetUserIP(r *http.Request) string {
 	return ip
 }
 
+// IntToBytes converts an int to a byte slice
 func IntToBytes(n int) []byte {
 	// Create a byte slice with a fixed size to hold the converted int.
 	byteSlice := make([]byte, 4) // Assuming int is 32 bits (4 bytes)
@@ -110,6 +111,8 @@ func ValidateAddress(address string) error {
 	return nil
 }
 
+// testPasswordStrength tests the password strength. Must be between 12 and 24 characters and contain at least 2 uppercase letters,
+// 2 lowercase letters, 2 digits, and 2 special characters.
 func testPasswordStrength(password string) error {
 	// Check password length
 	if len(password) < 12 || len(password) > 24 {
@@ -143,6 +146,7 @@ func testPasswordStrength(password string) error {
 	return nil
 }
 
+// countMatches counts the number of matches of the provided pattern in the provided string.
 func countMatches(s, pattern string) int {
 	re := regexp.MustCompile(pattern)
 	matches := re.FindAllString(s, -1)

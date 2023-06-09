@@ -1,6 +1,5 @@
-// file: sdk/node.go
-// package sdk
-// description: This file contains the Node struct and all the methods associated with it.
+// Package sdk is a software development kit for building blockchain applications.
+// File  sdk/node.go - Node for all Node related Protocol based transactions
 package sdk
 
 // Node is a node in the blockchain network.
@@ -34,7 +33,7 @@ func (n *Node) Run() {
 	go n.Blockchain.Run(1)
 
 	// Start the API server if enabled
-	if EnableAPI {
+	if n.Config.EnableAPI {
 		// Start the API server
 		n.API.Start()
 	} else {

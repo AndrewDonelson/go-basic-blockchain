@@ -1,6 +1,5 @@
-// file: sdk/block.go - Block in the blockchain
-// package: sdk
-// description: This file contains the Block struct and all the methods associated with it.
+// Package sdk is a software development kit for building blockchain applications.
+// File sdk/block.go - Block in the blockchain
 package sdk
 
 import (

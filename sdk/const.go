@@ -1,6 +1,5 @@
-// file: sdk/const.go
-// package: sdk
-// description: Constants for the blockchain
+// Package sdk is a software development kit for building blockchain applications.
+// File sdk/const.go - Constants for the blockchain
 package sdk
 
 const (
@@ -73,7 +72,7 @@ const (
 	// TransactionProtocolVersion is the Tranasction Protocol Version
 	TransactionProtocolVersion = "1.0"
 
-	// BankProtocolID is the Bank Protocol ID
+	// PersistProtocolID is the Data Persistance Protocol ID
 	PersistProtocolID = "PERSIST"
 
 	// BankProtocolID is the Bank Protocol ID
@@ -86,6 +85,7 @@ const (
 	CoinbaseProtocolID = "COINBASE"
 )
 
+// AvailableProtocols is a list of all available protocols
 var AvailableProtocols = []string{
 	CoinbaseProtocolID,
 	BankProtocolID,

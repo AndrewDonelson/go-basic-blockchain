@@ -1,6 +1,5 @@
-// file: sdk/wallet.go
-// package: sdk
-// description: Wallet represents a user's wallet.
+// Package sdk is a software development kit for building blockchain applications.
+// File sdk/wallet.go - Wallet for all Wallet related Protocol based transactions
 package sdk
 
 import (
@@ -22,6 +21,7 @@ import (
 	"golang.org/x/crypto/scrypt"
 )
 
+// RequiredWalletProperties is a list of required properties for a wallet.
 var RequiredWalletProperties = []string{
 	"name",
 	"tags",
@@ -46,6 +46,7 @@ type EncryptionParams struct {
 	NonceSize int // Size of the nonce used for encryption
 }
 
+// NewEncryptionParams creates a new EncryptionParams struct.
 func NewEncryptionParams(saltSize, nonceSize int) *EncryptionParams {
 	return &EncryptionParams{
 		SaltSize:  saltSize,
@@ -53,6 +54,7 @@ func NewEncryptionParams(saltSize, nonceSize int) *EncryptionParams {
 	}
 }
 
+// NewDefaultEncryptionParams creates a new EncryptionParams struct with default values.
 func NewDefaultEncryptionParams() *EncryptionParams {
 	return NewEncryptionParams(saltSize, maxNonce)
 }
@@ -461,7 +463,7 @@ func (w *Wallet) Unlock(passphrase string) error {
 	return nil
 }
 
-// save encrypts and saves the wallet to disk as a JSON file.
+// Close encrypts and saves the wallet to disk as a JSON file.
 func (w *Wallet) Close(passphrase string) error {
 	if w.Encrypted {
 		return errors.New("cannot save an already encrypted wallet")
@@ -525,7 +527,7 @@ func (w *Wallet) Open(passphrase string) error {
 	return nil
 }
 
-// List searches the wallet folder for all JSON files, loads each one, and displays the Wallet ID, Name, Address, and Tags.
+// LocalWalletList searches the wallet folder for all JSON files, loads each one, and displays the Wallet ID, Name, Address, and Tags.
 func LocalWalletList() error {
 	walletList := make([]string, 0)
 
@@ -558,6 +560,7 @@ func LocalWalletList() error {
 	return nil
 }
 
+// LocalWalletCount returns the number of wallets in the wallet folder.
 func LocalWalletCount() (count int, err error) {
 	files, err := filepath.Glob(filepath.Join(walletFolder, "*.json"))
 	if err != nil {

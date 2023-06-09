@@ -1,4 +1,5 @@
-// file: sdk/banktx.go - Bank Transaction for all Currency reelated Protocol based transactions
+// Package sdk is a software development kit for building blockchain applications.
+// File sdk/banktx.go - Bank Transaction for all Currency reelated Protocol based transactions
 package sdk
 
 import (
@@ -11,6 +12,7 @@ type Bank struct {
 	Amount float64
 }
 
+// NewBankTransaction creates a new Bank transaction.
 func NewBankTransaction(from *Wallet, to *Wallet, amount float64) (*Bank, error) {
 	tx, err := NewTransaction(BankProtocolID, from, to)
 	if err != nil {

@@ -1,3 +1,5 @@
+// Package sdk is a software development kit for building blockchain applications.
+// File sdk/blockchaininfo.go - Blockchain Info for all Blockchain related Protocol based transactions
 package sdk
 
 // BlockchainInfo is used by the API endpoint / to return information about the blockchain

@@ -1,6 +1,5 @@
-// file: sdk/blockchain.go - The main Blockchain file
-// package: sdk
-// description: This file contains the Blockchain struct and all the methods associated with it.
+// Package sdk is a software development kit for building blockchain applications.
+// File sdk/blockchain.go - The main Blockchain file
 package sdk
 
 import (
@@ -34,6 +33,7 @@ func NewBlockchain() *Blockchain {
 	return bc
 }
 
+// CreateBLockchain creates a new blockchain.
 func CreateBLockchain() *Blockchain {
 	bc := &Blockchain{}
 
