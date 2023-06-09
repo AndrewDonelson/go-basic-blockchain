@@ -28,6 +28,75 @@ func TestAddressLength(t *testing.T) {
 
 }
 
+func TestValidateAddress(t *testing.T) {
+	// Test valid address
+	err := ValidateAddress(testAddr)
+	assert.NoError(t, err)
+
+	// Test invalid address
+	err = ValidateAddress("invalid")
+	assert.Error(t, err)
+}
+
+func TestPasswordStrength(t *testing.T) {
+	// Test valid password
+	err := testPasswordStrength(testPassPhrase)
+	assert.NoError(t, err)
+
+	// Test invalid password
+	err = testPasswordStrength("invalid")
+	assert.Error(t, err)
+}
+
+func TestCreateWallet(t *testing.T) {
+	// Create a new wallet
+	wallet, err := NewWallet("TestWallet", testPassPhrase, []string{"tag1", "tag2"})
+	assert.NoError(t, err)
+	assert.NotNil(t, wallet)
+
+	// Test wallet data and properties
+	assert.Equal(t, "TestWallet", wallet.GetWalletName())
+	assert.Equal(t, []string{"tag1", "tag2"}, wallet.GetTags())
+	assert.Equal(t, fundWalletAmount, wallet.GetBalance())
+}
+
+// TestOpneCloseWallet test the open and close wallet functions including the locking and unlocking of the wallet
+func TestOpenCloseWallet(t *testing.T) {
+	// Create a new wallet
+	wallet, err := NewWallet("TestWallet", testPassPhrase, []string{"tag1", "tag2"})
+	assert.NoError(t, err)
+	assert.NotNil(t, wallet)
+
+	// Test wallet data and properties
+	assert.Equal(t, "TestWallet", wallet.GetWalletName())
+	assert.Equal(t, []string{"tag1", "tag2"}, wallet.GetTags())
+	assert.Equal(t, fundWalletAmount, wallet.GetBalance())
+
+	// Test wallet address generation
+	address := wallet.GetAddress()
+	assert.NotEmpty(t, address)
+
+	// Test wallet closing
+	err = wallet.Close(testPassPhrase)
+	assert.NoError(t, err)
+
+	assert.Equal(t, true, wallet.Encrypted)
+	assert.NotEmpty(t, wallet.Ciphertext)
+
+	// Test wallet opening
+	err = wallet.Open(testPassPhrase)
+	assert.NoError(t, err)
+	assert.NotNil(t, wallet)
+}
+
+func TestWalletListCount(t *testing.T) {
+	count, err := LocalWalletCount()
+	assert.NoError(t, err)
+	if count != 0 {
+		LocalWalletList()
+	}
+}
+
 func TestWallet(t *testing.T) {
 	// Create two wallets with different data
 	wallet1, err := NewWallet("Wallet1", testPassPhrase, []string{"tag1", "tag2"})

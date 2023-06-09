@@ -42,7 +42,7 @@ func (b *Block) calculateHash() string {
 
 // save saves the block to disk as a JSON file.
 func (b *Block) save() error {
-	filename := fmt.Sprintf("%s/%010d.json", dataFolder, b.Index)
+	filename := fmt.Sprintf("%s/%010d.json", blockFolder, b.Index)
 	file, err := os.Create(filename)
 	if err != nil {
 		return err

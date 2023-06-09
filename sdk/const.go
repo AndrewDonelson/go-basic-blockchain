@@ -44,6 +44,9 @@ const (
 	// EnableAPI is a flag to enable/disable the API
 	EnableAPI = true
 
+	// verbose is a flag to enable/disable verbose logging
+	verbose = false
+
 	/*************************************** Internal Constants ***************************************/
 
 	// BlockchainVersion is the version of the blockchain
@@ -51,6 +54,12 @@ const (
 
 	// cfgFolder is the folder where the config file is stored
 	cfgFile = "../.env"
+
+	// walletFolder is the folder where the wallets are stored (within the data folder)
+	walletFolder = dataFolder + "/wallets"
+
+	// blockFolder is the folder where the blocks are stored (within the data folder)
+	blockFolder = dataFolder + "/blocks"
 
 	// Log Date/Time format
 	logDateTimeFormat = "2006-01-02 15:04:05"

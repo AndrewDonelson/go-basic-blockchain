@@ -15,6 +15,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/pborman/uuid"
@@ -33,10 +34,9 @@ var RequiredWalletProperties = []string{
 type Wallet struct {
 	ID               string
 	Address          string
-	Encrypted        bool                   // Flag to indicate if the private key is encrypted
-	EncryptionParams *EncryptionParams      // Encryption parameters for the private key
-	data             map[string]interface{} // Data (keypairs) associated with the wallet
-	ciphertext       []byte                 // Encrypted data
+	Encrypted        bool              // Flag to indicate if the private key is encrypted
+	EncryptionParams *EncryptionParams // Encryption parameters for the private key
+	Ciphertext       []byte            // Encrypted data
 	vault            *Vault
 }
 
@@ -58,6 +58,7 @@ func NewDefaultEncryptionParams() *EncryptionParams {
 }
 
 // NewWallet creates a new wallet with a unique ID, name, and set of tags.
+// Please note you must Close() the wallet to save it to disk.
 func NewWallet(name string, passphrase string, tags []string) (*Wallet, error) {
 
 	// Create a new wallet with a unique ID, name, and set of tags.
@@ -67,6 +68,7 @@ func NewWallet(name string, passphrase string, tags []string) (*Wallet, error) {
 		Encrypted:        false,
 		EncryptionParams: NewDefaultEncryptionParams(),
 		vault:            NewVault(),
+		Ciphertext:       []byte{},
 	}
 
 	// Generate a new private key.
@@ -81,12 +83,6 @@ func NewWallet(name string, passphrase string, tags []string) (*Wallet, error) {
 	wallet.GetAddress()
 
 	fmt.Printf("[%s] Created new Wallet: %+v\n", time.Now().Format(logDateTimeFormat), PrettyPrint(wallet))
-
-	// close & save the new wallet
-	wallet.Close(passphrase)
-
-	// open & load the new wallet
-	wallet.Open(passphrase)
 
 	return wallet, nil
 }
@@ -408,6 +404,11 @@ func (w *Wallet) Lock(passphrase string) error {
 	if testPasswordStrength(passphrase) != nil {
 		return errors.New("password is too weak")
 	}
+
+	if verbose {
+		fmt.Printf("[%s] Locking wallet [%s]\n", time.Now().Format(logDateTimeFormat), w.ID)
+	}
+
 	// Convert the passphrase to bytes.
 	pwAsBytes := []byte(passphrase)
 
@@ -418,12 +419,12 @@ func (w *Wallet) Lock(passphrase string) error {
 	}
 
 	// Encrypt the wallet's data.
-	w.ciphertext, err = w.encrypt(pwAsBytes, dataAsbytes)
+	w.Ciphertext, err = w.encrypt(pwAsBytes, dataAsbytes)
 	if err != nil {
 		return err
 	}
 
-	w.data = nil
+	w.vault = nil
 	w.Encrypted = true
 
 	return nil
@@ -438,23 +439,23 @@ func (w *Wallet) Unlock(passphrase string) error {
 		return errors.New("wallet is already decrypted")
 	}
 
+	if verbose {
+		fmt.Printf("[%s] Unlocking wallet [%s]\n", time.Now().Format(logDateTimeFormat), w.ID)
+	}
+
 	// Convert the passphrase to bytes.
 	pwAsBytes := []byte(passphrase)
 
 	// Decrypt the wallet's data.
-	dataAsBytes, err := w.decrypt(pwAsBytes, w.ciphertext)
+	dataAsBytes, err := w.decrypt(pwAsBytes, w.Ciphertext)
 	if err != nil {
 		return err
 	}
 
-	// Convert the wallet's data to a map.
-	err = w.bytesToVault(dataAsBytes)
-	if err != nil {
-		return err
-	}
+	w.bytesToVault(dataAsBytes)
 
 	// Set the wallet's data.
-	w.ciphertext = nil
+	w.Ciphertext = []byte{}
 	w.Encrypted = false
 
 	return nil
@@ -471,7 +472,9 @@ func (w *Wallet) Close(passphrase string) error {
 		return fmt.Errorf("failed to save wallet: %v", err)
 	}
 
-	filename := fmt.Sprintf("%s/%s.json", dataFolder, w.GetAddress())
+	createFolder(walletFolder)
+
+	filename := fmt.Sprintf("%s/%s.json", walletFolder, w.GetAddress())
 	file, err := os.Create(filename)
 	if err != nil {
 		return fmt.Errorf("failed to save wallet: %v", err)
@@ -484,14 +487,17 @@ func (w *Wallet) Close(passphrase string) error {
 		return fmt.Errorf("failed to save wallet: %v", err)
 	}
 
-	fmt.Printf("[%s] Wallet saved to disk: %s\n", time.Now().Format(logDateTimeFormat), filename)
+	if verbose {
+		fmt.Printf("[%s] Wallet [%s] saved to disk: %s\n", time.Now().Format(logDateTimeFormat), w.ID, filename)
+	}
 
 	return nil
 }
 
-// load loads and decrypts the wallet from disk.
+// Open loads the wallet from disk that was saved as a JSON file.
+// it also unlocks the value and restores the wallet.vault object
 func (w *Wallet) Open(passphrase string) error {
-	filename := fmt.Sprintf("%s/%s.json", dataFolder, w.GetAddress())
+	filename := fmt.Sprintf("%s/%s.json", walletFolder, w.GetAddress())
 
 	file, err := os.Open(filename)
 	if err != nil {
@@ -505,12 +511,58 @@ func (w *Wallet) Open(passphrase string) error {
 		return fmt.Errorf("failed to load wallet: %v", err)
 	}
 
-	err = w.Unlock(passphrase)
-	if err != nil {
-		return fmt.Errorf("failed to load wallet: %v", err)
+	if len(passphrase) >= 12 {
+		err = w.Unlock(passphrase)
+		if err != nil {
+			return fmt.Errorf("failed to load wallet: %v", err)
+		}
 	}
 
-	fmt.Printf("[%s] Wallet loaded from disk: %s\n", time.Now().Format(logDateTimeFormat), filename)
+	if verbose {
+		fmt.Printf("[%s] Wallet [%s] loaded (locked: %v) from disk: %s\n", time.Now().Format(logDateTimeFormat), w.ID, w.Encrypted, filename)
+	}
 
 	return nil
+}
+
+// List searches the wallet folder for all JSON files, loads each one, and displays the Wallet ID, Name, Address, and Tags.
+func LocalWalletList() error {
+	walletList := make([]string, 0)
+
+	files, err := filepath.Glob(filepath.Join(walletFolder, "*.json"))
+	if err != nil {
+		return fmt.Errorf("failed to list wallets: %v", err)
+	}
+
+	for _, file := range files {
+		// Get the base name of the file without the extension
+		address := filepath.Base(file[:len(file)-len(filepath.Ext(file))])
+
+		wallet := &Wallet{Address: address}
+		err := wallet.Open("")
+		if err != nil {
+			fmt.Printf("Failed to load wallet from file %s: %v\n", file, err)
+			continue
+		}
+
+		walletList = append(walletList, fmt.Sprintf("ID: %s, Name: %s, Address: %s, Tags: %v", wallet.ID, wallet.GetWalletName(), wallet.GetAddress(), wallet.GetTags()))
+	}
+
+	fmt.Printf("Wallets in %s: %d\n", walletFolder, len(walletList))
+	if len(walletList) == 0 {
+		fmt.Println("No wallets found")
+	} else {
+		fmt.Println(PrettyPrint(walletList))
+	}
+
+	return nil
+}
+
+func LocalWalletCount() (count int, err error) {
+	files, err := filepath.Glob(filepath.Join(walletFolder, "*.json"))
+	if err != nil {
+		return 0, fmt.Errorf("failed to list wallets: %v", err)
+	}
+
+	return len(files), nil
 }

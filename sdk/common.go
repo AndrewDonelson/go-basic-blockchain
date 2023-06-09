@@ -10,12 +10,15 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"log"
 	"math/big"
 	"net"
 	"net/http"
+	"os"
 	"reflect"
 	"regexp"
 	"strings"
+	"time"
 )
 
 // VerifySignature verifies the signature of a message using the provided public key.
@@ -144,4 +147,16 @@ func countMatches(s, pattern string) int {
 	re := regexp.MustCompile(pattern)
 	matches := re.FindAllString(s, -1)
 	return len(matches)
+}
+
+// createFolder creates the folder if it does not exist.
+func createFolder(path string) {
+	// Check if the folder exists, if not, create it
+	if _, err := os.Stat(path); os.IsNotExist(err) {
+		err := os.MkdirAll(path, 0755)
+		if err != nil {
+			log.Fatalln(err)
+		}
+		fmt.Printf("[%s] directory '%s' created.\n", time.Now().Format(logDateTimeFormat), path)
+	}
 }

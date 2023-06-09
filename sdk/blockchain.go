@@ -8,7 +8,6 @@ import (
 	"encoding/hex"
 	"fmt"
 	"log"
-	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -100,18 +99,17 @@ func (bc *Blockchain) GenerateGenesisBlock(txs []Transaction) {
 	}
 }
 
+// createDataFolders creates the data folders if they dont exist
+func (bc *Blockchain) createDataFolders() {
+	createFolder(dataFolder)
+	createFolder(blockFolder)
+}
+
 // LoadExistingBlocks loads existing blocks from disk.
 func (bc *Blockchain) LoadExistingBlocks() error {
-	// Check if the dataFolder exists, if not, create it
-	if _, err := os.Stat(dataFolder); os.IsNotExist(err) {
-		err := os.MkdirAll(dataFolder, 0755)
-		if err != nil {
-			return fmt.Errorf("[%s] Error creating directory: %s", time.Now().Format(logDateTimeFormat), err)
-		}
-		fmt.Printf("[%s] Data directory '%s' created.\n", time.Now().Format(logDateTimeFormat), dataFolder)
-	}
+	bc.createDataFolders()
 
-	files, _ := filepath.Glob(fmt.Sprintf("%s/*.json", dataFolder))
+	files, _ := filepath.Glob(fmt.Sprintf("%s/*.json", blockFolder))
 	if len(files) == 0 {
 		fmt.Printf("[%s] No existing Blocks\n", time.Now().Format(logDateTimeFormat))
 

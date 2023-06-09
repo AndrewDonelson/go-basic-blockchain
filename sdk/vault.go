@@ -4,17 +4,55 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/x509"
+	"encoding/pem"
 )
 
+type PEM struct {
+	PrivateKey string
+	PublicKey  string
+}
+
+func NewPEM(key *ecdsa.PrivateKey) *PEM {
+	pem := &PEM{}
+	pem.PrivateKey, pem.PublicKey = pem.Encode(key, &key.PublicKey)
+	return pem
+}
+
+func (p *PEM) Encode(privateKey *ecdsa.PrivateKey, publicKey *ecdsa.PublicKey) (string, string) {
+	x509Encoded, _ := x509.MarshalECPrivateKey(privateKey)
+	pemEncoded := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: x509Encoded})
+
+	x509EncodedPub, _ := x509.MarshalPKIXPublicKey(publicKey)
+	pemEncodedPub := pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: x509EncodedPub})
+
+	return string(pemEncoded), string(pemEncodedPub)
+}
+
+func (p *PEM) Decode(pemEncoded string, pemEncodedPub string) (*ecdsa.PrivateKey, *ecdsa.PublicKey) {
+	block, _ := pem.Decode([]byte(pemEncoded))
+	x509Encoded := block.Bytes
+	privateKey, _ := x509.ParseECPrivateKey(x509Encoded)
+
+	blockPub, _ := pem.Decode([]byte(pemEncodedPub))
+	x509EncodedPub := blockPub.Bytes
+	genericPublicKey, _ := x509.ParsePKIXPublicKey(x509EncodedPub)
+	publicKey := genericPublicKey.(*ecdsa.PublicKey)
+
+	return privateKey, publicKey
+}
+
 type Vault struct {
-	data map[string]interface{} // Data (keypairs) associated with the wallet
+	Data map[string]interface{} // Data (keypairs) associated with the wallet
 	Key  *ecdsa.PrivateKey
+	Pem  *PEM
 }
 
 func NewVault() *Vault {
 	return &Vault{
-		data: make(map[string]interface{}),
+		Data: make(map[string]interface{}),
 		Key:  nil,
+		Pem:  nil,
 	}
 }
 
@@ -22,7 +60,7 @@ func NewVault() *Vault {
 // This wallet allows the user to store arbitrary data (keypairs) in the wallet.
 // The data included built-in data such as the wallet name, tags, and balance.
 func (v *Vault) SetData(key string, value interface{}) error {
-	v.data[key] = value
+	v.Data[key] = value
 	return nil
 }
 
@@ -30,7 +68,7 @@ func (v *Vault) SetData(key string, value interface{}) error {
 // This wallet allows the user to store arbitrary data (keypairs) in the wallet.
 // The data included built-in data such as the wallet name, tags, and balance.
 func (v *Vault) GetData(key string) (interface{}, error) {
-	return v.data[key], nil
+	return v.Data[key], nil
 }
 
 func (v *Vault) NewKeyPair() (err error) {
@@ -38,5 +76,6 @@ func (v *Vault) NewKeyPair() (err error) {
 	if err != nil {
 		return err
 	}
+	v.Pem = NewPEM(v.Key)
 	return nil
 }
