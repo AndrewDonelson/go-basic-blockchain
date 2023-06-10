@@ -19,6 +19,15 @@ const (
 	// transaction fee is 5 hunderths of a coin (a nickle-ish)
 	transactionFee = 0.05
 
+	// tokenCount is the number of tokens to create
+	tokenCount = 33554432
+
+	// tokenPrice is the price of a token is USD
+	tokenPrice = 0.01
+
+	// allowNewTokens is a flag to allow/disallow new tokens
+	allowNewTokens = false
+
 	// miner reward is 50% of the transaction fee
 	minerRewardPCT = 50.0
 

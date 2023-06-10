@@ -21,7 +21,7 @@ var node *Node
 func NewNode() *Node {
 	node = &Node{}
 	node.Config = NewConfig()
-	node.Blockchain = NewBlockchain()
+	node.Blockchain = NewBlockchain(node.Config)
 	node.API = NewAPI(node.Blockchain)
 
 	return node

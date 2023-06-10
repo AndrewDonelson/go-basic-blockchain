@@ -140,7 +140,7 @@ func TestWallet(t *testing.T) {
 	assert.False(t, wallet1.Encrypted)
 
 	// Test sending a transaction
-	bc := NewBlockchain()
+	bc := NewBlockchain(NewConfig())
 	tx, err := NewBankTransaction(wallet1, wallet2, 1.0)
 	assert.NoError(t, err)
 	err = wallet1.SignTransaction(tx)

@@ -14,16 +14,30 @@ import (
 	"time"
 )
 
+type State struct {
+}
+
 // Blockchain is a blockchain.
 type Blockchain struct {
-	Blocks           []*Block
-	TransactionQueue []Transaction
-	mux              sync.Mutex
+	cfg               *Config
+	Blocks            []*Block
+	TransactionQueue  []Transaction
+	mux               sync.Mutex
+	CurrentBlockIndex int
+	NextBlockIndex    int
+	AvgTxsPerBlock    float64
 }
 
 // NewBlockchain returns a new blockchain.
-func NewBlockchain() *Blockchain {
-	bc := &Blockchain{}
+func NewBlockchain(cfg *Config) *Blockchain {
+	bc := &Blockchain{
+		cfg:               cfg,
+		Blocks:            []*Block{},
+		TransactionQueue:  []Transaction{},
+		CurrentBlockIndex: 0,
+		NextBlockIndex:    1,
+		AvgTxsPerBlock:    0,
+	}
 
 	err := bc.LoadExistingBlocks()
 	if err != nil {
@@ -32,28 +46,6 @@ func NewBlockchain() *Blockchain {
 
 	return bc
 }
-
-// CreateBLockchain creates a new blockchain.
-func CreateBLockchain() *Blockchain {
-	bc := &Blockchain{}
-
-	genesisTxs := []Transaction{}
-
-	// TODO: Create the DEV Wallet & add the genesis block
-	// TODO: Add the transactionFee to the genesis block
-	// TODO: Add the ProtocolVersion to use, to the genesis block
-	// TODO: Add the BlockInterval to the genesis block
-
-	bc.GenerateGenesisBlock(genesisTxs)
-
-	return bc
-}
-
-// DisplayStatus displays the status of the blockchain.
-// func (bc *Blockchain) DisplayStatus() {
-// 	fmt.Printf("[%s] Blockchain Status: Blocks: %d, Transaction Queue: %d\n",
-// 		time.Now().Format(logDateTimeFormat), len(bc.Blocks), len(bc.TransactionQueue))
-// }
 
 // DisplayStatus displays the status of the blockchain.
 func (bc *Blockchain) DisplayStatus() {
@@ -68,6 +60,72 @@ func (bc *Blockchain) DisplayStatus() {
 		fmt.Printf("[%s] Blockchain Activity: Blocks: %d, Transaction Queue: %d\n",
 			time.Now().Format(logDateTimeFormat), len(bc.Blocks), len(bc.TransactionQueue))
 	}
+}
+
+// CreateBLockchain creates a new blockchain.
+func (bc *Blockchain) createBLockchain() error {
+
+	genesisTxs := []Transaction{}
+
+	// Create two wallets. One for the DEV and one for the Miner
+	devWalletPW, err := GenerateRandomPassword()
+	if err != nil {
+		return err
+	}
+	devWallet, err := NewWallet("Dev", devWalletPW, []string{"blockchain", "master"})
+	if err != nil {
+		return err
+	}
+	devWallet.Close(devWalletPW)
+	devWallet.Open(devWalletPW)
+	bc.cfg.DevAddress = devWallet.GetAddress()
+
+	minerWalletPW, err := GenerateRandomPassword()
+	if err != nil {
+		return err
+	}
+	minerWallet, err := NewWallet("Wallet2", minerWalletPW, []string{"tag3", "tag4"})
+	if err != nil {
+		return err
+	}
+	minerWallet.Close(minerWalletPW)
+	minerWallet.Open(minerWalletPW)
+	bc.cfg.MinerAddress = minerWallet.GetAddress()
+
+	// Create the Coinbase Transaction
+	cbTX, err := NewCoinbaseTransaction(devWallet, devWallet, bc.cfg)
+	if err != nil {
+		return err
+	}
+
+	// Sign the Coinbase Transaction with the DEV Wallet
+	err = devWallet.SignTransaction(cbTX)
+	if err != nil {
+		return err
+	}
+
+	// Add the Coinbase Transaction to the genesis block
+	genesisTxs = append(genesisTxs, cbTX)
+
+	// Create a Bank Transaction and send fundWalletAmount to the Miner Wallet
+	bankTX, err := NewBankTransaction(devWallet, minerWallet, bc.cfg.FundWalletAmount)
+	if err != nil {
+		return err
+	}
+
+	// Sign the Banke Transaction with the DEV Wallet
+	err = devWallet.SignTransaction(bankTX)
+	if err != nil {
+		return err
+	}
+
+	// Add the Coinbase Transaction to the genesis block
+	genesisTxs = append(genesisTxs, bankTX)
+
+	// Create the genesis block
+	bc.GenerateGenesisBlock(genesisTxs)
+
+	return nil
 }
 
 // GenerateGenesisBlock generates the genesis block if there are no existing blocks.
@@ -114,7 +172,8 @@ func (bc *Blockchain) LoadExistingBlocks() error {
 		fmt.Printf("[%s] No existing Blocks\n", time.Now().Format(logDateTimeFormat))
 
 		// If no blocks loaded, generate Genesis Block.
-		bc.GenerateGenesisBlock([]Transaction{})
+		//bc.GenerateGenesisBlock([]Transaction{})
+		bc.createBLockchain()
 
 		return nil
 	}

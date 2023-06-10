@@ -38,7 +38,7 @@ func TestPersistTransaction(t *testing.T) {
 	assert.Equal(t, "processed", persist.Status)
 
 	// Create a new test chain
-	bc := NewBlockchain()
+	bc := NewBlockchain(NewConfig())
 
 	// sign the transaction
 	err = from.SignTransaction(persist)

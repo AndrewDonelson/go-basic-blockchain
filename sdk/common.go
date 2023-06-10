@@ -4,6 +4,7 @@ package sdk
 
 import (
 	"crypto/ecdsa"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
@@ -144,6 +145,65 @@ func testPasswordStrength(password string) error {
 	}
 
 	return nil
+}
+
+// GenerateRandomPassword generates a random password with a length of 24 characters that meets the criteria for password strength.
+func GenerateRandomPassword() (string, error) {
+	// Define the character sets for each requirement
+	uppercaseChars := "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+	lowercaseChars := "abcdefghijklmnopqrstuvwxyz"
+	digitChars := "0123456789"
+	specialChars := "~!@#$%^&*()=+[]{}|\\/?<>"
+
+	// Initialize the password
+	password := ""
+
+	// Generate random characters for each requirement
+	uppercaseCount := 0
+	lowercaseCount := 0
+	digitCount := 0
+	specialCharCount := 0
+
+	for len(password) < 24 {
+		// Generate a random index for the character set
+		index, err := rand.Int(rand.Reader, big.NewInt(4))
+		if err != nil {
+			return "", fmt.Errorf("failed to generate random password: %v", err)
+		}
+
+		// Get the character set based on the index
+		var charSet string
+		switch index.Int64() {
+		case 0:
+			charSet = uppercaseChars
+			uppercaseCount++
+		case 1:
+			charSet = lowercaseChars
+			lowercaseCount++
+		case 2:
+			charSet = digitChars
+			digitCount++
+		case 3:
+			charSet = specialChars
+			specialCharCount++
+		}
+
+		// Generate a random index for the character set
+		charIndex, err := rand.Int(rand.Reader, big.NewInt(int64(len(charSet))))
+		if err != nil {
+			return "", fmt.Errorf("failed to generate random password: %v", err)
+		}
+
+		// Add the random character to the password
+		password += string(charSet[charIndex.Int64()])
+	}
+
+	// Check password strength
+	if uppercaseCount < 2 || lowercaseCount < 2 || digitCount < 2 || specialCharCount < 2 {
+		return "", fmt.Errorf("generated password does not meet the strength criteria")
+	}
+
+	return password, nil
 }
 
 // countMatches counts the number of matches of the provided pattern in the provided string.

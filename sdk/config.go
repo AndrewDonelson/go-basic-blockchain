@@ -27,8 +27,11 @@ type Config struct {
 	APIHostName      string
 	EnableAPI        bool
 	FundWalletAmount float64
-	promptUpdate     bool // This is used internally to check if user added/changed default value from prompt
-	testing          bool // This is used internally to check if the code is running in test mode
+	TokenCount       int64   // This is the total number of tokens that will be created intially
+	TokenPrice       float64 // This is the set price of each token
+	AllowNewTokens   bool    // Set this to true if you want to allow new tokens to be created besides the initial tokens
+	promptUpdate     bool    // This is used internally to check if user added/changed default value from prompt
+	testing          bool    // This is used internally to check if the code is running in test mode
 }
 
 // NewConfig returns a new config.
@@ -49,6 +52,10 @@ func NewConfig() *Config {
 	cfg.APIHostName = apiHostname
 	cfg.EnableAPI = EnableAPI
 	cfg.FundWalletAmount = fundWalletAmount
+	cfg.TokenCount = tokenCount
+	cfg.TokenPrice = tokenPrice
+	cfg.AllowNewTokens = allowNewTokens
+
 	cfg.testing = (flag.Lookup("test.v") != nil)
 
 	if !cfg.testing {
@@ -185,6 +192,38 @@ func NewConfig() *Config {
 			}
 		}
 
+		if os.Getenv("TOKEN_COUNT") != "" {
+			tCount, err := strconv.ParseInt(os.Getenv("TOKEN_COUNT"), 10, 64)
+			if err != nil {
+				log.Fatal(err)
+			}
+			if tCount == tokenCount {
+				newCount := cfg.promptValue("TOKEN_COUNT", fmt.Sprintf("%d", tokenCount), false, "int").(int64)
+				cfg.TokenCount = newCount
+			} else {
+				fmt.Printf("Notice: Environment TOKEN_COUNT is set to %d\n", tCount)
+				cfg.TokenCount = tCount
+			}
+		}
+
+		if os.Getenv("TOKEN_PRICE") != "" {
+			if os.Getenv("TOKEN_PRICE") == fmt.Sprintf("%.2f", tokenPrice) {
+				cfg.TokenPrice = cfg.promptValue("TOKEN_PRICE", fmt.Sprintf("%.2f", tokenPrice), false, "float").(float64)
+			} else {
+				fmt.Printf("Notice: Environment TOKEN_PRICE is set to %s\n", os.Getenv("TOKEN_PRICE"))
+				cfg.TokenPrice = cfg.getFloatEnv("TOKEN_PRICE", tokenPrice)
+			}
+		}
+
+		if os.Getenv("ALLOW_NEW_TOKENS") != "" {
+			if os.Getenv("ALLOW_NEW_TOKENS") == strconv.FormatBool(allowNewTokens) {
+				cfg.AllowNewTokens = cfg.promptValue("ALLOW_NEW_TOKENS", strconv.FormatBool(allowNewTokens), false, "bool").(bool)
+			} else {
+				fmt.Printf("Notice: Environment ALLOW_NEW_TOKENS is set to %s\n", os.Getenv("ALLOW_NEW_TOKENS"))
+				cfg.AllowNewTokens = cfg.getBoolEnv("ALLOW_NEW_TOKENS", allowNewTokens)
+			}
+		}
+
 		// step 5: save / update .env file if changes were made
 		cfg.save()
 	}
@@ -203,6 +242,9 @@ func NewConfig() *Config {
 	fmt.Printf("- API Hostname: %s\n", cfg.APIHostName)
 	fmt.Printf("- Enable API: %v\n", cfg.EnableAPI)
 	fmt.Printf("- Fund Wallet Amount: %.2f\n", cfg.FundWalletAmount)
+	fmt.Printf("- Token Count: %d\n", cfg.TokenCount)
+	fmt.Printf("- Token Price: %.2f\n", cfg.TokenPrice)
+	fmt.Printf("- Allow New Tokens: %v\n", cfg.AllowNewTokens)
 
 	return cfg
 

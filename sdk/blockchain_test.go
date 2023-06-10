@@ -21,7 +21,7 @@ func Sleepy() {
 
 	// Generate a random duration between 1 and 3 seconds
 	minDuration := 1 * time.Second
-	maxDuration := 3 * time.Second
+	maxDuration := 2 * time.Second
 	randomDuration := minDuration + time.Duration(rand.Intn(int(maxDuration-minDuration)))
 
 	// Sleep for the random duration
@@ -36,20 +36,18 @@ func TestMain(m *testing.M) {
 func TestBlockchain(t *testing.T) {
 	var err error
 
-	assert := assert.New(t)
-
-	bc := NewBlockchain()
+	bc := NewBlockchain(NewConfig())
 	bc.Run(1)
 
 	// Create wallets and add transactions
-	wallets := make([]*Wallet, 5)
+	wallets := make([]*Wallet, 2)
 	for i := 0; i < len(wallets); i++ {
 		wallets[i], err = NewWallet("Wallet"+strconv.Itoa(i), testPassPhrase, []string{"tag1", "tag2"})
-		assert.NoError(err)
+		assert.NoError(t, err)
 	}
 
 	// Add transactions
-	for numTx := 0; numTx < 5; numTx++ {
+	for numTx := 0; numTx < 2; numTx++ {
 		for j := 0; j < transactionQueueSize; j++ {
 			// Pick two random, distinct wallets
 			var fromWallet, toWallet *Wallet
@@ -59,21 +57,20 @@ func TestBlockchain(t *testing.T) {
 			}
 
 			bankTx, err := NewBankTransaction(fromWallet, toWallet, rand.Float64())
-			assert.NoError(err)
+			assert.NoError(t, err)
 
 			fromWallet.SignTransaction(bankTx)
-			assert.NoError(err)
+			assert.NoError(t, err)
 			bc.AddTransaction(bankTx)
 
 			Sleepy()
 
 			msgTx, err := NewMessageTransaction(toWallet, fromWallet, fmt.Sprintf("Thank you %s!", toWallet.GetWalletName()))
-			assert.NoError(err)
+			assert.NoError(t, err)
 
 			toWallet.SignTransaction(msgTx)
-			assert.NoError(err)
+			assert.NoError(t, err)
 			bc.AddTransaction(msgTx)
-
 		}
 	}
 

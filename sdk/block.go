@@ -39,6 +39,11 @@ func (b *Block) calculateHash() string {
 	return hex.EncodeToString(hash[:])
 }
 
+func (b *Block) blockExists(filename string) bool {
+	_, err := os.Stat(filename)
+	return !os.IsNotExist(err)
+}
+
 // save saves the block to disk as a JSON file.
 func (b *Block) save() error {
 	filename := fmt.Sprintf("%s/%010d.json", blockFolder, b.Index)
@@ -60,15 +65,16 @@ func (b *Block) save() error {
 
 // load loads the block from disk.
 func (b *Block) load(file string) error {
-	blockFile, err := os.Open(file)
-	if err != nil {
-		return err
+	if b.blockExists(file) {
+		blockFile, err := os.Open(file)
+		if err != nil {
+			return err
+		}
+		defer blockFile.Close()
+		dec := json.NewDecoder(blockFile)
+		if err := dec.Decode(b); err != nil {
+			return err
+		}
 	}
-	defer blockFile.Close()
-	dec := json.NewDecoder(blockFile)
-	if err := dec.Decode(b); err != nil {
-		return err
-	}
-
 	return nil
 }
