@@ -79,6 +79,7 @@ func (bc *Blockchain) createBLockchain() error {
 	devWallet.Close(devWalletPW)
 	devWallet.Open(devWalletPW)
 	bc.cfg.DevAddress = devWallet.GetAddress()
+	fmt.Printf("A Blockchain project Dev wallet was created for you with address [%s] and password [%s] (you can change this later)\n", bc.cfg.DevAddress, devWalletPW)
 
 	minerWalletPW, err := GenerateRandomPassword()
 	if err != nil {
@@ -91,6 +92,7 @@ func (bc *Blockchain) createBLockchain() error {
 	minerWallet.Close(minerWalletPW)
 	minerWallet.Open(minerWalletPW)
 	bc.cfg.MinerAddress = minerWallet.GetAddress()
+	fmt.Printf("A Node miner wallet was created for you with address [%s] and password [%s] (you can change this later)\n", bc.cfg.MinerAddress, minerWalletPW)
 
 	// Create the Coinbase Transaction
 	cbTX, err := NewCoinbaseTransaction(devWallet, devWallet, bc.cfg)
@@ -98,11 +100,18 @@ func (bc *Blockchain) createBLockchain() error {
 		return err
 	}
 
-	// Sign the Coinbase Transaction with the DEV Wallet
-	err = devWallet.SignTransaction(cbTX)
+	// Set the Dev Wallet balance to config TokenCount
+	err = devWallet.SetData("balance", bc.cfg.TokenCount)
 	if err != nil {
 		return err
 	}
+
+	// Sign the Coinbase Transaction with the DEV Wallet
+	cbTX.Signature, err = cbTX.Sign([]byte(devWallet.PrivatePEM()))
+	if err != nil {
+		return err
+	}
+	fmt.Printf("A Coinbase Transaction was created and set Dev wallet Balance to [%d] tokens)\n", cbTX.TokenCount)
 
 	// Add the Coinbase Transaction to the genesis block
 	genesisTxs = append(genesisTxs, cbTX)
@@ -113,11 +122,12 @@ func (bc *Blockchain) createBLockchain() error {
 		return err
 	}
 
-	// Sign the Banke Transaction with the DEV Wallet
-	err = devWallet.SignTransaction(bankTX)
+	// Sign the Bank Transaction with the DEV Wallet
+	bankTX.Signature, err = bankTX.Sign([]byte(devWallet.PrivatePEM()))
 	if err != nil {
 		return err
 	}
+	fmt.Printf("A Bank Transaction was created sent [%0.4f] tokens to the miner wallet)\n", bankTX.Amount)
 
 	// Add the Coinbase Transaction to the genesis block
 	genesisTxs = append(genesisTxs, bankTX)
@@ -231,16 +241,8 @@ func (bc *Blockchain) Mine(block *Block, difficulty int) *Block {
 
 // VerifySignature verifies the signature of a transaction using the sender's public key.
 func (bc *Blockchain) VerifySignature(tx Transaction) error {
-	senderPublicKey, err := tx.GetSenderWallet().PublicKey()
-	if err != nil {
-		return err
-	}
-
-	if !VerifySignature(tx.GetHash(), tx.GetSignature(), senderPublicKey) {
-		return fmt.Errorf("failed to verify signature")
-	}
-
-	return nil
+	_, err := tx.Verify([]byte(tx.GetSenderWallet().PublicPEM()), tx.GetSignature())
+	return err
 }
 
 // Errors/Issues:

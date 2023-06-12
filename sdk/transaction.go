@@ -3,12 +3,19 @@
 package sdk
 
 import (
+	"bytes"
 	"crypto/ecdsa"
-	"crypto/elliptic"
+	"crypto/rand"
 	"crypto/sha256"
+	"crypto/x509"
+	"encoding/base64"
+	"encoding/hex"
+	"encoding/json"
+	"encoding/pem"
 	"errors"
 	"fmt"
-	"math/big"
+	"io"
+	"log"
 	"strings"
 	"time"
 
@@ -19,11 +26,16 @@ import (
 type Transaction interface {
 	Process() string
 	GetProtocol() string
-	GetSignature() []byte
-	GetHash() []byte
+	GetSignature() string
 	GetSenderWallet() *Wallet
+	Sign(privPEM []byte) (string, error)
+	Verify(pubKey []byte, sign string) (bool, error)
 	Send(bc *Blockchain) error
-	Sign(signature []byte) error
+	String() string
+	Hex() string
+	Hash() string
+	Bytes() []byte
+	Json() string
 }
 
 // Tx is a transaction that represents a generic transaction.
@@ -36,8 +48,8 @@ type Tx struct {
 	To        *Wallet   // Wallet receiving the transaction
 	Fee       float64   // Fee for the transaction
 	Status    string    // Status of the transaction (pending, confirmed, inserted, failed)
-	Signature []byte    // Signature of the transaction
-	Hash      []byte    // Hash of the transaction
+	Signature string    // Signature of the transaction
+	hash      []byte    // Hash of the transaction
 }
 
 // NewTransaction creates a new Base transaction with no protocol. This is used for coinbase transactions.
@@ -99,9 +111,32 @@ func (t *Tx) GetID() string {
 	return t.ID
 }
 
-// GetHash returns the hash of the transaction.
-func (t *Tx) GetHash() []byte {
-	return t.Hash
+// String returns a string representation of the transaction.
+func (t *Tx) String() string {
+	return fmt.Sprintf("Transaction %s from %s to %s", t.ID, t.From.GetAddress(), t.To.GetAddress())
+}
+
+// Hex returns the hexadecimal representation of the transaction.
+func (t *Tx) Hex() string {
+	return hex.EncodeToString(t.Bytes())
+}
+
+// Hash returns the hash of the transaction as a string.
+func (t *Tx) Hash() string {
+	hash := sha256.Sum256(t.Bytes())
+	return hex.EncodeToString(hash[:])
+}
+
+// Bytes returns the serialized byte representation of the transaction.
+func (t *Tx) Bytes() []byte {
+	data, _ := json.Marshal(t)
+	return data
+}
+
+// Json returns the JSON representation of the transaction as a string.
+func (t *Tx) Json() string {
+	data, _ := json.MarshalIndent(t, "", "  ")
+	return string(data)
 }
 
 // IsCoinbase returns true if the transaction is a coinbase transaction.
@@ -125,48 +160,74 @@ func (t *Tx) Send(bc *Blockchain) error {
 	return nil
 }
 
-// Sign signs the transaction with the private key of the sender.
-func (t *Tx) Sign(signature []byte) error {
-	t.Signature = signature
-	return nil
+func (t *Tx) Sign(privPEM []byte) (string, error) {
+
+	txBytes, err := json.Marshal(t)
+	if err != nil {
+		log.Fatal(err)
+	}
+	reader := bytes.NewReader(txBytes)
+
+	// Load the private key file in x509 format
+	block, _ := pem.Decode(privPEM)
+	if block == nil {
+		return "", errors.New("privKey no pem data found")
+	}
+
+	pk, err := x509.ParseECPrivateKey(block.Bytes)
+	if err != nil {
+		return "", err
+	}
+
+	// Hash the input to get a summary of the information
+	h := sha256.New()
+	_, err = io.Copy(h, reader)
+	if err != nil {
+		return "", err
+	}
+	hash := h.Sum(nil)
+	// ECDSA Signing
+	sign, err := ecdsa.SignASN1(rand.Reader, pk, hash)
+	if err != nil {
+		return "", err
+	}
+	return base64.StdEncoding.EncodeToString(sign), nil
 }
 
-// Verify verifies the signature of the transaction.
-func (t *Tx) Verify(signature []byte) error {
-	//func (t *Tx) Verify(fromWallet *Wallet) error {
-	// Verify the signature logic here
-	// This ensures that the transaction has not been tampered with
+func (t *Tx) Verify(pubKey []byte, sign string) (bool, error) {
 
-	// Prepare the hashed message
-	hash := sha256.Sum256([]byte(t.ID))
-
-	// Extract the r and s components from the signature
-	r := big.Int{}
-	s := big.Int{}
-	sigLen := len(signature)
-	r.SetBytes(signature[:(sigLen / 2)])
-	s.SetBytes(signature[(sigLen / 2):])
-
-	// Create the public key from the sender's wallet
-	curve := elliptic.P256()
-
-	pubBytes, err := t.From.PublicBytes()
+	txBytes, err := json.Marshal(t)
 	if err != nil {
-		return err
+		log.Fatal(err)
 	}
+	reader := bytes.NewReader(txBytes)
 
-	x, y := elliptic.Unmarshal(curve, pubBytes)
-	publicKey := ecdsa.PublicKey{Curve: curve, X: x, Y: y}
-
-	// Verify the signature using the public key
-	if !VerifySignature(hash[:], signature, &publicKey) {
-		return errors.New("invalid signature")
+	// Load the public key in x509 format
+	block, _ := pem.Decode(pubKey)
+	if block == nil {
+		return false, errors.New("pubKey no pem data found")
 	}
-
-	return nil
+	genericPublicKey, err := x509.ParsePKIXPublicKey(block.Bytes)
+	if err != nil {
+		return false, err
+	}
+	pk := genericPublicKey.(*ecdsa.PublicKey)
+	// Hash the input to get a summary of the information
+	h := sha256.New()
+	_, err = io.Copy(h, reader)
+	if err != nil {
+		return false, err
+	}
+	hash := h.Sum(nil)
+	// ECDSA Validation
+	bSign, err := base64.StdEncoding.DecodeString(sign)
+	if err != nil {
+		return false, err
+	}
+	return ecdsa.VerifyASN1(pk, hash, bSign), nil
 }
 
 // GetSignature returns the signature of the Persist transaction.
-func (t *Tx) GetSignature() []byte {
+func (t *Tx) GetSignature() string {
 	return t.Signature
 }

@@ -20,7 +20,8 @@ func NewBankTransaction(from *Wallet, to *Wallet, amount float64) (*Bank, error)
 	}
 
 	// Check if the from wallet has enough balance
-	if from.GetBalance() < amount+transactionFee {
+	total := amount + transactionFee
+	if from.GetBalance() < total {
 		return nil, fmt.Errorf("insufficient balance in the wallet")
 	}
 

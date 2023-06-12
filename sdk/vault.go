@@ -48,6 +48,18 @@ func (p *PEM) Decode(pemEncoded string, pemEncodedPub string) (*ecdsa.PrivateKey
 	return privateKey, publicKey
 }
 
+func (p *PEM) GetPrivate() string {
+	return p.PrivateKey
+}
+
+func (p *PEM) GetPublic() string {
+	return p.PublicKey
+}
+
+func (p *PEM) AsBytes(s string) []byte {
+	return []byte(s)
+}
+
 // Vault is a struct that holds the data (keypairs) associated with the wallet as well as the private key and PEM encoded keys
 type Vault struct {
 	Data map[string]interface{} // Data (keypairs) associated with the wallet
@@ -87,4 +99,12 @@ func (v *Vault) NewKeyPair() (err error) {
 	}
 	v.Pem = NewPEM(v.Key)
 	return nil
+}
+
+func (v *Vault) PrivatePEM() string {
+	return v.Pem.GetPrivate()
+}
+
+func (v *Vault) PublicPEM() string {
+	return v.Pem.GetPublic()
 }
