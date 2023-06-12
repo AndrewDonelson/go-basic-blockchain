@@ -41,7 +41,7 @@ func TestPersistTransaction(t *testing.T) {
 	bc := NewBlockchain(NewConfig())
 
 	// sign the transaction
-	err = from.SignTransaction(persist)
+	persist.Signature, err = persist.Sign([]byte(from.PrivatePEM()))
 	assert.NoError(t, err)
 
 	err = persist.Send(bc)

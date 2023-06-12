@@ -152,7 +152,7 @@ func (w *Wallet) GetBalance() float64 {
 		return 0
 	}
 
-	return balance.(float64)
+	return float64(balance.(int64))
 }
 
 // GetTags returns the wallet tags from the data (keypairs) associated with the wallet.
@@ -229,6 +229,18 @@ func (w *Wallet) PrivateBytes() ([]byte, error) {
 	return bytes, nil
 }
 
+func (w *Wallet) PrivatePEM() string {
+	if w.Encrypted {
+		return ""
+	}
+
+	if w.vault.Key == nil {
+		return ""
+	}
+
+	return w.vault.PrivatePEM()
+}
+
 // PublicKey returns the public key from the data (keypairs) associated with the wallet.
 func (w *Wallet) PublicKey() (*ecdsa.PublicKey, error) {
 	if w.Encrypted {
@@ -260,6 +272,18 @@ func (w *Wallet) PublicBytes() ([]byte, error) {
 	return bytes, nil
 }
 
+func (w *Wallet) PublicPEM() string {
+	if w.Encrypted {
+		return ""
+	}
+
+	if w.vault.Key.Public() == nil {
+		return ""
+	}
+
+	return w.vault.PublicPEM()
+}
+
 // SendTransaction sends a new transaction from the sender's wallet to the recipient's address.
 func (w *Wallet) SendTransaction(to string, tx Transaction, bc *Blockchain) (*Transaction, error) {
 	if w.Encrypted {
@@ -286,41 +310,45 @@ func (w *Wallet) SendTransaction(to string, tx Transaction, bc *Blockchain) (*Tr
 }
 
 // SignTransaction signs the given transaction with the wallet's private key.
-func (w *Wallet) SignTransaction(tx Transaction) error {
+// func (w *Wallet) SignTransaction(tx Transaction) error {
 
-	if w.Encrypted {
-		return errors.New("cannot sign transaction with an encrypted wallet")
-	}
+// 	if w.Encrypted {
+// 		return errors.New("cannot sign transaction with an encrypted wallet")
+// 	}
 
-	fmt.Printf("[%s] %s Signing %s-TX : %v\n", time.Now().Format(logDateTimeFormat), w.GetWalletName(), tx.GetProtocol(), tx)
+// 	fmt.Printf("[%s] %s Signing %s-TX : %v\n", time.Now().Format(logDateTimeFormat), w.GetWalletName(), tx.GetProtocol(), tx)
 
-	// Get the SHA-256 hash of the transaction.
-	txHash := sha256.Sum256([]byte(fmt.Sprintf("%v", tx)))
+// 	// Get the SHA-256 hash of the transaction.
+// 	txHash := sha256.Sum256([]byte(fmt.Sprintf("%v", tx)))
 
-	// key the Private key from the wallet's data (keypairs).
-	key, err := w.PrivateKey()
-	if err != nil {
-		return fmt.Errorf("failed to sign transaction: %v", err)
-	}
+// 	// key the Private key from the wallet's data (keypairs).
+// 	key, err := w.PrivateKey()
+// 	if err != nil {
+// 		return fmt.Errorf("failed to sign transaction: %v", err)
+// 	}
 
-	if key == nil {
-		return fmt.Errorf("failed to sign transaction: private key is nil")
-	}
+// 	if key == nil {
+// 		return fmt.Errorf("failed to sign transaction: private key is nil")
+// 	}
 
-	// Sign the transaction hash.
-	r, s, err := ecdsa.Sign(rand.Reader, key, txHash[:])
-	if err != nil {
-		return fmt.Errorf("failed to sign transaction: %v", err)
-	}
+// 	// Sign the transaction hash.
+// 	r, s, err := ecdsa.Sign(rand.Reader, key, txHash[:])
+// 	if err != nil {
+// 		return fmt.Errorf("failed to sign transaction: %v", err)
+// 	}
 
-	signature := append(r.Bytes(), s.Bytes()...)
-	err = tx.Sign(signature)
-	if err != nil {
-		return fmt.Errorf("failed to sign transaction: %v", err)
-	}
+// 	tx.Signature, err = cbTX.SignTX([]byte(devWallet.PrivatePEM()))
+// 	if err != nil {
+// 		return err
+// 	}
+// 	signature := append(r.Bytes(), s.Bytes()...)
+// 	err = tx.Sign(signature)
+// 	if err != nil {
+// 		return fmt.Errorf("failed to sign transaction: %v", err)
+// 	}
 
-	return nil
-}
+// 	return nil
+// }
 
 // encrypt is a private internal method that encrypts the data (keypairs) associated with the wallet.
 func (w *Wallet) encrypt(key, data []byte) ([]byte, error) {

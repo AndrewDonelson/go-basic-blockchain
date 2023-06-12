@@ -58,174 +58,176 @@ func NewConfig() *Config {
 
 	cfg.testing = (flag.Lookup("test.v") != nil)
 
-	if !cfg.testing {
-		//  step 3: Load all values in the .env file if it exists
-		err := godotenv.Load(cfgFile)
-		if err != nil {
-			log.Fatal("Error loading .env file")
-		}
-
-		// step 4: set the values from the environment variables
-		if os.Getenv("BLOCKCHAIN_NAME") != "" {
-			if os.Getenv("BLOCKCHAIN_NAME") == BlockchainName {
-				cfg.BlockchainName = cfg.promptValue("BLOCKCHAIN_NAME", BlockchainName, false, "string").(string)
-			} else {
-				fmt.Printf("Notice: Environment BLOCKCHAIN_NAME is set to %s\n", os.Getenv("BLOCKCHAIN_NAME"))
-				cfg.BlockchainName = os.Getenv("BLOCKCHAIN_NAME")
-			}
-		}
-
-		if os.Getenv("BLOCKCHAIN_SYMBOL") != "" {
-			if os.Getenv("BLOCKCHAIN_SYMBOL") == BlockchainSymbol {
-				cfg.BlockchainSymbol = cfg.promptValue("BLOCKCHAIN_SYMBOL", BlockchainSymbol, false, "string").(string)
-			} else {
-				fmt.Printf("Notice: Environment BLOCKCHAIN_SYMBOL is set to %s\n", os.Getenv("BLOCKCHAIN_SYMBOL"))
-				cfg.BlockchainSymbol = os.Getenv("BLOCKCHAIN_SYMBOL")
-			}
-		}
-
-		if os.Getenv("BLOCK_TIME") != "" {
-			if os.Getenv("BLOCK_TIME") == strconv.Itoa(blockTimeInSec) {
-				cfg.BlockTime = cfg.promptValue("BLOCK_TIME", fmt.Sprintf("%d", blockTimeInSec), false, "int").(int)
-			} else {
-				fmt.Printf("Notice: Environment BLOCK_TIME is set to %s\n", os.Getenv("BLOCK_TIME"))
-				cfg.BlockTime = cfg.getIntEnv("BLOCK_TIME", blockTimeInSec)
-			}
-		}
-
-		if os.Getenv("DIFFICULTY") != "" {
-			if os.Getenv("DIFFICULTY") == strconv.Itoa(proofOfWorkDifficulty) {
-				cfg.Difficulty = cfg.promptValue("DIFFICULTY", fmt.Sprintf("%d", proofOfWorkDifficulty), false, "int").(int)
-			} else {
-				fmt.Printf("Notice: Environment DIFFICULTY is set to %s\n", os.Getenv("DIFFICULTY"))
-				cfg.Difficulty = cfg.getIntEnv("DIFFICULTY", proofOfWorkDifficulty)
-			}
-		}
-
-		if os.Getenv("TRANSACTION_FEE") != "" {
-			if os.Getenv("TRANSACTION_FEE") == fmt.Sprintf("%.2f", transactionFee) {
-				cfg.TransactionFee = cfg.promptValue("TRANSACTION_FEE", fmt.Sprintf("%.2f", transactionFee), false, "float").(float64)
-			} else {
-				fmt.Printf("Notice: Environment TRANSACTION_FEE is set to %s\n", os.Getenv("TRANSACTION_FEE"))
-				cfg.TransactionFee = cfg.getFloatEnv("TRANSACTION_FEE", transactionFee)
-			}
-		}
-
-		// this is the node wallet (miner) address
-		if os.Getenv("MINER_ADDRESS") != "" {
-			if os.Getenv("MINER_ADDRESS") == minerAddress {
-				if cfg.PromptYesNo("Do you want have a miner address?") {
-					cfg.MinerAddress = cfg.promptValue("MINER_ADDRESS", minerAddress, true, "string").(string)
-				} else {
-					if cfg.PromptYesNo("Do you want to crate a new wallet for the miner address?") {
-						walletName, walletPassPhrase, walletTags := cfg.PromptWalletInfo()
-						minerWallet, err := NewWallet(walletName, walletPassPhrase, walletTags)
-						if err != nil {
-							log.Fatal(err)
-						}
-						cfg.MinerAddress = minerWallet.GetAddress()
-					}
-				}
-
-				if cfg.MinerAddress == "" || cfg.MinerAddress == minerAddress {
-					log.Fatal("Error: MINER_ADDRESS is required")
-				}
-			} else {
-				fmt.Printf("Notice: Environment MINER_ADDRESS is set to %s\n", os.Getenv("MINER_ADDRESS"))
-				cfg.MinerAddress = os.Getenv("MINER_ADDRESS")
-			}
-		}
-
-		if os.Getenv("MINER_REWARD_PCT") != "" {
-			if os.Getenv("MINER_REWARD_PCT") == fmt.Sprintf("%.2f", minerRewardPCT) {
-				cfg.MinerRewardPCT = cfg.promptValue("MINER_REWARD_PCT", fmt.Sprintf("%.2f", minerRewardPCT), false, "float").(float64)
-			} else {
-				fmt.Printf("Notice: Environment MINER_REWARD_PCT is set to %s\n", os.Getenv("MINER_REWARD_PCT"))
-				cfg.MinerRewardPCT = cfg.getFloatEnv("MINER_REWARD_PCT", minerRewardPCT)
-			}
-		}
-
-		// This is the blockchain developer's wallet address (not the node wallet) - it is used to support (reward) the developer || project
-		// TODO: move this into the genesis block - not here
-		if os.Getenv("DEV_REWARD_PCT") != "" {
-			if os.Getenv("DEV_REWARD_PCT") == fmt.Sprintf("%.2f", devRewardPCT) {
-				cfg.DevRewardPCT = cfg.promptValue("DEV_REWARD_PCT", fmt.Sprintf("%.2f", devRewardPCT), false, "float").(float64)
-			} else {
-				fmt.Printf("Notice: Environment DEV_REWARD_PCT is set to %s\n", os.Getenv("DEV_REWARD_PCT"))
-				cfg.DevRewardPCT = cfg.getFloatEnv("DEV_REWARD_PCT", devRewardPCT)
-			}
-		}
-
-		if os.Getenv("DEV_ADDRESS") != "" {
-			if os.Getenv("DEV_ADDRESS") == devAddress {
-				cfg.DevAddress = cfg.promptValue("DEV_ADDRESS", devAddress, true, "string").(string)
-			} else {
-				fmt.Printf("Notice: Environment DEV_ADDRESS is set to %s\n", os.Getenv("DEV_ADDRESS"))
-				cfg.DevAddress = os.Getenv("DEV_ADDRESS")
-			}
-		}
-
-		if os.Getenv("API_HOSTNAME") != "" {
-			if os.Getenv("API_HOSTNAME") == apiHostname {
-				cfg.APIHostName = cfg.promptValue("API_HOSTNAME", apiHostname, false, "string").(string)
-			} else {
-				fmt.Printf("Notice: Environment API_HOSTNAME is set to %s\n", os.Getenv("API_HOSTNAME"))
-				cfg.APIHostName = os.Getenv("API_HOSTNAME")
-			}
-		}
-
-		if os.Getenv("ENABLE_API") != "" {
-			if os.Getenv("ENABLE_API") == strconv.FormatBool(EnableAPI) {
-				cfg.EnableAPI = cfg.promptValue("ENABLE_API", strconv.FormatBool(EnableAPI), false, "bool").(bool)
-			} else {
-				fmt.Printf("Notice: Environment ENABLE_API is set to %s\n", os.Getenv("ENABLE_API"))
-				cfg.EnableAPI = cfg.getBoolEnv("ENABLE_API", EnableAPI)
-			}
-		}
-
-		if os.Getenv("FUND_WALLET_AMOUNT") != "" {
-			if os.Getenv("FUND_WALLET_AMOUNT") == fmt.Sprintf("%.2f", fundWalletAmount) {
-				cfg.FundWalletAmount = cfg.promptValue("FUND_WALLET_AMOUNT", fmt.Sprintf("%.2f", fundWalletAmount), false, "float").(float64)
-			} else {
-				fmt.Printf("Notice: Environment FUND_WALLET_AMOUNT is set to %s\n", os.Getenv("FUND_WALLET_AMOUNT"))
-				cfg.FundWalletAmount = cfg.getFloatEnv("FUND_WALLET_AMOUNT", fundWalletAmount)
-			}
-		}
-
-		if os.Getenv("TOKEN_COUNT") != "" {
-			tCount, err := strconv.ParseInt(os.Getenv("TOKEN_COUNT"), 10, 64)
+	if verbose {
+		if !cfg.testing {
+			//  step 3: Load all values in the .env file if it exists
+			err := godotenv.Load(cfgFile)
 			if err != nil {
-				log.Fatal(err)
+				log.Fatal("Error loading .env file")
 			}
-			if tCount == tokenCount {
-				newCount := cfg.promptValue("TOKEN_COUNT", fmt.Sprintf("%d", tokenCount), false, "int").(int64)
-				cfg.TokenCount = newCount
-			} else {
-				fmt.Printf("Notice: Environment TOKEN_COUNT is set to %d\n", tCount)
-				cfg.TokenCount = tCount
-			}
-		}
 
-		if os.Getenv("TOKEN_PRICE") != "" {
-			if os.Getenv("TOKEN_PRICE") == fmt.Sprintf("%.2f", tokenPrice) {
-				cfg.TokenPrice = cfg.promptValue("TOKEN_PRICE", fmt.Sprintf("%.2f", tokenPrice), false, "float").(float64)
-			} else {
-				fmt.Printf("Notice: Environment TOKEN_PRICE is set to %s\n", os.Getenv("TOKEN_PRICE"))
-				cfg.TokenPrice = cfg.getFloatEnv("TOKEN_PRICE", tokenPrice)
+			// step 4: set the values from the environment variables
+			if os.Getenv("BLOCKCHAIN_NAME") != "" {
+				if os.Getenv("BLOCKCHAIN_NAME") == BlockchainName {
+					cfg.BlockchainName = cfg.promptValue("BLOCKCHAIN_NAME", BlockchainName, false, "string").(string)
+				} else {
+					fmt.Printf("Notice: Environment BLOCKCHAIN_NAME is set to %s\n", os.Getenv("BLOCKCHAIN_NAME"))
+					cfg.BlockchainName = os.Getenv("BLOCKCHAIN_NAME")
+				}
 			}
-		}
 
-		if os.Getenv("ALLOW_NEW_TOKENS") != "" {
-			if os.Getenv("ALLOW_NEW_TOKENS") == strconv.FormatBool(allowNewTokens) {
-				cfg.AllowNewTokens = cfg.promptValue("ALLOW_NEW_TOKENS", strconv.FormatBool(allowNewTokens), false, "bool").(bool)
-			} else {
-				fmt.Printf("Notice: Environment ALLOW_NEW_TOKENS is set to %s\n", os.Getenv("ALLOW_NEW_TOKENS"))
-				cfg.AllowNewTokens = cfg.getBoolEnv("ALLOW_NEW_TOKENS", allowNewTokens)
+			if os.Getenv("BLOCKCHAIN_SYMBOL") != "" {
+				if os.Getenv("BLOCKCHAIN_SYMBOL") == BlockchainSymbol {
+					cfg.BlockchainSymbol = cfg.promptValue("BLOCKCHAIN_SYMBOL", BlockchainSymbol, false, "string").(string)
+				} else {
+					fmt.Printf("Notice: Environment BLOCKCHAIN_SYMBOL is set to %s\n", os.Getenv("BLOCKCHAIN_SYMBOL"))
+					cfg.BlockchainSymbol = os.Getenv("BLOCKCHAIN_SYMBOL")
+				}
 			}
-		}
 
-		// step 5: save / update .env file if changes were made
-		cfg.save()
+			if os.Getenv("BLOCK_TIME") != "" {
+				if os.Getenv("BLOCK_TIME") == strconv.Itoa(blockTimeInSec) {
+					cfg.BlockTime = cfg.promptValue("BLOCK_TIME", fmt.Sprintf("%d", blockTimeInSec), false, "int").(int)
+				} else {
+					fmt.Printf("Notice: Environment BLOCK_TIME is set to %s\n", os.Getenv("BLOCK_TIME"))
+					cfg.BlockTime = cfg.getIntEnv("BLOCK_TIME", blockTimeInSec)
+				}
+			}
+
+			if os.Getenv("DIFFICULTY") != "" {
+				if os.Getenv("DIFFICULTY") == strconv.Itoa(proofOfWorkDifficulty) {
+					cfg.Difficulty = cfg.promptValue("DIFFICULTY", fmt.Sprintf("%d", proofOfWorkDifficulty), false, "int").(int)
+				} else {
+					fmt.Printf("Notice: Environment DIFFICULTY is set to %s\n", os.Getenv("DIFFICULTY"))
+					cfg.Difficulty = cfg.getIntEnv("DIFFICULTY", proofOfWorkDifficulty)
+				}
+			}
+
+			if os.Getenv("TRANSACTION_FEE") != "" {
+				if os.Getenv("TRANSACTION_FEE") == fmt.Sprintf("%.2f", transactionFee) {
+					cfg.TransactionFee = cfg.promptValue("TRANSACTION_FEE", fmt.Sprintf("%.2f", transactionFee), false, "float").(float64)
+				} else {
+					fmt.Printf("Notice: Environment TRANSACTION_FEE is set to %s\n", os.Getenv("TRANSACTION_FEE"))
+					cfg.TransactionFee = cfg.getFloatEnv("TRANSACTION_FEE", transactionFee)
+				}
+			}
+
+			// this is the node wallet (miner) address
+			if os.Getenv("MINER_ADDRESS") != "" {
+				if os.Getenv("MINER_ADDRESS") == minerAddress {
+					if cfg.PromptYesNo("Do you want have a miner address?") {
+						cfg.MinerAddress = cfg.promptValue("MINER_ADDRESS", minerAddress, true, "string").(string)
+					} else {
+						if cfg.PromptYesNo("Do you want to crate a new wallet for the miner address?") {
+							walletName, walletPassPhrase, walletTags := cfg.PromptWalletInfo()
+							minerWallet, err := NewWallet(walletName, walletPassPhrase, walletTags)
+							if err != nil {
+								log.Fatal(err)
+							}
+							cfg.MinerAddress = minerWallet.GetAddress()
+						}
+					}
+
+					if cfg.MinerAddress == "" || cfg.MinerAddress == minerAddress {
+						log.Fatal("Error: MINER_ADDRESS is required")
+					}
+				} else {
+					fmt.Printf("Notice: Environment MINER_ADDRESS is set to %s\n", os.Getenv("MINER_ADDRESS"))
+					cfg.MinerAddress = os.Getenv("MINER_ADDRESS")
+				}
+			}
+
+			if os.Getenv("MINER_REWARD_PCT") != "" {
+				if os.Getenv("MINER_REWARD_PCT") == fmt.Sprintf("%.2f", minerRewardPCT) {
+					cfg.MinerRewardPCT = cfg.promptValue("MINER_REWARD_PCT", fmt.Sprintf("%.2f", minerRewardPCT), false, "float").(float64)
+				} else {
+					fmt.Printf("Notice: Environment MINER_REWARD_PCT is set to %s\n", os.Getenv("MINER_REWARD_PCT"))
+					cfg.MinerRewardPCT = cfg.getFloatEnv("MINER_REWARD_PCT", minerRewardPCT)
+				}
+			}
+
+			// This is the blockchain developer's wallet address (not the node wallet) - it is used to support (reward) the developer || project
+			// TODO: move this into the genesis block - not here
+			if os.Getenv("DEV_REWARD_PCT") != "" {
+				if os.Getenv("DEV_REWARD_PCT") == fmt.Sprintf("%.2f", devRewardPCT) {
+					cfg.DevRewardPCT = cfg.promptValue("DEV_REWARD_PCT", fmt.Sprintf("%.2f", devRewardPCT), false, "float").(float64)
+				} else {
+					fmt.Printf("Notice: Environment DEV_REWARD_PCT is set to %s\n", os.Getenv("DEV_REWARD_PCT"))
+					cfg.DevRewardPCT = cfg.getFloatEnv("DEV_REWARD_PCT", devRewardPCT)
+				}
+			}
+
+			if os.Getenv("DEV_ADDRESS") != "" {
+				if os.Getenv("DEV_ADDRESS") == devAddress {
+					cfg.DevAddress = cfg.promptValue("DEV_ADDRESS", devAddress, true, "string").(string)
+				} else {
+					fmt.Printf("Notice: Environment DEV_ADDRESS is set to %s\n", os.Getenv("DEV_ADDRESS"))
+					cfg.DevAddress = os.Getenv("DEV_ADDRESS")
+				}
+			}
+
+			if os.Getenv("API_HOSTNAME") != "" {
+				if os.Getenv("API_HOSTNAME") == apiHostname {
+					cfg.APIHostName = cfg.promptValue("API_HOSTNAME", apiHostname, false, "string").(string)
+				} else {
+					fmt.Printf("Notice: Environment API_HOSTNAME is set to %s\n", os.Getenv("API_HOSTNAME"))
+					cfg.APIHostName = os.Getenv("API_HOSTNAME")
+				}
+			}
+
+			if os.Getenv("ENABLE_API") != "" {
+				if os.Getenv("ENABLE_API") == strconv.FormatBool(EnableAPI) {
+					cfg.EnableAPI = cfg.promptValue("ENABLE_API", strconv.FormatBool(EnableAPI), false, "bool").(bool)
+				} else {
+					fmt.Printf("Notice: Environment ENABLE_API is set to %s\n", os.Getenv("ENABLE_API"))
+					cfg.EnableAPI = cfg.getBoolEnv("ENABLE_API", EnableAPI)
+				}
+			}
+
+			if os.Getenv("FUND_WALLET_AMOUNT") != "" {
+				if os.Getenv("FUND_WALLET_AMOUNT") == fmt.Sprintf("%.2f", fundWalletAmount) {
+					cfg.FundWalletAmount = cfg.promptValue("FUND_WALLET_AMOUNT", fmt.Sprintf("%.2f", fundWalletAmount), false, "float").(float64)
+				} else {
+					fmt.Printf("Notice: Environment FUND_WALLET_AMOUNT is set to %s\n", os.Getenv("FUND_WALLET_AMOUNT"))
+					cfg.FundWalletAmount = cfg.getFloatEnv("FUND_WALLET_AMOUNT", fundWalletAmount)
+				}
+			}
+
+			if os.Getenv("TOKEN_COUNT") != "" {
+				tCount, err := strconv.ParseInt(os.Getenv("TOKEN_COUNT"), 10, 64)
+				if err != nil {
+					log.Fatal(err)
+				}
+				if tCount == tokenCount {
+					newCount := cfg.promptValue("TOKEN_COUNT", fmt.Sprintf("%d", tokenCount), false, "int").(int64)
+					cfg.TokenCount = newCount
+				} else {
+					fmt.Printf("Notice: Environment TOKEN_COUNT is set to %d\n", tCount)
+					cfg.TokenCount = tCount
+				}
+			}
+
+			if os.Getenv("TOKEN_PRICE") != "" {
+				if os.Getenv("TOKEN_PRICE") == fmt.Sprintf("%.2f", tokenPrice) {
+					cfg.TokenPrice = cfg.promptValue("TOKEN_PRICE", fmt.Sprintf("%.2f", tokenPrice), false, "float").(float64)
+				} else {
+					fmt.Printf("Notice: Environment TOKEN_PRICE is set to %s\n", os.Getenv("TOKEN_PRICE"))
+					cfg.TokenPrice = cfg.getFloatEnv("TOKEN_PRICE", tokenPrice)
+				}
+			}
+
+			if os.Getenv("ALLOW_NEW_TOKENS") != "" {
+				if os.Getenv("ALLOW_NEW_TOKENS") == strconv.FormatBool(allowNewTokens) {
+					cfg.AllowNewTokens = cfg.promptValue("ALLOW_NEW_TOKENS", strconv.FormatBool(allowNewTokens), false, "bool").(bool)
+				} else {
+					fmt.Printf("Notice: Environment ALLOW_NEW_TOKENS is set to %s\n", os.Getenv("ALLOW_NEW_TOKENS"))
+					cfg.AllowNewTokens = cfg.getBoolEnv("ALLOW_NEW_TOKENS", allowNewTokens)
+				}
+			}
+
+			// step 5: save / update .env file if changes were made
+			cfg.save()
+		}
 	}
 
 	// step 6: display config values that will be used

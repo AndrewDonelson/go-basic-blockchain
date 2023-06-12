@@ -143,7 +143,8 @@ func TestWallet(t *testing.T) {
 	bc := NewBlockchain(NewConfig())
 	tx, err := NewBankTransaction(wallet1, wallet2, 1.0)
 	assert.NoError(t, err)
-	err = wallet1.SignTransaction(tx)
+
+	tx.Signature, err = tx.Sign([]byte(wallet1.PrivatePEM()))
 	assert.NoError(t, err)
 
 	sentTx, err := wallet1.SendTransaction(wallet2.GetAddress(), tx, bc)

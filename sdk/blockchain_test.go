@@ -59,7 +59,7 @@ func TestBlockchain(t *testing.T) {
 			bankTx, err := NewBankTransaction(fromWallet, toWallet, rand.Float64())
 			assert.NoError(t, err)
 
-			fromWallet.SignTransaction(bankTx)
+			bankTx.Sign([]byte(fromWallet.PrivatePEM()))
 			assert.NoError(t, err)
 			bc.AddTransaction(bankTx)
 
@@ -68,7 +68,7 @@ func TestBlockchain(t *testing.T) {
 			msgTx, err := NewMessageTransaction(toWallet, fromWallet, fmt.Sprintf("Thank you %s!", toWallet.GetWalletName()))
 			assert.NoError(t, err)
 
-			toWallet.SignTransaction(msgTx)
+			msgTx.Sign([]byte(toWallet.PrivatePEM()))
 			assert.NoError(t, err)
 			bc.AddTransaction(msgTx)
 		}
