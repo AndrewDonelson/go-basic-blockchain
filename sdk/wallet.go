@@ -87,7 +87,7 @@ func NewWallet(name string, passphrase string, tags []string) (*Wallet, error) {
 	if verbose {
 		fmt.Printf("[%s] Created new Wallet: %+v\n", time.Now().Format(logDateTimeFormat), PrettyPrint(wallet))
 	} else {
-		fmt.Printf("[%s] Created new Wallet: %s\n", time.Now().Format(logDateTimeFormat), wallet.ID)
+		fmt.Printf("[%s] Created new Wallet: %s\n", time.Now().Format(logDateTimeFormat), wallet.GetAddress())
 	}
 
 	return wallet, nil

@@ -79,6 +79,7 @@ func (bc *Blockchain) createBLockchain() error {
 	devWallet.Close(devWalletPW)
 	devWallet.Open(devWalletPW)
 	bc.cfg.DevAddress = devWallet.GetAddress()
+	fmt.Printf("A Blockchain project Dev wallet was created for you with address [%s] and password [%s] (you can change this later)\n", bc.cfg.DevAddress, devWalletPW)
 
 	minerWalletPW, err := GenerateRandomPassword()
 	if err != nil {
@@ -91,6 +92,7 @@ func (bc *Blockchain) createBLockchain() error {
 	minerWallet.Close(minerWalletPW)
 	minerWallet.Open(minerWalletPW)
 	bc.cfg.MinerAddress = minerWallet.GetAddress()
+	fmt.Printf("A Node miner wallet was created for you with address [%s] and password [%s] (you can change this later)\n", bc.cfg.MinerAddress, minerWalletPW)
 
 	// Create the Coinbase Transaction
 	cbTX, err := NewCoinbaseTransaction(devWallet, devWallet, bc.cfg)
@@ -109,6 +111,7 @@ func (bc *Blockchain) createBLockchain() error {
 	if err != nil {
 		return err
 	}
+	fmt.Printf("A Coinbase Transaction was created and set Dev wallet Balance to [%d] tokens)\n", cbTX.TokenCount)
 
 	// Add the Coinbase Transaction to the genesis block
 	genesisTxs = append(genesisTxs, cbTX)
@@ -124,6 +127,7 @@ func (bc *Blockchain) createBLockchain() error {
 	if err != nil {
 		return err
 	}
+	fmt.Printf("A Bank Transaction was created sent [%0.4f] tokens to the miner wallet)\n", bankTX.Amount)
 
 	// Add the Coinbase Transaction to the genesis block
 	genesisTxs = append(genesisTxs, bankTX)
