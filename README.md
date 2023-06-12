@@ -51,14 +51,14 @@ Dynamic transactions present a fascinating opportunity to expand the application
 - [x] Proof of Work
 - [x] Transactions
 - [x] Wallets
-- [ ] Mining Rewards
+- [x] Mining Rewards
 - [ ] Network
 - [ ] Consensus
 - [x] Persistence
 - [ ] CLI
-- [ ] Web Interface
+- [x] Web Interface
 - [x] Makefile (build, run, test, etc)
-- [ ] Docker
+- [x] Docker
 - [x] Tests
 - [ ] Documentation
 
