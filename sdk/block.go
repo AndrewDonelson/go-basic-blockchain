@@ -7,13 +7,14 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"math/big"
 	"os"
 	"time"
 )
 
 // Block is a block in the blockchain.
 type Block struct {
-	Index        int
+	Index        big.Int
 	Timestamp    time.Time
 	Transactions []Transaction
 	Nonce        string
@@ -23,13 +24,13 @@ type Block struct {
 
 // String returns a string representation of the block.
 func (b *Block) String() string {
-	return fmt.Sprintf("Index: %d, Timestamp: %s, Transactions: %d, Nonce: %s, Hash: %s, PreviousHash: %s", b.Index, b.Timestamp.Format(logDateTimeFormat), len(b.Transactions), b.Nonce, b.Hash, b.PreviousHash)
+	return fmt.Sprintf("Index: %v, Timestamp: %s, Transactions: %d, Nonce: %s, Hash: %s, PreviousHash: %s", b.Index, b.Timestamp.Format(logDateTimeFormat), len(b.Transactions), b.Nonce, b.Hash, b.PreviousHash)
 }
 
 // calculateHash calculates the hash of the block.
 func (b *Block) calculateHash() string {
 	// Convert the block to a string
-	blockString := fmt.Sprintf("%d%s%s%s%s", b.Index, b.Timestamp.Format(logDateTimeFormat), b.Transactions, b.Nonce, b.PreviousHash)
+	blockString := fmt.Sprintf("%v%s%s%s%s", b.Index, b.Timestamp.Format(logDateTimeFormat), b.Transactions, b.Nonce, b.PreviousHash)
 
 	// Hash the string
 	hash := sha256.Sum256([]byte(blockString))
@@ -46,7 +47,7 @@ func (b *Block) blockExists(filename string) bool {
 
 // save saves the block to disk as a JSON file.
 func (b *Block) save() error {
-	filename := fmt.Sprintf("%s/%010d.json", blockFolder, b.Index)
+	filename := fmt.Sprintf("%s/%019v.json", blockFolder, b.Index)
 	file, err := os.Create(filename)
 	if err != nil {
 		return err
@@ -58,7 +59,7 @@ func (b *Block) save() error {
 		return err
 	}
 
-	fmt.Printf("[%s] Block [%d] saved to disk.\n", time.Now().Format(logDateTimeFormat), b.Index)
+	fmt.Printf("[%s] Block [%v] saved to disk.\n", time.Now().Format(logDateTimeFormat), b.Index)
 
 	return nil
 }

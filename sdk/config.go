@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -32,12 +33,15 @@ type Config struct {
 	AllowNewTokens   bool    // Set this to true if you want to allow new tokens to be created besides the initial tokens
 	promptUpdate     bool    // This is used internally to check if user added/changed default value from prompt
 	testing          bool    // This is used internally to check if the code is running in test mode
+	DataPath         string  // This is the path where all data is stored
 }
 
 // NewConfig returns a new config.
 func NewConfig() *Config {
 	// step 1: create a new actual config
-	cfg := &Config{}
+	cfg := &Config{
+		DataPath: filepath.Join(".", "data"),
+	}
 
 	// step 2: set the default values from the constants
 	cfg.BlockchainName = BlockchainName
@@ -225,6 +229,15 @@ func NewConfig() *Config {
 				}
 			}
 
+			if os.Getenv("DATA_PATH") != "" {
+				if os.Getenv("DATA_PATH") == cfg.DataPath {
+					cfg.DevAddress = cfg.promptValue("DATA_PATH", cfg.DataPath, false, "string").(string)
+				} else {
+					fmt.Printf("Notice: Environment DATA_PATH is set to %s\n", os.Getenv("DATA_PATH"))
+					cfg.DataPath = os.Getenv("DATA_PATH")
+				}
+			}
+
 			// step 5: save / update .env file if changes were made
 			cfg.save()
 		}
@@ -247,9 +260,21 @@ func NewConfig() *Config {
 	fmt.Printf("- Token Count: %d\n", cfg.TokenCount)
 	fmt.Printf("- Token Price: %.2f\n", cfg.TokenPrice)
 	fmt.Printf("- Allow New Tokens: %v\n", cfg.AllowNewTokens)
+	fmt.Printf("- Data Path: %s\n", cfg.DataPath)
 
 	return cfg
 
+}
+
+// Path returns the path to the executable file
+func (c *Config) Path() string {
+
+	ex, err := os.Executable()
+	if err != nil {
+		panic(err)
+	}
+
+	return filepath.Dir(ex)
 }
 
 // promptValue prompts the user for a value and returns the value

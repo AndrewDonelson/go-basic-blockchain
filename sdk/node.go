@@ -32,6 +32,7 @@ var node *Node
 func NewNode() *Node {
 	node = &Node{}
 	node.Config = NewConfig()
+	localStorage = NewLocalStorage(node.Config.DataPath)
 	node.Blockchain = NewBlockchain(node.Config)
 	node.API = NewAPI(node.Blockchain)
 	node.P2P = NewP2P(node)

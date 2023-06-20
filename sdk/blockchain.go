@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"log"
+	"math/big"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -144,7 +145,7 @@ func (bc *Blockchain) GenerateGenesisBlock(txs []Transaction) {
 		fmt.Printf("[%s] Generating Genesis Block...\n", time.Now().Format(logDateTimeFormat))
 
 		genesisBlock := &Block{
-			Index:        0,
+			Index:        *big.NewInt(0),
 			Timestamp:    time.Now(),
 			Transactions: []Transaction{}, // Genesis block usually does not contain transactions
 			Nonce:        "",
@@ -285,7 +286,7 @@ func (bc *Blockchain) Run(difficulty int) {
 			// block = bc.Mine(block, difficulty)
 
 			// Mine a new block with the current transaction queue and given difficulty
-			block := &Block{Index: index, Timestamp: time.Now(), Transactions: bc.TransactionQueue, Nonce: "", Hash: "", PreviousHash: previousHash}
+			block := &Block{Index: *big.NewInt(int64(index)), Timestamp: time.Now(), Transactions: bc.TransactionQueue, Nonce: "", Hash: "", PreviousHash: previousHash}
 			bc.Mine(block, difficulty)
 
 			// add the block to the blockchain
@@ -303,7 +304,7 @@ func (bc *Blockchain) Run(difficulty int) {
 
 // generateHash generates a hash for a block.
 func (bc *Blockchain) generateHash(block *Block) string {
-	record := strconv.Itoa(block.Index) + block.Timestamp.String() + block.Nonce + block.PreviousHash
+	record := block.Index.Text(10) + block.Timestamp.String() + block.Nonce + block.PreviousHash
 	h := sha512.New()
 	h.Write([]byte(record))
 	hashed := h.Sum(nil)

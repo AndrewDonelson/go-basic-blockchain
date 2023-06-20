@@ -40,7 +40,7 @@ type Transaction interface {
 
 // Tx is a transaction that represents a generic transaction.
 type Tx struct {
-	ID        string    // Unit ID of the transaction
+	ID        string    // Unit ID of the transaction (TODO: actually this should be the hash of the transaction)
 	Time      time.Time // Time the transaction was created
 	Version   string    // Version of the transaction
 	Protocol  string    // Protocol ID (coinbase, bank, message, etc)
@@ -48,6 +48,7 @@ type Tx struct {
 	To        *Wallet   // Wallet receiving the transaction
 	Fee       float64   // Fee for the transaction
 	Status    string    // Status of the transaction (pending, confirmed, inserted, failed)
+	BlockNum  int       // Block number the transaction was inserted into
 	Signature string    // Signature of the transaction
 	hash      []byte    // Hash of the transaction
 }
