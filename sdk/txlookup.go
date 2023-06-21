@@ -52,7 +52,7 @@ func (txlm *TXLookupManager) split(merged string) (entry *IndexEntry) {
 // Exists tells whether the Index contains entry.
 func (txlm *TXLookupManager) exists(entry string) bool {
 	for _, n := range txlm.index {
-		if entry == n {
+		if len(n) > 0 && entry == n {
 			return true
 		}
 	}
@@ -91,8 +91,10 @@ func (txlm *TXLookupManager) Find(indexEntry *IndexEntry) (entry *IndexEntry, er
 	}
 
 	for _, entry := range txlm.index {
-		if strings.Contains(entry, find) {
-			return txlm.split(entry), nil
+		if len(entry) > 0 {
+			if strings.Contains(entry, find) {
+				return txlm.split(entry), nil
+			}
 		}
 	}
 
