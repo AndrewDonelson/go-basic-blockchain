@@ -78,6 +78,9 @@ const (
 	// saltSize is the size of the salt used for hashing
 	saltSize = 32
 
+	// indexCacheSize is the size of the block/transaction index cache (1,572,864 bytes or 1.5 MB)
+	indexCacheSize = 65536 // 2^16
+
 	// TransactionProtocolVersion is the Tranasction Protocol Version
 	TransactionProtocolVersion = "1.0"
 

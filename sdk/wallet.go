@@ -30,7 +30,7 @@ var RequiredWalletProperties = []string{
 	"private_key",
 }
 
-// Wallet represents a user's wallet.
+// Wallet represents a user's wallet. Wallets are persisted to disk as individual files.
 type Wallet struct {
 	ID               string
 	Address          string

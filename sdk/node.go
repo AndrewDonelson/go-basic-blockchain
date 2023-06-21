@@ -5,7 +5,16 @@ package sdk
 import (
 	"encoding/json"
 	"fmt"
+
+	"github.com/pborman/uuid"
 )
+
+// NodePersistData is the data that is persisted for a node to disk.
+type NodePersistData struct {
+	ID         string
+	Config     *Config
+	Blockchain *BlockchainPersistData
+}
 
 // Node is a node in the blockchain network.
 type Node struct {
@@ -30,7 +39,9 @@ var node *Node
 
 // NewNode returns a new node instance.
 func NewNode() *Node {
-	node = &Node{}
+	node = &Node{
+		ID: uuid.New(),
+	}
 	node.Config = NewConfig()
 	localStorage = NewLocalStorage(node.Config.DataPath)
 	node.Blockchain = NewBlockchain(node.Config)

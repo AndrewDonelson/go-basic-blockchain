@@ -12,7 +12,7 @@ import (
 	"time"
 )
 
-// Block is a block in the blockchain.
+// Block is a block in the blockchain. Blocks are persisted to disk as seperate JSON files.
 type Block struct {
 	Index        big.Int
 	Timestamp    time.Time

@@ -18,15 +18,23 @@ import (
 type State struct {
 }
 
+// BlockchainPersistData is the data that is persisted for a blockchain to disk.
+type BlockchainPersistData struct {
+	TXLookup       *Index
+	CurrBlockIndex *int
+	NextBlockIndex *int
+}
+
 // Blockchain is a blockchain.
 type Blockchain struct {
-	cfg               *Config
-	Blocks            []*Block
-	TransactionQueue  []Transaction
-	mux               sync.Mutex
-	CurrentBlockIndex int
-	NextBlockIndex    int
-	AvgTxsPerBlock    float64
+	cfg               *Config          // Config is the configuration for the blockchain.
+	Blocks            []*Block         // Blocks is a slice of blocks in the blockchain.
+	TransactionQueue  []Transaction    // TransactionQueue is a queue of transactions to be added to the blockchain.
+	TXLookup          *TXLookupManager // TXLookup is a map of Block Number/Index (Key) and Transaction ID (Value) that is stored in memory and persisted to disk.
+	mux               sync.Mutex       // mux is a mutex to protect concurrent access to the blockchain.
+	CurrentBlockIndex int              // CurrentBlockIndex is the current block index.
+	NextBlockIndex    int              // NextBlockIndex is the next block index.
+	AvgTxsPerBlock    float64          // AvgTxsPerBlock is the average number of transactions per block.
 }
 
 // NewBlockchain returns a new blockchain.
@@ -35,6 +43,7 @@ func NewBlockchain(cfg *Config) *Blockchain {
 		cfg:               cfg,
 		Blocks:            []*Block{},
 		TransactionQueue:  []Transaction{},
+		TXLookup:          NewTXLookupManager(),
 		CurrentBlockIndex: 0,
 		NextBlockIndex:    1,
 		AvgTxsPerBlock:    0,

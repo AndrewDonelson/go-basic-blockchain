@@ -26,6 +26,7 @@ import (
 type Transaction interface {
 	Process() string
 	GetProtocol() string
+	GetID() string
 	GetSignature() string
 	GetSenderWallet() *Wallet
 	Sign(privPEM []byte) (string, error)
