@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -32,12 +33,15 @@ type Config struct {
 	AllowNewTokens   bool    // Set this to true if you want to allow new tokens to be created besides the initial tokens
 	promptUpdate     bool    // This is used internally to check if user added/changed default value from prompt
 	testing          bool    // This is used internally to check if the code is running in test mode
+	DataPath         string  // This is the path where all data is stored
 }
 
 // NewConfig returns a new config.
 func NewConfig() *Config {
 	// step 1: create a new actual config
-	cfg := &Config{}
+	cfg := &Config{
+		DataPath: filepath.Join(".", "data"),
+	}
 
 	// step 2: set the default values from the constants
 	cfg.BlockchainName = BlockchainName
@@ -225,31 +229,55 @@ func NewConfig() *Config {
 				}
 			}
 
+			if os.Getenv("DATA_PATH") != "" {
+				if os.Getenv("DATA_PATH") == cfg.DataPath {
+					cfg.DevAddress = cfg.promptValue("DATA_PATH", cfg.DataPath, false, "string").(string)
+				} else {
+					fmt.Printf("Notice: Environment DATA_PATH is set to %s\n", os.Getenv("DATA_PATH"))
+					cfg.DataPath = os.Getenv("DATA_PATH")
+				}
+			}
+
 			// step 5: save / update .env file if changes were made
 			cfg.save()
 		}
 	}
 
 	// step 6: display config values that will be used
-	fmt.Println("Using these Configuration Values:")
-	fmt.Printf("- Blockchain Name: %s\n", cfg.BlockchainName)
-	fmt.Printf("- Blockchain Symbol: %s\n", cfg.BlockchainSymbol)
-	fmt.Printf("- Block Time: %d seconds\n", cfg.BlockTime)
-	fmt.Printf("- Difficulty: %d\n", cfg.Difficulty)
-	fmt.Printf("- Transaction Fee: %.2f\n", cfg.TransactionFee)
-	fmt.Printf("- Miner Reward Percentage: %.2f%%\n", cfg.MinerRewardPCT)
-	fmt.Printf("- Miner Address: %s\n", cfg.MinerAddress)
-	fmt.Printf("- Developer Reward Percentage: %.2f%%\n", cfg.DevRewardPCT)
-	fmt.Printf("- Developer Address: %s\n", cfg.DevAddress)
-	fmt.Printf("- API Hostname: %s\n", cfg.APIHostName)
-	fmt.Printf("- Enable API: %v\n", cfg.EnableAPI)
-	fmt.Printf("- Fund Wallet Amount: %.2f\n", cfg.FundWalletAmount)
-	fmt.Printf("- Token Count: %d\n", cfg.TokenCount)
-	fmt.Printf("- Token Price: %.2f\n", cfg.TokenPrice)
-	fmt.Printf("- Allow New Tokens: %v\n", cfg.AllowNewTokens)
 
 	return cfg
 
+}
+
+func (c *Config) Show() {
+	fmt.Println("Using these Configuration Values:")
+	fmt.Printf("- Blockchain Name: %s\n", c.BlockchainName)
+	fmt.Printf("- Blockchain Symbol: %s\n", c.BlockchainSymbol)
+	fmt.Printf("- Block Time: %d seconds\n", c.BlockTime)
+	fmt.Printf("- Difficulty: %d\n", c.Difficulty)
+	fmt.Printf("- Transaction Fee: %.2f\n", c.TransactionFee)
+	fmt.Printf("- Miner Reward Percentage: %.2f%%\n", c.MinerRewardPCT)
+	fmt.Printf("- Miner Address: %s\n", c.MinerAddress)
+	fmt.Printf("- Developer Reward Percentage: %.2f%%\n", c.DevRewardPCT)
+	fmt.Printf("- Developer Address: %s\n", c.DevAddress)
+	fmt.Printf("- API Hostname: %s\n", c.APIHostName)
+	fmt.Printf("- Enable API: %v\n", c.EnableAPI)
+	fmt.Printf("- Fund Wallet Amount: %.2f\n", c.FundWalletAmount)
+	fmt.Printf("- Token Count: %d\n", c.TokenCount)
+	fmt.Printf("- Token Price: %.2f\n", c.TokenPrice)
+	fmt.Printf("- Allow New Tokens: %v\n", c.AllowNewTokens)
+	fmt.Printf("- Data Path: %s\n", c.DataPath)
+}
+
+// Path returns the path to the executable file
+func (c *Config) Path() string {
+
+	ex, err := os.Executable()
+	if err != nil {
+		panic(err)
+	}
+
+	return filepath.Dir(ex)
 }
 
 // promptValue prompts the user for a value and returns the value

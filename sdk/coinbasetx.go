@@ -58,3 +58,33 @@ func (c *Coinbase) Process() string {
 
 	return fmt.Sprintf("Transferred %f from %s to %s", c.TransactionFee, c.From.Address, c.To.Address)
 }
+
+// // String returns a string representation of the bank transaction.
+// func (c *Coinbase) String() string {
+// 	return fmt.Sprintf("%s%s%s%v%d%f%f%s%f%s%f%d%f%t",
+// 		c.Tx.String(),
+// 		c.BlockchainName,
+// 		c.BlockchainSymbol,
+// 		c.BlockTime,
+// 		c.Difficulty,
+// 		c.TransactionFee,
+// 		c.MinerRewardPCT,
+// 		c.MinerAddress,
+// 		c.DevRewardPCT,
+// 		c.DevAddress,
+// 		c.FundWalletAmount,
+// 		c.TokenCount,
+// 		c.TokenPrice,
+// 		c.AllowNewTokens,
+// 	)
+// }
+
+// // calculateHash calculates the hash of the block.
+// func (c *Coinbase) calculateHash() string {
+
+// 	// Hash the string
+// 	c.hash = sha256.Sum256([]byte(c.String()))
+
+// 	// Return the hash as a string
+// 	return hex.EncodeToString(hash[:])
+// }

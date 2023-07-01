@@ -13,7 +13,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
 	"path/filepath"
 	"time"
 
@@ -30,7 +29,7 @@ var RequiredWalletProperties = []string{
 	"private_key",
 }
 
-// Wallet represents a user's wallet.
+// Wallet represents a user's wallet. Wallets are persisted to disk as individual files.
 type Wallet struct {
 	ID               string
 	Address          string
@@ -309,47 +308,6 @@ func (w *Wallet) SendTransaction(to string, tx Transaction, bc *Blockchain) (*Tr
 	return &tx, nil
 }
 
-// SignTransaction signs the given transaction with the wallet's private key.
-// func (w *Wallet) SignTransaction(tx Transaction) error {
-
-// 	if w.Encrypted {
-// 		return errors.New("cannot sign transaction with an encrypted wallet")
-// 	}
-
-// 	fmt.Printf("[%s] %s Signing %s-TX : %v\n", time.Now().Format(logDateTimeFormat), w.GetWalletName(), tx.GetProtocol(), tx)
-
-// 	// Get the SHA-256 hash of the transaction.
-// 	txHash := sha256.Sum256([]byte(fmt.Sprintf("%v", tx)))
-
-// 	// key the Private key from the wallet's data (keypairs).
-// 	key, err := w.PrivateKey()
-// 	if err != nil {
-// 		return fmt.Errorf("failed to sign transaction: %v", err)
-// 	}
-
-// 	if key == nil {
-// 		return fmt.Errorf("failed to sign transaction: private key is nil")
-// 	}
-
-// 	// Sign the transaction hash.
-// 	r, s, err := ecdsa.Sign(rand.Reader, key, txHash[:])
-// 	if err != nil {
-// 		return fmt.Errorf("failed to sign transaction: %v", err)
-// 	}
-
-// 	tx.Signature, err = cbTX.SignTX([]byte(devWallet.PrivatePEM()))
-// 	if err != nil {
-// 		return err
-// 	}
-// 	signature := append(r.Bytes(), s.Bytes()...)
-// 	err = tx.Sign(signature)
-// 	if err != nil {
-// 		return fmt.Errorf("failed to sign transaction: %v", err)
-// 	}
-
-// 	return nil
-// }
-
 // encrypt is a private internal method that encrypts the data (keypairs) associated with the wallet.
 func (w *Wallet) encrypt(key, data []byte) ([]byte, error) {
 	key, salt, err := w.deriveKey(key, nil)
@@ -506,23 +464,28 @@ func (w *Wallet) Close(passphrase string) error {
 		return fmt.Errorf("failed to save wallet: %v", err)
 	}
 
-	createFolder(walletFolder)
-
-	filename := fmt.Sprintf("%s/%s.json", walletFolder, w.GetAddress())
-	file, err := os.Create(filename)
+	err = localStorage.Set("wallet", w)
 	if err != nil {
 		return fmt.Errorf("failed to save wallet: %v", err)
 	}
-	defer file.Close()
 
-	enc := json.NewEncoder(file)
-	enc.SetIndent("", " ")
-	if err := enc.Encode(w); err != nil {
-		return fmt.Errorf("failed to save wallet: %v", err)
-	}
+	// createFolder(walletFolder)
+
+	// filename := fmt.Sprintf("%s/%s.json", walletFolder, w.GetAddress())
+	// file, err := os.Create(filename)
+	// if err != nil {
+	// 	return fmt.Errorf("failed to save wallet: %v", err)
+	// }
+	// defer file.Close()
+
+	// enc := json.NewEncoder(file)
+	// enc.SetIndent("", " ")
+	// if err := enc.Encode(w); err != nil {
+	// 	return fmt.Errorf("failed to save wallet: %v", err)
+	// }
 
 	if verbose {
-		fmt.Printf("[%s] Wallet [%s] saved to disk: %s\n", time.Now().Format(logDateTimeFormat), w.ID, filename)
+		fmt.Printf("[%s] Wallet [%s] saved to disk\n", time.Now().Format(logDateTimeFormat), w.ID)
 	}
 
 	return nil
@@ -531,19 +494,24 @@ func (w *Wallet) Close(passphrase string) error {
 // Open loads the wallet from disk that was saved as a JSON file.
 // it also unlocks the value and restores the wallet.vault object
 func (w *Wallet) Open(passphrase string) error {
-	filename := fmt.Sprintf("%s/%s.json", walletFolder, w.GetAddress())
-
-	file, err := os.Open(filename)
+	err := localStorage.Set("wallet", w)
 	if err != nil {
-		return fmt.Errorf("failed to load wallet: %v", err)
+		return err
 	}
-	defer file.Close()
 
-	dec := json.NewDecoder(file)
-	err = dec.Decode(w)
-	if err != nil {
-		return fmt.Errorf("failed to load wallet: %v", err)
-	}
+	// filename := fmt.Sprintf("%s/%s.json", walletFolder, w.GetAddress())
+
+	// file, err := os.Open(filename)
+	// if err != nil {
+	// 	return fmt.Errorf("failed to load wallet: %v", err)
+	// }
+	// defer file.Close()
+
+	// dec := json.NewDecoder(file)
+	// err = dec.Decode(w)
+	// if err != nil {
+	// 	return fmt.Errorf("failed to load wallet: %v", err)
+	// }
 
 	if len(passphrase) >= 12 {
 		err = w.Unlock(passphrase)
@@ -553,7 +521,7 @@ func (w *Wallet) Open(passphrase string) error {
 	}
 
 	if verbose {
-		fmt.Printf("[%s] Wallet [%s] loaded (locked: %v) from disk: %s\n", time.Now().Format(logDateTimeFormat), w.ID, w.Encrypted, filename)
+		fmt.Printf("[%s] Wallet [%s] loaded (locked: %v) from disk\n", time.Now().Format(logDateTimeFormat), w.ID, w.Encrypted)
 	}
 
 	return nil

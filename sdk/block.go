@@ -7,13 +7,14 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"math/big"
 	"os"
 	"time"
 )
 
-// Block is a block in the blockchain.
+// Block is a block in the blockchain. Blocks are persisted to disk as seperate JSON files.
 type Block struct {
-	Index        int
+	Index        big.Int
 	Timestamp    time.Time
 	Transactions []Transaction
 	Nonce        string
@@ -23,19 +24,22 @@ type Block struct {
 
 // String returns a string representation of the block.
 func (b *Block) String() string {
-	return fmt.Sprintf("Index: %d, Timestamp: %s, Transactions: %d, Nonce: %s, Hash: %s, PreviousHash: %s", b.Index, b.Timestamp.Format(logDateTimeFormat), len(b.Transactions), b.Nonce, b.Hash, b.PreviousHash)
+	return fmt.Sprintf("Index: %v, Timestamp: %s, Transactions: %d, Nonce: %s, Hash: %s, PreviousHash: %s", b.Index, b.Timestamp.Format(logDateTimeFormat), len(b.Transactions), b.Nonce, b.Hash, b.PreviousHash)
 }
 
-// calculateHash calculates the hash of the block.
-func (b *Block) calculateHash() string {
-	// Convert the block to a string
-	blockString := fmt.Sprintf("%d%s%s%s%s", b.Index, b.Timestamp.Format(logDateTimeFormat), b.Transactions, b.Nonce, b.PreviousHash)
+// Bytes returns the serialized byte representation of the transaction.
+func (b *Block) Bytes() []byte {
+	data, _ := json.Marshal(b)
+	return data
+}
 
-	// Hash the string
-	hash := sha256.Sum256([]byte(blockString))
+// Hash returns the hash of the transaction as a string.
+func (b *Block) hash() string {
+	// make a copy and clear the hash property
+	blockCopy := *b
+	blockCopy.Hash = ""
 
-	// Return the hash as a string
-
+	hash := sha256.Sum256(blockCopy.Bytes())
 	return hex.EncodeToString(hash[:])
 }
 
@@ -46,35 +50,46 @@ func (b *Block) blockExists(filename string) bool {
 
 // save saves the block to disk as a JSON file.
 func (b *Block) save() error {
-	filename := fmt.Sprintf("%s/%010d.json", blockFolder, b.Index)
-	file, err := os.Create(filename)
+	err := localStorage.Set("block", b)
 	if err != nil {
 		return err
 	}
-	defer file.Close()
-	enc := json.NewEncoder(file)
-	enc.SetIndent("", " ")
-	if err := enc.Encode(b); err != nil {
-		return err
-	}
 
-	fmt.Printf("[%s] Block [%d] saved to disk.\n", time.Now().Format(logDateTimeFormat), b.Index)
+	// filename := fmt.Sprintf("%s/%s.json", blockFolder, b.Index.String())
+	// file, err := os.Create(filename)
+	// if err != nil {
+	// 	return err
+	// }
+	// defer file.Close()
+	// enc := json.NewEncoder(file)
+	// enc.SetIndent("", " ")
+	// if err := enc.Encode(b); err != nil {
+	// 	return err
+	// }
+
+	fmt.Printf("[%s] Block [%s] saved to disk.\n", time.Now().Format(logDateTimeFormat), b.Index.String())
 
 	return nil
 }
 
 // load loads the block from disk.
-func (b *Block) load(file string) error {
-	if b.blockExists(file) {
-		blockFile, err := os.Open(file)
-		if err != nil {
-			return err
-		}
-		defer blockFile.Close()
-		dec := json.NewDecoder(blockFile)
-		if err := dec.Decode(b); err != nil {
-			return err
-		}
+func (b *Block) load(blockNumber big.Int) error {
+	b.Index = blockNumber
+	err := localStorage.Get("block", b)
+	if err != nil {
+		return err
 	}
+
+	// if b.blockExists(file) {
+	// 	blockFile, err := os.Open(file)
+	// 	if err != nil {
+	// 		return err
+	// 	}
+	// 	defer blockFile.Close()
+	// 	dec := json.NewDecoder(blockFile)
+	// 	if err := dec.Decode(b); err != nil {
+	// 		return err
+	// 	}
+	// }
 	return nil
 }

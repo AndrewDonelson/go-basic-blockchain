@@ -23,7 +23,7 @@ type P2PTransaction struct {
 }
 
 // NewP2P creates a new P2P network.
-func NewP2P(node *Node) *P2P {
+func NewP2P() *P2P {
 	return &P2P{
 		nodes: []*Node{},
 		queue: []P2PTransaction{},
@@ -32,11 +32,16 @@ func NewP2P(node *Node) *P2P {
 
 // RegisterNode registers a new node with the P2P network.
 func (p *P2P) RegisterNode(node *Node) {
+	if node == nil {
+		fmt.Printf("Cannot register empty or invalid node\n")
+		return
+	}
+
 	p.mutex.Lock()
 	defer p.mutex.Unlock()
 
 	p.nodes = append(p.nodes, node)
-	fmt.Printf("New node registered: %s\n", node.ID)
+	fmt.Printf("Registered node: %s\n", node.ID)
 }
 
 // AddTransaction adds a new transaction to the processing queue.
@@ -54,8 +59,74 @@ func (p *P2P) ProcessQueue() {
 	defer p.mutex.Unlock()
 
 	for _, tx := range p.queue {
-		fmt.Printf("Processing transaction: %s\n", tx.ID)
+		fmt.Printf("Processing transaction: %s (%s)\n", tx.ID, tx.Action)
 		// Process the transaction
+		switch tx.Action {
+		case "validate":
+			// Validate the transaction
+			// For example, you can validate the transaction signature
+			// If the transaction is invalid, you can remove it from the queue
+			// and return
+			// If the transaction is valid, you can continue processing it
+			// by calling node.ProcessP2PTransaction(tx)
+			// For example:
+			// if !tx.Validate() {
+			// 	fmt.Printf("Invalid transaction: %s\n", tx.ID)
+			// 	continue
+			// }
+			// node.ProcessP2PTransaction(tx)
+		case "status":
+			// Get the status of the node
+			// For example, you can get the node's status by calling node.Status()
+			// and then broadcast the status to all nodes in the network
+			// For example:
+			// status := node.Status()
+			// p.Broadcast(P2PTransaction{
+			// 	Tx:     Tx{ID: NewUUID()},
+			// 	Target: "node",
+			// 	Action: "status",
+			// 	Data:   status,
+			// })
+		case "add":
+			// Add a new node to the network
+			// For example, you can add a new node by calling p.RegisterNode(node)
+			// and then broadcast the new node to all nodes in the network
+			// For example:
+			// p.RegisterNode(node)
+			// p.Broadcast(P2PTransaction{
+			// 	Tx:     Tx{ID: NewUUID()},
+			// 	Target: "node",
+			// 	Action: "add",
+			// 	Data:   node,
+			// })
+		case "remove":
+			// Remove a node from the network
+			// For example, you can remove a node by calling p.RemoveNode(node)
+			// and then broadcast the removed node to all nodes in the network
+			// For example:
+			// p.RemoveNode(node)
+			// p.Broadcast(P2PTransaction{
+			// 	Tx:     Tx{ID: NewUUID()},
+			// 	Target: "node",
+			// 	Action: "remove",
+			// 	Data:   node,
+			// })
+		case "register":
+			// Register a new node to the network
+			// For example, you can register a new node by calling p.RegisterNode(node)
+			// and then broadcast the new node to all nodes in the network
+			// For example:
+			// p.RegisterNode(node)
+			// p.Broadcast(P2PTransaction{
+			// 	Tx:     Tx{ID: NewUUID()},
+			// 	Target: "node",
+			// 	Action: "register",
+			// 	Data:   node,
+			// })
+		default:
+			fmt.Printf("Unknown transaction: %s\n", tx.ID)
+		}
+
 	}
 
 	// Clear the queue
@@ -70,9 +141,8 @@ func (p *P2P) Broadcast(tx P2PTransaction) {
 	for _, node := range p.nodes {
 		// Send the transaction to each node
 		node.ProcessP2PTransaction(tx)
+		fmt.Printf("Broadcasted transaction: %s\n", tx.ID)
 	}
-
-	fmt.Printf("Broadcasted transaction: %s\n", tx.ID)
 }
 
 // StartP2P starts the P2P network.

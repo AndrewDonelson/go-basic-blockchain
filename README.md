@@ -1,6 +1,10 @@
 # go-basic-blockchain
 A Basic Blockchain written from scratch and not using any 3rd party blockchain (go-ethereum, bitcoin, etc) to teach others.
 
+Here is a current screenshot of a debug session:
+
+![Screenshot](./screenshot.png)
+
 ## Unleashing the Power of Dynamic Transactions in Blockchain: The Future of Digital Interactions
 
 The rise of blockchain technology has transformed the landscape of the digital world, promising to redefine the paradigms of trust, security, and efficiency in transactions. At the heart of this evolution lies an innovative concept known as dynamic transactions. This blockchain feature could unlock a whole new realm of applications if thoroughly expanded upon, effectively transcending the constraints of traditional static transactions. 
@@ -50,17 +54,18 @@ Dynamic transactions present a fascinating opportunity to expand the application
 - [x] Basic Blockchain
 - [x] Proof of Work
 - [x] Transactions
+- [x] Dynamic In memory Transaction Lookup
 - [x] Wallets
 - [x] Mining Rewards
-- [ ] Network
-- [ ] Consensus
+- [ ] Network (pending)
+- [ ] Consensus (pending)
 - [x] Persistence
-- [ ] CLI
+- [ ] CLI (pending)
 - [x] Web Interface
 - [x] Makefile (build, run, test, etc)
 - [x] Docker
 - [x] Tests
-- [ ] Documentation
+- [ ] Documentation (last priority)
 
 ## What is a Blockchain
 
