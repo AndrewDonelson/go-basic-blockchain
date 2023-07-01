@@ -27,6 +27,7 @@ type Transaction interface {
 	Process() string
 	GetProtocol() string
 	GetID() string
+	GetHash() string
 	GetSignature() string
 	GetSenderWallet() *Wallet
 	Sign(privPEM []byte) (string, error)
@@ -51,7 +52,7 @@ type Tx struct {
 	Status    string    // Status of the transaction (pending, confirmed, inserted, failed)
 	BlockNum  int       // Block number the transaction was inserted into
 	Signature string    // Signature of the transaction
-	hash      []byte    // Hash of the transaction
+	hash      string    // Hash of the transaction
 }
 
 // NewTransaction creates a new Base transaction with no protocol. This is used for coinbase transactions.
@@ -113,8 +114,28 @@ func (t *Tx) GetID() string {
 	return t.ID
 }
 
+func (t *Tx) GetHash() string {
+	return t.hash
+}
+
 // String returns a string representation of the transaction.
 func (t *Tx) String() string {
+	return fmt.Sprintf("%s%v%s%s%s%s%f%s%d%s",
+		t.ID,
+		t.Time,
+		t.Version,
+		t.Protocol,
+		t.From.GetAddress(),
+		t.To.GetAddress(),
+		t.Fee,
+		t.Status,
+		t.BlockNum,
+		t.Signature,
+	)
+}
+
+// String returns a string representation of the transaction.
+func (t *Tx) Log() string {
 	return fmt.Sprintf("Transaction %s from %s to %s", t.ID, t.From.GetAddress(), t.To.GetAddress())
 }
 
@@ -125,8 +146,13 @@ func (t *Tx) Hex() string {
 
 // Hash returns the hash of the transaction as a string.
 func (t *Tx) Hash() string {
-	hash := sha256.Sum256(t.Bytes())
-	return hex.EncodeToString(hash[:])
+	// make a copy and clear the hash property
+	txCopy := *t
+	txCopy.hash = ""
+
+	hash := sha256.Sum256(txCopy.Bytes())
+	t.hash = hex.EncodeToString(hash[:])
+	return t.hash
 }
 
 // Bytes returns the serialized byte representation of the transaction.

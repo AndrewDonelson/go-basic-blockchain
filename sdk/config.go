@@ -244,26 +244,29 @@ func NewConfig() *Config {
 	}
 
 	// step 6: display config values that will be used
-	fmt.Println("Using these Configuration Values:")
-	fmt.Printf("- Blockchain Name: %s\n", cfg.BlockchainName)
-	fmt.Printf("- Blockchain Symbol: %s\n", cfg.BlockchainSymbol)
-	fmt.Printf("- Block Time: %d seconds\n", cfg.BlockTime)
-	fmt.Printf("- Difficulty: %d\n", cfg.Difficulty)
-	fmt.Printf("- Transaction Fee: %.2f\n", cfg.TransactionFee)
-	fmt.Printf("- Miner Reward Percentage: %.2f%%\n", cfg.MinerRewardPCT)
-	fmt.Printf("- Miner Address: %s\n", cfg.MinerAddress)
-	fmt.Printf("- Developer Reward Percentage: %.2f%%\n", cfg.DevRewardPCT)
-	fmt.Printf("- Developer Address: %s\n", cfg.DevAddress)
-	fmt.Printf("- API Hostname: %s\n", cfg.APIHostName)
-	fmt.Printf("- Enable API: %v\n", cfg.EnableAPI)
-	fmt.Printf("- Fund Wallet Amount: %.2f\n", cfg.FundWalletAmount)
-	fmt.Printf("- Token Count: %d\n", cfg.TokenCount)
-	fmt.Printf("- Token Price: %.2f\n", cfg.TokenPrice)
-	fmt.Printf("- Allow New Tokens: %v\n", cfg.AllowNewTokens)
-	fmt.Printf("- Data Path: %s\n", cfg.DataPath)
 
 	return cfg
 
+}
+
+func (c *Config) Show() {
+	fmt.Println("Using these Configuration Values:")
+	fmt.Printf("- Blockchain Name: %s\n", c.BlockchainName)
+	fmt.Printf("- Blockchain Symbol: %s\n", c.BlockchainSymbol)
+	fmt.Printf("- Block Time: %d seconds\n", c.BlockTime)
+	fmt.Printf("- Difficulty: %d\n", c.Difficulty)
+	fmt.Printf("- Transaction Fee: %.2f\n", c.TransactionFee)
+	fmt.Printf("- Miner Reward Percentage: %.2f%%\n", c.MinerRewardPCT)
+	fmt.Printf("- Miner Address: %s\n", c.MinerAddress)
+	fmt.Printf("- Developer Reward Percentage: %.2f%%\n", c.DevRewardPCT)
+	fmt.Printf("- Developer Address: %s\n", c.DevAddress)
+	fmt.Printf("- API Hostname: %s\n", c.APIHostName)
+	fmt.Printf("- Enable API: %v\n", c.EnableAPI)
+	fmt.Printf("- Fund Wallet Amount: %.2f\n", c.FundWalletAmount)
+	fmt.Printf("- Token Count: %d\n", c.TokenCount)
+	fmt.Printf("- Token Price: %.2f\n", c.TokenPrice)
+	fmt.Printf("- Allow New Tokens: %v\n", c.AllowNewTokens)
+	fmt.Printf("- Data Path: %s\n", c.DataPath)
 }
 
 // Path returns the path to the executable file

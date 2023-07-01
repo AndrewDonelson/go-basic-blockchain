@@ -51,12 +51,6 @@ func (ls *LocalStorage) setup() {
 		log.Fatal(err)
 	}
 
-	// Create the transactions directory if it doesn't exist
-	err = os.MkdirAll(filepath.Join(ls.dataPath, "transactions"), 0755)
-	if err != nil {
-		log.Fatal(err)
-	}
-
 	// Create the wallets directory if it doesn't exist
 	err = os.MkdirAll(filepath.Join(ls.dataPath, "wallets"), 0755)
 	if err != nil {
@@ -69,15 +63,14 @@ func (ls *LocalStorage) setup() {
 func (ls *LocalStorage) file(t interface{}) (filePath string, err error) {
 
 	switch tt := t.(type) {
-	case *Node:
+	case *NodePersistData:
 		filePath = filepath.Join(ls.dataPath, "node.json")
-	case *Blockchain:
+	case *BlockchainPersistData:
 		filePath = filepath.Join(ls.dataPath, "blockchain.json")
 	case *Block:
-		//filePath = filepath.Join(ls.dataPath, "blocks", fmt.Sprintf("%v.json", t.(*Block).Index))
 		filePath = filepath.Join(ls.dataPath, "blocks", fmt.Sprintf("%s.json", (t.(*Block).Index).String()))
 	case *Wallet:
-		filePath = filepath.Join(ls.dataPath, "wallets", t.(Wallet).Address+".json")
+		filePath = filepath.Join(ls.dataPath, "wallets", tt.Address+".json")
 	default:
 		err = fmt.Errorf("unsupported type [%T]", tt)
 	}
