@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"html/template"
+	"io/ioutil"
 	"log"
 	"net/http"
 	"strconv"
@@ -34,6 +35,7 @@ import (
 //     	GET		/version												# Version
 //     	GET		/info													# General Chain/Project Info
 //     	GET		/health													# Health
+//     	POST	/consensus/p2p											# P2P Broadcast Message to 1/3, then 2/3, then all nodes
 //     	POST	/consensus/tx											# Incomming TX from another node that needs to be validated and returned
 //     	POST	/consensus/block										# Incomming Block from another node that needs to be validated and returned
 //     	GET		/blockchain												# Blockchain state
@@ -181,6 +183,7 @@ func (api *API) registerRoutes() {
 	consensusRouter := mux.NewRouter().PathPrefix("/consensus").Subrouter()
 	consensusRouter.Use(authenticateNode)
 
+	consensusRouter.HandleFunc("/p2p", api.handleConsensusP2P).Methods("POST")
 	consensusRouter.HandleFunc("/tx", api.handleConsensusTx).Methods("POST")
 	consensusRouter.HandleFunc("/block", api.handleConsensusBlock).Methods("POST")
 
@@ -309,6 +312,32 @@ func (api *API) handleInfo(w http.ResponseWriter, r *http.Request) {
 func (api *API) handleHealth(w http.ResponseWriter, r *http.Request) {
 	// Return "Not Yet Implemented"
 	w.Write([]byte("Not Yet Implemented"))
+}
+
+// handleConsensusP2P handles the consensus/P2P endpoint. This is used to recieve and process a Broadcast a Message to 1/3. Upon validation it is then
+// broadcast to 2/3 of all nodes. Finally upon validation it is Broadcast to all nodes
+// 1. get the post data and unmarshal it into a P2PTransaction
+// 2. Add the transaction to the P2P queue
+func (api *API) handleConsensusP2P(w http.ResponseWriter, r *http.Request) {
+	// get the post data and unmarshal it into a P2PTransaction
+	data, err := ioutil.ReadAll(r.Body)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	var tx P2PTransaction
+	err = json.Unmarshal(data, &tx)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	// 2. Add the transaction to the P2P queue
+	node.P2P.AddTransaction(tx)
+
+	// Return a 201 response to indicate the transaction was queued successfully
+	w.WriteHeader(http.StatusCreated)
 }
 
 // handleConsensusTx handles the consensus/tx endpoint.

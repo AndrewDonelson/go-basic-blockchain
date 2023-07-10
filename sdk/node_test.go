@@ -4,28 +4,101 @@ package sdk
 
 import (
 	"testing"
-	"time"
-
-	"github.com/stretchr/testify/assert"
 )
 
-func TestNodeRun(t *testing.T) {
-	node := NewNode()
+// TestNewNode tests the NewNode func
+func TestNewNode(t *testing.T) {
+	// Create a 1st Node instance
+	node1 := NewNode(nil)
+	if !node1.IsReady() {
+		t.Errorf("Failed to create 1st Node instance")
+	}
 
-	// Test running the node with the API enabled
-	go node.Run()
+	// Create a 2nd Node instance
+	node2 := NewNode(nil)
+	if !node1.IsReady() {
+		t.Errorf("Failed to create 2nd Node instance")
+	}
 
-	// Let the node run for a short duration
-	// You can add more specific tests here if needed
-	sleepDuration := 1 * time.Second
-	time.Sleep(sleepDuration)
+	// Check if the two node instances are different
+	if node1.ID == node2.ID {
+		t.Errorf("1st Node instance ID and 2nd Node instance ID are same")
+	}
 
-	// Ensure that the node API is running
-	assert.Equal(t, true, node.API.IsRunning())
 }
 
-func TestNodeRunCoverage(t *testing.T) {
-	// Test additional scenarios here to achieve full code coverage
-	// For example, you can test different configurations and edge cases
-	// to ensure that all branches of the code are exercised
+// TestRegister tests the Register func
+func TestRegister(t *testing.T) {
+
+	// Create 3 node instances
+	node1 := NewNode(nil)
+	node2 := NewNode(nil)
+	node3 := NewNode(nil)
+
+	// Register the nodes with the P2P network
+	node1.Register()
+	node2.Register()
+	node3.Register()
+
+	// Check if the nodes have been registered successfully
+	if !node1.P2P.IsRegistered(node1.ID) || !node2.P2P.IsRegistered(node2.ID) || !node3.P2P.IsRegistered(node3.ID) {
+		t.Errorf("Failed to register nodes with P2P network")
+	}
+
+}
+
+// TestAddTransaction tests the AddTransaction func
+func TestAddTransaction(t *testing.T) {
+
+	// Create a dummy P2P transaction
+	tx := P2PTransaction{
+		Tx:     Tx{ID: "0x0123456789"},
+		Target: "node",
+		Action: "register",
+		Data:   "example node data",
+	}
+
+	// Create 3 node instances
+	node1 := NewNode(nil)
+	node2 := NewNode(nil)
+	node3 := NewNode(nil)
+
+	// Add the transaction to each node's P2P network
+	node1.P2P.AddTransaction(tx)
+	node2.P2P.AddTransaction(tx)
+	node3.P2P.AddTransaction(tx)
+
+	// Check if the transaction has been added successfully
+	if !node1.P2P.HasTransaction("0x0123456789") || !node2.P2P.HasTransaction("0x0123456789") || !node3.P2P.HasTransaction("0x0123456789") {
+		t.Errorf("Failed to add transaction to transactions queue")
+	}
+
+}
+
+// TestBroadcast tests the Broadcast func
+func TestBroadcast(t *testing.T) {
+
+	// Create a dummy P2P transaction
+	tx := P2PTransaction{
+		Tx:     Tx{ID: "0x1234567890"},
+		Target: "node",
+		Action: "add",
+		Data:   "example node data",
+	}
+
+	// Create 3 node instances
+	node1 := NewNode(nil)
+	node2 := NewNode(nil)
+	node3 := NewNode(nil)
+
+	// Broadcast the transaction to each node's P2P network
+	node1.P2P.Broadcast(tx)
+	node2.P2P.Broadcast(tx)
+	node3.P2P.Broadcast(tx)
+
+	// Check if the transaction has been broadcast successfully
+	if !node1.P2P.HasTransaction("0x1234567890") || !node2.P2P.HasTransaction("0x1234567890") || !node3.P2P.HasTransaction("0x1234567890") {
+		t.Errorf("Failed to broadcast transaction")
+	}
+
 }

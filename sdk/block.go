@@ -33,6 +33,19 @@ func (b *Block) Bytes() []byte {
 	return data
 }
 
+func (b *Block) GetTransactions(id string) []Transaction {
+	if id != "" {
+		for _, tx := range b.Transactions {
+			if tx.GetID() == id {
+				return []Transaction{tx}
+			}
+		}
+		return []Transaction{}
+	}
+
+	return b.Transactions
+}
+
 // Hash returns the hash of the transaction as a string.
 func (b *Block) hash() string {
 	// make a copy and clear the hash property
@@ -55,18 +68,6 @@ func (b *Block) save() error {
 		return err
 	}
 
-	// filename := fmt.Sprintf("%s/%s.json", blockFolder, b.Index.String())
-	// file, err := os.Create(filename)
-	// if err != nil {
-	// 	return err
-	// }
-	// defer file.Close()
-	// enc := json.NewEncoder(file)
-	// enc.SetIndent("", " ")
-	// if err := enc.Encode(b); err != nil {
-	// 	return err
-	// }
-
 	fmt.Printf("[%s] Block [%s] saved to disk.\n", time.Now().Format(logDateTimeFormat), b.Index.String())
 
 	return nil
@@ -80,16 +81,5 @@ func (b *Block) load(blockNumber big.Int) error {
 		return err
 	}
 
-	// if b.blockExists(file) {
-	// 	blockFile, err := os.Open(file)
-	// 	if err != nil {
-	// 		return err
-	// 	}
-	// 	defer blockFile.Close()
-	// 	dec := json.NewDecoder(blockFile)
-	// 	if err := dec.Decode(b); err != nil {
-	// 		return err
-	// 	}
-	// }
 	return nil
 }

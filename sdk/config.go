@@ -26,6 +26,7 @@ type Config struct {
 	DevRewardPCT     float64
 	DevAddress       string
 	APIHostName      string
+	P2PHostName      string
 	EnableAPI        bool
 	FundWalletAmount float64
 	TokenCount       int64   // This is the total number of tokens that will be created intially
@@ -54,6 +55,7 @@ func NewConfig() *Config {
 	cfg.DevRewardPCT = devRewardPCT
 	cfg.DevAddress = devAddress
 	cfg.APIHostName = apiHostname
+	cfg.P2PHostName = p2pHostname
 	cfg.EnableAPI = EnableAPI
 	cfg.FundWalletAmount = fundWalletAmount
 	cfg.TokenCount = tokenCount
@@ -167,6 +169,15 @@ func NewConfig() *Config {
 				} else {
 					fmt.Printf("Notice: Environment DEV_ADDRESS is set to %s\n", os.Getenv("DEV_ADDRESS"))
 					cfg.DevAddress = os.Getenv("DEV_ADDRESS")
+				}
+			}
+
+			if os.Getenv("P2P_HOSTNAME") != "" {
+				if os.Getenv("P2P_HOSTNAME") == p2pHostname {
+					cfg.P2PHostName = cfg.promptValue("P2P_HOSTNAME", p2pHostname, false, "string").(string)
+				} else {
+					fmt.Printf("Notice: Environment P2P_HOSTNAME is set to %s\n", os.Getenv("P2P_HOSTNAME"))
+					cfg.P2PHostName = os.Getenv("P2P_HOSTNAME")
 				}
 			}
 

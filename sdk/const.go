@@ -43,6 +43,9 @@ const (
 	// hostname & port for the API
 	apiHostname = ":8000"
 
+	// hostname & port for the P2P server
+	p2pHostname = ":8001"
+
 	// default Amount to fund new wallets is 100 coins
 	fundWalletAmount = 100.0
 

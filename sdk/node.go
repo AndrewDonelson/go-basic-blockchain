@@ -9,6 +9,28 @@ import (
 	"github.com/pborman/uuid"
 )
 
+type NodeOptions struct {
+	// EnvName is the environment filename name (.XXXXX)
+	EnvName string
+
+	// DataPath is the path to the node data directory
+	DataPath string
+
+	// Config is the custom node configuration
+	Config *Config
+}
+
+func NewNodeOptions(envName string, path string, cfg *Config) *NodeOptions {
+	nodeOptions := &NodeOptions{
+		EnvName:  envName,
+		DataPath: path,
+		Config:   cfg,
+	}
+
+	nodeOptions.Config.DataPath = path
+	return nodeOptions
+}
+
 // NodePersistData is the data that is persisted for a node to disk.
 type NodePersistData struct {
 	ID     string
@@ -17,6 +39,9 @@ type NodePersistData struct {
 
 // Node is a node in the blockchain network.
 type Node struct {
+	// this will ne true if the node is initialized and is validated & ready for use
+	initialized bool
+
 	// ID is the unique node ID
 	ID string
 
@@ -37,11 +62,16 @@ type Node struct {
 var node *Node
 
 // NewNode returns a new node instance.
-func NewNode() *Node {
+func NewNode(opts *NodeOptions) *Node {
 
 	// Create a new default node instance
 	node = &Node{}
-	node.Config = NewConfig()
+
+	if opts != nil {
+		node.Config = opts.Config
+	} else {
+		node.Config = NewConfig()
+	}
 
 	// Create a new node LocalStorage instance
 	localStorage = NewLocalStorage(node.Config.DataPath)
@@ -67,7 +97,13 @@ func NewNode() *Node {
 	// Show the node config
 	node.Config.Show()
 
+	node.initialized = true
+
 	return node
+}
+
+func (n *Node) IsReady() bool {
+	return n.initialized
 }
 
 func (n *Node) save() error {
