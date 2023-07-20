@@ -1,5 +1,7 @@
 # go-basic-blockchain
-A Basic Blockchain written from scratch and not using any 3rd party blockchain (go-ethereum, bitcoin, etc) to teach others.
+A Basic Blockchain written from scratch and not using any 3rd party blockchain (go-Ethereum, bitcoin, Tindermint (Cosmos), etc to teach others as well as show skills
+
+!!! NOT FOR PRODUCTION USE !!!
 
 Here is a current screenshot of a debug session:
 
