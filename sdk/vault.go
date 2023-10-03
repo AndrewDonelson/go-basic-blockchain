@@ -48,14 +48,17 @@ func (p *PEM) Decode(pemEncoded string, pemEncodedPub string) (*ecdsa.PrivateKey
 	return privateKey, publicKey
 }
 
+// GetPrivate returns the PEM encoded private key
 func (p *PEM) GetPrivate() string {
 	return p.PrivateKey
 }
 
+// GetPublic returns the PEM encoded public key
 func (p *PEM) GetPublic() string {
 	return p.PublicKey
 }
 
+// AsBytes returns the PEM encoded keys as bytes
 func (p *PEM) AsBytes(s string) []byte {
 	return []byte(s)
 }
@@ -101,10 +104,12 @@ func (v *Vault) NewKeyPair() (err error) {
 	return nil
 }
 
+// PrivatePEM returns the private key
 func (v *Vault) PrivatePEM() string {
 	return v.Pem.GetPrivate()
 }
 
+// PublicPEM returns the public key
 func (v *Vault) PublicPEM() string {
 	return v.Pem.GetPublic()
 }

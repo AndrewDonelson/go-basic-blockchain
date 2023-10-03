@@ -14,6 +14,7 @@ import (
 	"time"
 )
 
+// State is the state of the blockchain.
 type State struct {
 }
 
@@ -83,6 +84,7 @@ func (bc *Blockchain) DisplayStatus() {
 	}
 }
 
+// Load loads the blockchain state from disk.
 func (bc *Blockchain) Load() error {
 	bc.mux.Lock()
 	defer bc.mux.Unlock()
@@ -102,6 +104,7 @@ func (bc *Blockchain) Load() error {
 	return err
 }
 
+// Save saves the blockchain state to disk.
 func (bc *Blockchain) Save() error {
 	data := &BlockchainPersistData{
 		TXLookup:       bc.TXLookup.index.Get(),

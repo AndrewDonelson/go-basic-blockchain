@@ -10,7 +10,9 @@ import (
 var (
 	// ErrNoArgs is returned when the program is started with no arguments
 	ErrNoArgs = errors.New("no arguments")
-	Args      *Arguments
+
+	// Args is the global Arguments instance
+	Args *Arguments
 )
 
 // Arguments handles parsing arguments and displaying usage information
@@ -41,6 +43,7 @@ func init() {
 	Args = NewArguments()
 }
 
+// NewArguments creates a new Arguments instance
 func NewArguments() *Arguments {
 	return &Arguments{
 		Arguments: make(map[string]*Argument),

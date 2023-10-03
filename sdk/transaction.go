@@ -37,7 +37,7 @@ type Transaction interface {
 	Hex() string
 	Hash() string
 	Bytes() []byte
-	Json() string
+	JSON() string
 }
 
 // Tx is a transaction that represents a generic transaction.
@@ -114,6 +114,7 @@ func (t *Tx) GetID() string {
 	return t.ID
 }
 
+// GetHash returns the hash of the transaction.
 func (t *Tx) GetHash() string {
 	return t.hash
 }
@@ -134,7 +135,7 @@ func (t *Tx) String() string {
 	)
 }
 
-// String returns a string representation of the transaction.
+// Log returns a string with the log of the transaction.
 func (t *Tx) Log() string {
 	return fmt.Sprintf("Transaction %s from %s to %s", t.ID, t.From.GetAddress(), t.To.GetAddress())
 }
@@ -161,8 +162,8 @@ func (t *Tx) Bytes() []byte {
 	return data
 }
 
-// Json returns the JSON representation of the transaction as a string.
-func (t *Tx) Json() string {
+// JSON returns the JSON representation of the transaction as a string.
+func (t *Tx) JSON() string {
 	data, _ := json.MarshalIndent(t, "", "  ")
 	return string(data)
 }
@@ -188,6 +189,7 @@ func (t *Tx) Send(bc *Blockchain) error {
 	return nil
 }
 
+// Sign signs the transaction with the provided private key.
 func (t *Tx) Sign(privPEM []byte) (string, error) {
 
 	txBytes, err := json.Marshal(t)
@@ -222,6 +224,7 @@ func (t *Tx) Sign(privPEM []byte) (string, error) {
 	return base64.StdEncoding.EncodeToString(sign), nil
 }
 
+// Verify verifies the signature of the transaction with the provided public key.
 func (t *Tx) Verify(pubKey []byte, sign string) (bool, error) {
 
 	txBytes, err := json.Marshal(t)

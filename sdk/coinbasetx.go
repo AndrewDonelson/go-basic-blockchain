@@ -6,7 +6,7 @@ import (
 	"fmt"
 )
 
-// Bank is a transaction that represents a bank transfer.
+// Coinbase is the Coinbase transaction.
 type Coinbase struct {
 	Tx
 	BlockchainName   string
@@ -24,7 +24,7 @@ type Coinbase struct {
 	AllowNewTokens   bool
 }
 
-// NewBankTransaction creates a new Bank transaction.
+// NewCoinbaseTransaction creates a new Coinbase transaction.
 func NewCoinbaseTransaction(from *Wallet, to *Wallet, cfg *Config) (*Coinbase, error) {
 	tx, err := NewTransaction(CoinbaseProtocolID, from, to)
 	if err != nil {

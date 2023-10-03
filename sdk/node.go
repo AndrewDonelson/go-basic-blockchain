@@ -9,6 +9,7 @@ import (
 	"github.com/pborman/uuid"
 )
 
+// NodeOptions is the options for a node.
 type NodeOptions struct {
 	// EnvName is the environment filename name (.XXXXX)
 	EnvName string
@@ -20,6 +21,7 @@ type NodeOptions struct {
 	Config *Config
 }
 
+// NewNodeOptions creates a new NodeOptions instance.
 func NewNodeOptions(envName string, path string, cfg *Config) *NodeOptions {
 	nodeOptions := &NodeOptions{
 		EnvName:  envName,
@@ -102,10 +104,12 @@ func NewNode(opts *NodeOptions) *Node {
 	return node
 }
 
+// IsReady returns true if the node is ready for use.
 func (n *Node) IsReady() bool {
 	return n.initialized
 }
 
+// save saves the node state to disk.
 func (n *Node) save() error {
 	// Create the node persist data
 	data := &NodePersistData{
@@ -125,6 +129,7 @@ func (n *Node) save() error {
 	return nil
 }
 
+// load loads the node state from disk.
 func (n *Node) load() error {
 	// Load the node state from disk
 	data := &NodePersistData{}
@@ -167,6 +172,7 @@ func (n *Node) ProcessP2PTransaction(tx P2PTransaction) {
 	fmt.Printf("Processing P2P transaction: %s (%s)\n", tx.ID, tx.Protocol)
 }
 
+// Register registers the node with the P2P network.
 // Example usage:
 func (n *Node) Register() {
 	// Register the node with the P2P network

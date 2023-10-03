@@ -33,6 +33,7 @@ func (b *Block) Bytes() []byte {
 	return data
 }
 
+// GetTransactions returns the transactions in the block.
 func (b *Block) GetTransactions(id string) []Transaction {
 	if id != "" {
 		for _, tx := range b.Transactions {

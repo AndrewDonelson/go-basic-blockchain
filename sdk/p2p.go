@@ -1,4 +1,4 @@
-// Package: sdk is a software development kit for building blockchain applications.
+// Package sdk is a software development kit for building blockchain applications.
 // File: sdk/p2p.go
 package sdk
 
@@ -13,34 +13,49 @@ import (
 type P2PTransactionState int
 
 const (
-	P2PTX_NONE     = iota // 0) NONE - Message is not broadcasted
-	P2PTX_QUEUED          // 1) QUEUED - Message is queued for broadcast
-	P2PTX_PND13           // 2) PND13 - Message is broadcasted to random 1/3 of nodes and is waiting on validations
-	P2PTX_VALID           // 3) VALID - Message is broadcasted to random 1/3 of nodes and received all 1/3 validations
-	P2PTX_PND23           // 4) PND23 - Message is broadcasted to random 2/3 of nodes and is waiting on validations
-	P2PTX_FINAL           // 5) FINAL - Message is broadcasted to random 2/3 of nodes and received all 2/3 validations
-	P2PTX_PND             // 6) PND - Message is broadcasted to all nodes and is waiting on validations
-	P2PTX_ARCHIVED        // 7) ARCHIVED - Message is broadcasted to all nodes and received all validations
+	// P2PTxNone is the initial state of a P2P transaction 0) NONE - Message is not broadcasted
+	P2PTxNone = iota
+
+	// P2PTxQueued is the state of a P2P transaction 1) QUEUED - Message is queued for broadcast
+	P2PTxQueued
+
+	// P2PTxPnd13 is the state of a P2P transaction 2) PND13 - Message is broadcasted to random 1/3 of nodes and is waiting on validations
+	P2PTxPnd13
+
+	// P2PTxValid is the state of a P2P transaction 3) VALID - Message is broadcasted to random 1/3 of nodes and received all 1/3 validations
+	P2PTxValid
+
+	// P2PTxPnd23 is the state of a P2P transaction 4) PND23 - Message is broadcasted to random 2/3 of nodes and is waiting on validations
+	P2PTxPnd23
+
+	// P2PTxFinal is the state of a P2P transaction 5) FINAL - Message is broadcasted to random 2/3 of nodes and received all 2/3 validations
+	P2PTxFinal
+
+	// P2PTxPnd is the state of a P2P transaction 6) PND - Message is broadcasted to all nodes and is waiting on validations
+	P2PTxPnd
+
+	// P2PTxArchived is the state of a P2P transaction 7) ARCHIVED - Message is broadcasted to all nodes and received all validations
+	P2PTxArchived
 )
 
 // String returns the string representation of the P2PTransactionState
 func (p *P2PTransactionState) String() string {
 	switch *p {
-	case P2PTX_NONE:
+	case P2PTxNone:
 		return "NONE"
-	case P2PTX_QUEUED:
+	case P2PTxQueued:
 		return "QUEUED"
-	case P2PTX_PND13:
+	case P2PTxPnd13:
 		return "PND13"
-	case P2PTX_VALID:
+	case P2PTxValid:
 		return "VALID"
-	case P2PTX_PND23:
+	case P2PTxPnd23:
 		return "PND23"
-	case P2PTX_FINAL:
+	case P2PTxFinal:
 		return "FINAL"
-	case P2PTX_PND:
+	case P2PTxPnd:
 		return "PND"
-	case P2PTX_ARCHIVED:
+	case P2PTxArchived:
 		return "ARCHIVED"
 	default:
 		return "UNKNOWN"
@@ -51,21 +66,21 @@ func (p *P2PTransactionState) String() string {
 func (p *P2PTransactionState) Value(s string) int {
 	switch strings.ToUpper(s) {
 	case "NONE":
-		return P2PTX_NONE
+		return P2PTxNone
 	case "QUEUED":
-		return P2PTX_QUEUED
+		return P2PTxQueued
 	case "PND13":
-		return P2PTX_PND13
+		return P2PTxPnd13
 	case "VALID":
-		return P2PTX_VALID
+		return P2PTxValid
 	case "PND23":
-		return P2PTX_PND23
+		return P2PTxPnd23
 	case "FINAL":
-		return P2PTX_FINAL
+		return P2PTxFinal
 	case "PND":
-		return P2PTX_PND
+		return P2PTxPnd
 	case "ARCHIVED":
-		return P2PTX_ARCHIVED
+		return P2PTxArchived
 	default:
 		return -1
 	}
@@ -75,24 +90,24 @@ func (p *P2PTransactionState) Value(s string) int {
 // Next returns the next state of the P2PTransactionState
 func (p *P2PTransactionState) Next() {
 	switch *p {
-	case P2PTX_NONE:
-		*p = P2PTX_QUEUED
-	case P2PTX_QUEUED:
-		*p = P2PTX_PND13
-	case P2PTX_PND13:
-		*p = P2PTX_VALID
-	case P2PTX_VALID:
-		*p = P2PTX_PND23
-	case P2PTX_PND23:
-		*p = P2PTX_FINAL
-	case P2PTX_FINAL:
-		*p = P2PTX_PND
-	case P2PTX_PND:
-		*p = P2PTX_ARCHIVED
-	case P2PTX_ARCHIVED:
-		*p = P2PTX_ARCHIVED
+	case P2PTxNone:
+		*p = P2PTxQueued
+	case P2PTxQueued:
+		*p = P2PTxPnd13
+	case P2PTxPnd13:
+		*p = P2PTxValid
+	case P2PTxValid:
+		*p = P2PTxPnd23
+	case P2PTxPnd23:
+		*p = P2PTxFinal
+	case P2PTxFinal:
+		*p = P2PTxPnd
+	case P2PTxPnd:
+		*p = P2PTxArchived
+	case P2PTxArchived:
+		*p = P2PTxArchived
 	default:
-		*p = P2PTX_NONE
+		*p = P2PTxNone
 	}
 }
 
@@ -353,8 +368,8 @@ func (p *P2P) Start() {
 	//log.Fatal(http.ListenAndServe(apiHostname, api.router))
 }
 
-// StartP2P starts the P2P network.
-func (p *P2P) Start_Old() {
+// StartOld starts the P2P network.
+func (p *P2P) StartOld() {
 	// Start processing the transaction queue
 	go func() {
 		for {

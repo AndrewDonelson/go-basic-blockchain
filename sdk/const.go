@@ -41,10 +41,10 @@ const (
 	devAddress = "DEV" // will be supplied by the genesis block
 
 	// hostname & port for the API
-	apiHostname = ":8000"
+	apiHostname = ":8100"
 
 	// hostname & port for the P2P server
-	p2pHostname = ":8001"
+	p2pHostname = ":8101"
 
 	// default Amount to fund new wallets is 100 coins
 	fundWalletAmount = 100.0

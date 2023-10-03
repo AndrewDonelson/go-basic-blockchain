@@ -228,6 +228,7 @@ func (w *Wallet) PrivateBytes() ([]byte, error) {
 	return bytes, nil
 }
 
+// PrivatePEM returns the PEM representation of the private key.
 func (w *Wallet) PrivatePEM() string {
 	if w.Encrypted {
 		return ""
@@ -271,6 +272,7 @@ func (w *Wallet) PublicBytes() ([]byte, error) {
 	return bytes, nil
 }
 
+// PublicPEM returns the PEM representation of the public key.
 func (w *Wallet) PublicPEM() string {
 	if w.Encrypted {
 		return ""

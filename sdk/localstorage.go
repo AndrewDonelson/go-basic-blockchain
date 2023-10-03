@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 )
 
+// LocalStorageOptions represents the options for the LocalStorage data persist manager.
 type LocalStorageOptions struct {
 	DataPath       string // path where all data is stored
 	NodePrivateKey string // private key of the node (if you want to encrypt data)
@@ -21,6 +22,7 @@ type LocalStorage struct {
 
 var localStorage *LocalStorage
 
+// NewLocalStorage creates a new LocalStorage instance.
 func NewLocalStorage(dataPath string) *LocalStorage {
 	// Create the LocalStorage instance
 	localStorage = &LocalStorage{}
@@ -38,6 +40,7 @@ func NewLocalStorage(dataPath string) *LocalStorage {
 	return localStorage
 }
 
+// setup performs any initial setup or data loading if needed
 func (ls *LocalStorage) setup() {
 	// Create the data directory if it doesn't exist
 	err := os.MkdirAll(ls.dataPath, 0755)
@@ -78,6 +81,7 @@ func (ls *LocalStorage) file(t interface{}) (filePath string, err error) {
 	return filePath, err
 }
 
+// Get returns the data for the given key
 func (ls *LocalStorage) Get(key string, v interface{}) error {
 	filePath, err := ls.file(v)
 	if err != nil {
@@ -100,6 +104,7 @@ func (ls *LocalStorage) Get(key string, v interface{}) error {
 	return nil
 }
 
+// Set sets the data for the given key
 func (ls *LocalStorage) Set(key string, v interface{}) error {
 	filePath, err := ls.file(v)
 	if err != nil {
@@ -122,6 +127,7 @@ func (ls *LocalStorage) Set(key string, v interface{}) error {
 	return nil
 }
 
+// Find finds data based on the given criteria
 func (ls *LocalStorage) Find(criteria interface{}) ([]interface{}, error) {
 	// Implement the logic to find data based on the given criteria using file system operations
 
@@ -148,23 +154,27 @@ func (ls *LocalStorage) Find(criteria interface{}) ([]interface{}, error) {
 	}
 }
 
+// NodeData represents the data persisted for a node.
 type NodeData struct {
 	ID   string
 	Name string
 	// Additional fields as needed
 }
 
+// BlockchainData represents the data persisted for a blockchain.
 type BlockchainData struct {
 	ID      string
 	Version string
 	// Additional fields as needed
 }
 
+// BlockQueryCriteria represents the criteria for querying blocks.
 type BlockQueryCriteria struct {
 	Number int
 	// Additional criteria fields as needed
 }
 
+// TransactionQueryCriteria represents the criteria for querying transactions.
 type TransactionQueryCriteria struct {
 	Amount float64
 	// Additional criteria fields as needed

@@ -260,6 +260,7 @@ func NewConfig() *Config {
 
 }
 
+// Show displays the configuration values that will be used.
 func (c *Config) Show() {
 	fmt.Println("Using these Configuration Values:")
 	fmt.Printf("- Blockchain Name: %s\n", c.BlockchainName)
