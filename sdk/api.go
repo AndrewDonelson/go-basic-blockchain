@@ -13,7 +13,16 @@ import (
 	"time"
 
 	"github.com/gorilla/mux"
+	"github.com/op/go-logging"
 )
+
+// This is used for the API key middleware and this particular value is testing only. change to use your own
+const serverSeed = "0ebe1955e527d0a3f354315d0af97e88be3d4a499c9dacd0d947bf1bd5c71bca"
+
+// ErrorResponse represents the structure of an error response.
+type ErrorResponse struct {
+	Message string `json:"message"`
+}
 
 // Blockchain API
 //
@@ -64,7 +73,18 @@ import (
 type API struct {
 	bc      *Blockchain
 	router  *mux.Router
+	log     *logging.Logger
 	running bool
+}
+
+var publicPaths = []string{
+	"/",
+	"/version",
+	"/info",
+	"/health",
+	"/account/register",
+	"/account/login",
+	"/account/verify",
 }
 
 // NewAPI creates a new instance of the blockchain API.
@@ -72,6 +92,7 @@ func NewAPI(bc *Blockchain) *API {
 	// Initialize the Gorilla Mux router
 	api := &API{
 		bc:     bc,
+		log:    logging.MustGetLogger("api"),
 		router: mux.NewRouter(),
 	}
 
@@ -82,8 +103,31 @@ func NewAPI(bc *Blockchain) *API {
 	return api
 }
 
+// RespondError sends an error response with the given status code and message.
+func RespondError(w http.ResponseWriter, statusCode int, message string) {
+	// Set the Content-Type header and status code
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(statusCode)
+
+	// Create an ErrorResponse instance
+	errorResponse := ErrorResponse{Message: message}
+
+	// Encode and send the error message as JSON
+	json.NewEncoder(w).Encode(errorResponse)
+}
+
+func isPublicPath(path string) bool {
+	for _, publicPath := range publicPaths {
+		if path == publicPath {
+			return true
+		}
+	}
+	return false
+}
+
 func authenticateNode(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		PrettyPrint(r)
 		// Perform authentication logic here
 		// Check if the node is registered and has valid credentials
 		// If authentication fails, return an error or redirect to an error page
@@ -148,6 +192,13 @@ func (api *API) Start() {
 	// Create a logging middleware
 	api.router.Use(loggingMiddleware)
 
+	// API key middleware
+	apiKeyMiddleware, err := ApiKeyMiddleware(defaulAPIKeytConfig, api.log)
+	if err != nil {
+		api.log.Fatal("Error initializing API key middleware:", err)
+	}
+	api.router.Use(apiKeyMiddleware)
+
 	// Start the HTTP server
 	fmt.Printf("API listening on %s\n", apiHostname)
 	api.running = true
@@ -160,6 +211,22 @@ func (api *API) registerRoutes() {
 	api.router.HandleFunc("/version", api.handleVersion).Methods("GET")
 	api.router.HandleFunc("/info", api.handleInfo).Methods("GET") // Same as / but JSON only
 	api.router.HandleFunc("/health", api.handleHealth).Methods("GET")
+
+	// Register Public Account Endpoints
+	api.router.HandleFunc("/account/register", api.handleAccountRegister).Methods("GET")
+	api.router.HandleFunc("/account/login", api.handleAccountLogin).Methods("GET")
+	api.router.HandleFunc("/account/verify", api.handleAccountVerify).Methods("GET")
+
+	// Register Private Account Endpoints
+	// api.router.HandleFunc("/account", api.handleAccount).Methods("GET")
+	// api.router.HandleFunc("/account/logout", api.handleAccountLogout).Methods("GET")
+	// api.router.HandleFunc("/account/{id}", api.handleAccount).Methods("GET")
+	// api.router.HandleFunc("/account/{id}/balance", api.handleAccountBalance).Methods("GET")
+	// api.router.HandleFunc("/account/{id}/transactions", api.handleAccountTransactions).Methods("GET")
+	// api.router.HandleFunc("/account/{id}/transactions/{id}", api.handleAccountTransaction).Methods("GET")
+	// api.router.HandleFunc("/account/{id}/transactions/{protocol}", api.handleAccountTransactionsByProtocol).Methods("GET")
+
+	// Register the blockchain endpoints
 	api.router.HandleFunc("/blockchain", api.handleBlockchain).Methods("GET")
 	api.router.HandleFunc("/blockchain/blocks", api.handleBrowseBlocks).Methods("GET")
 	api.router.HandleFunc("/blockchain/blocks/{index}", api.handleViewBlock).Methods("GET")

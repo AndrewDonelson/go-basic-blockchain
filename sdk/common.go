@@ -14,6 +14,7 @@ import (
 	"math/big"
 	"net"
 	"net/http"
+	"net/smtp"
 	"os"
 	"reflect"
 	"regexp"
@@ -223,4 +224,33 @@ func createFolder(path string) {
 		}
 		fmt.Printf("[%s] directory '%s' created.\n", time.Now().Format(logDateTimeFormat), path)
 	}
+}
+
+func SendGmail(to, subject, body string) error {
+	// Sender data.
+	from := "{config.email}"
+	password := "{config.password}"
+
+	// Receiver email address.
+	to = to
+
+	// smtp server configuration.
+	smtpHost := "smtp.gmail.com"
+	smtpPort := "587"
+
+	// Message.
+	message := []byte("To: " + to + "\r\n" +
+		"Subject: " + subject + "\r\n" +
+		"\r\n" +
+		body + "\r\n")
+
+	// Authentication.
+	auth := smtp.PlainAuth("", from, password, smtpHost)
+
+	// Sending email.
+	err := smtp.SendMail(smtpHost+":"+smtpPort, auth, from, []string{to}, message)
+	if err != nil {
+		return err
+	}
+	return nil
 }

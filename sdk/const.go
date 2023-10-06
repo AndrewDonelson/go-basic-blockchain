@@ -52,6 +52,12 @@ const (
 	// data folder is the folder where the blockchain data is stored
 	dataFolder = "../data"
 
+	// gmailEmail is the email address for the gmail account to send emails from
+	gmailEmail = ""
+
+	// gmailPassword is the password for the gmail account to send emails from (should be supplied by the environment)
+	gmailPassword = ""
+
 	// EnableAPI is a flag to enable/disable the API
 	EnableAPI = true
 

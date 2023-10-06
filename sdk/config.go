@@ -35,6 +35,8 @@ type Config struct {
 	promptUpdate     bool    // This is used internally to check if user added/changed default value from prompt
 	testing          bool    // This is used internally to check if the code is running in test mode
 	DataPath         string  // This is the path where all data is stored
+	GMailEmail       string  // This is the email address used to send emails
+	GMailPassword    string  // This is the password for the email address used to send emails
 }
 
 // NewConfig returns a new config.
@@ -246,6 +248,24 @@ func NewConfig() *Config {
 				} else {
 					fmt.Printf("Notice: Environment DATA_PATH is set to %s\n", os.Getenv("DATA_PATH"))
 					cfg.DataPath = os.Getenv("DATA_PATH")
+				}
+			}
+
+			if os.Getenv("GMAIL_EMAIL") != "" {
+				if len(gmailEmail) > 0 && os.Getenv("GMAIL_EMAIL") == gmailEmail {
+					cfg.GMailEmail = cfg.promptValue("GMAIL_EMAIL", gmailEmail, false, "string").(string)
+				} else {
+					fmt.Printf("Notice: Environment GMAIL_EMAIL is set to %s\n", os.Getenv("GMAIL_EMAIL"))
+					cfg.GMailEmail = os.Getenv("GMAIL_EMAIL")
+				}
+			}
+
+			if os.Getenv("GMAIL_PASSWORD") != "" {
+				if len(gmailPassword) > 0 && os.Getenv("GMAIL_PASSWORD") == gmailPassword {
+					cfg.GMailPassword = cfg.promptValue("GMAIL_PASSWORD", gmailPassword, false, "string").(string)
+				} else {
+					fmt.Printf("Notice: Environment GMAIL_PASSWORD is set to %s\n", os.Getenv("GMAIL_PASSWORD"))
+					cfg.GMailPassword = os.Getenv("GMAIL_PASSWORD")
 				}
 			}
 
