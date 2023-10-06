@@ -14,6 +14,9 @@
 # Test folder with output
 test/
 
+# do not allow saving of .env file
+.env
+
 # Output of the go coverage tool, specifically when used with LiteIDE
 *.out
 
