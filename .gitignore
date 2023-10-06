@@ -27,5 +27,8 @@ test/
 go.work
 
 bin/
+
+# no blockchain data folders
+_data/
 data/
 data_test/
