@@ -6,6 +6,7 @@ import (
 	"crypto/ecdsa"
 	"crypto/rand"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
@@ -226,13 +227,24 @@ func createFolder(path string) {
 	}
 }
 
-func SendGmail(to, subject, body string) error {
-	// Sender data.
-	from := "{config.email}"
-	password := "{config.password}"
+func SendGmail(to, subject, body string, cfg *Config) error {
 
-	// Receiver email address.
-	to = to
+	// Validate config settings
+	if cfg == nil {
+		return fmt.Errorf("config is nil")
+	}
+
+	// Validate recipient email address
+	if isValidEmail(to) == false {
+		return fmt.Errorf("invalid email (TO) format")
+	}
+
+	// Sender data.
+	from := cfg.GMailEmail
+	if isValidEmail(from) == false {
+		return fmt.Errorf("invalid email (FROM) format")
+	}
+	password := cfg.GMailPassword
 
 	// smtp server configuration.
 	smtpHost := "smtp.gmail.com"
@@ -252,5 +264,20 @@ func SendGmail(to, subject, body string) error {
 	if err != nil {
 		return err
 	}
+
 	return nil
+}
+
+// isValidEmail checks if the email is in a valid format
+func isValidEmail(email string) bool {
+	// Basic regex to check email format
+	var emailRegex = regexp.MustCompile(`^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$`)
+	return emailRegex.MatchString(email)
+}
+
+// generateRandomToken generates a random 256-bit token
+func generateRandomToken() string {
+	b := make([]byte, 32) // 256 bits
+	rand.Read(b)
+	return base64.URLEncoding.EncodeToString(b)
 }

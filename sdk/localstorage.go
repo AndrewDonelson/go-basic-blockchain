@@ -24,6 +24,11 @@ var localStorage *LocalStorage
 
 // NewLocalStorage creates a new LocalStorage instance.
 func NewLocalStorage(dataPath string) *LocalStorage {
+	if localStorage != nil {
+		// Return the existing instance
+		return localStorage
+	}
+
 	// Create the LocalStorage instance
 	localStorage = &LocalStorage{}
 	if dataPath == "" {
@@ -38,6 +43,14 @@ func NewLocalStorage(dataPath string) *LocalStorage {
 	localStorage.setup()
 
 	return localStorage
+}
+
+func GetLocalStorage() (*LocalStorage, error) {
+	if localStorage == nil {
+		return nil, fmt.Errorf("local storage not initialized")
+	}
+
+	return localStorage, nil
 }
 
 // setup performs any initial setup or data loading if needed
@@ -56,6 +69,18 @@ func (ls *LocalStorage) setup() {
 
 	// Create the wallets directory if it doesn't exist
 	err = os.MkdirAll(filepath.Join(ls.dataPath, "wallets"), 0755)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	// Create the verification directory if it doesn't exist
+	err = os.MkdirAll(filepath.Join(ls.dataPath, "verification"), 0755)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	// Create the Accounts directory if it doesn't exist
+	err = os.MkdirAll(filepath.Join(ls.dataPath, "accounts"), 0755)
 	if err != nil {
 		log.Fatal(err)
 	}

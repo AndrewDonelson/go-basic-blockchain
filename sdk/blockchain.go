@@ -84,6 +84,10 @@ func (bc *Blockchain) DisplayStatus() {
 	}
 }
 
+func (bc *Blockchain) GetConfig() *Config {
+	return bc.cfg
+}
+
 // Load loads the blockchain state from disk.
 func (bc *Blockchain) Load() error {
 	bc.mux.Lock()

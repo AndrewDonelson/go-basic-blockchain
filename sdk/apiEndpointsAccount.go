@@ -1,11 +1,8 @@
 package sdk
 
 import (
-	"crypto/rand"
-	"encoding/base64"
 	"net/http"
 	"net/url"
-	"regexp"
 )
 
 // handleAccountRegister handles the registration of a new account and returns an API key.
@@ -42,11 +39,22 @@ func (api *API) handleAccountRegister(w http.ResponseWriter, r *http.Request) {
 	// You'd typically do this with a SQL INSERT operation, perhaps using a package like sqlx or gorm.
 	// For this example, we'll abstract this operation:
 	// storeEmailAndToken(email, token)
+	ls, err := GetLocalStorage()
+	if err != nil {
+		api.log.Error("Failed to get local storage", "error", err)
+		RespondError(w, http.StatusInternalServerError, "Failed to get local storage")
+		return
+	}
+	ls.Set("email", email)
 
 	// Send a verification email
 	verificationLink := "https://somedomain.com/account/verify?email=" + url.QueryEscape(email) + "&token=" + token
-	sendVerificationEmail(email, verificationLink)
-
+	err = SendGmail(email, "Verify Your Account", "Click the link to verify: "+verificationLink, api.GetConfig())
+	if err != nil {
+		api.log.Error("Failed to send verification email", "error", err)
+		RespondError(w, http.StatusInternalServerError, "Failed to send verification email")
+		return
+	}
 	w.Write([]byte("Registration successful. Please verify your email."))
 }
 
@@ -66,23 +74,7 @@ func (api *API) handleAccountVerify(w http.ResponseWriter, r *http.Request) {
 
 // Helper Functions
 
-// isValidEmail checks if the email is in a valid format
-func isValidEmail(email string) bool {
-	// Basic regex to check email format
-	var emailRegex = regexp.MustCompile(`^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$`)
-	return emailRegex.MatchString(email)
-}
-
-// generateRandomToken generates a random 256-bit token
-func generateRandomToken() string {
-	b := make([]byte, 32) // 256 bits
-	rand.Read(b)
-	return base64.URLEncoding.EncodeToString(b)
-}
-
 // sendVerificationEmail sends an email with a verification link that expires is 30 minutes
 func sendVerificationEmail(email, link string) {
-	// Here, you'd use an email sending service or package to send the verification email.
-	// For simplicity, this is abstracted:
-	// sendEmail(email, "Verify Your Account", "Click the link to verify: "+link)
+
 }

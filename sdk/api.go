@@ -205,6 +205,10 @@ func (api *API) Start() {
 	log.Fatal(http.ListenAndServe(apiHostname, api.router))
 }
 
+func (api *API) GetConfig() *Config {
+	return api.bc.GetConfig()
+}
+
 // registerRoutes registers the API routes.
 func (api *API) registerRoutes() {
 	api.router.HandleFunc("/", api.handleHome).Methods("GET") // same as /info but HTML only
