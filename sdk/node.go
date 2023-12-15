@@ -75,10 +75,13 @@ func NewNode(opts *NodeOptions) *Node {
 		node.Config = NewConfig()
 	}
 
-	// Create a new node LocalStorage instance
-	localStorage = NewLocalStorage(node.Config.DataPath)
+	err := NewLocalStorage(opts.DataPath)
+	if err != nil {
+		fmt.Printf("Error initializing local storage: %s\n", err)
+		return nil
+	}
 
-	err := node.load()
+	err = node.load()
 	if err != nil {
 		fmt.Printf("No existing node state found: %s\n", err)
 
@@ -102,6 +105,14 @@ func NewNode(opts *NodeOptions) *Node {
 	node.initialized = true
 
 	return node
+}
+
+func DefaultNodeoptions() *NodeOptions {
+	return &NodeOptions{
+		EnvName:  "chaind",
+		DataPath: "./chaind_data",
+		Config:   NewConfig(),
+	}
 }
 
 // IsReady returns true if the node is ready for use.
@@ -181,8 +192,14 @@ func (n *Node) Register() {
 	jsonNodeData, _ := json.Marshal(n)
 
 	// Example P2P transaction
+	tx, err := NewTransaction("chain", nil, nil)
+	if err != nil {
+		fmt.Printf("Error creating transaction: %s\n", err)
+		return
+	}
+
 	p2pTx := P2PTransaction{
-		Tx:     Tx{},
+		Tx:     *tx,
 		Target: "node",
 		Action: "register",
 		Data:   jsonNodeData,
@@ -192,5 +209,5 @@ func (n *Node) Register() {
 	n.P2P.AddTransaction(p2pTx)
 
 	// Broadcast the P2P transaction to all nodes
-	//n.P2P.Broadcast(p2pTx)
+	n.P2P.Broadcast(p2pTx)
 }

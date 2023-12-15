@@ -37,6 +37,7 @@ type Config struct {
 	DataPath         string  // This is the path where all data is stored
 	GMailEmail       string  // This is the email address used to send emails
 	GMailPassword    string  // This is the password for the email address used to send emails
+	Domain           string  // This is the domain name of the server. ie somehost.com or 123.123.123.123, etc
 }
 
 // NewConfig returns a new config.
@@ -72,6 +73,8 @@ func NewConfig() *Config {
 			err := godotenv.Load(cfgFile)
 			if err != nil {
 				log.Fatal("Error loading .env file")
+			} else {
+				log.Print("Loaded .env file")
 			}
 
 			// step 4: set the values from the environment variables
@@ -252,7 +255,7 @@ func NewConfig() *Config {
 			}
 
 			if os.Getenv("GMAIL_EMAIL") != "" {
-				if len(gmailEmail) > 0 && os.Getenv("GMAIL_EMAIL") == gmailEmail {
+				if os.Getenv("GMAIL_EMAIL") == gmailEmail {
 					cfg.GMailEmail = cfg.promptValue("GMAIL_EMAIL", gmailEmail, false, "string").(string)
 				} else {
 					fmt.Printf("Notice: Environment GMAIL_EMAIL is set to %s\n", os.Getenv("GMAIL_EMAIL"))
@@ -261,7 +264,7 @@ func NewConfig() *Config {
 			}
 
 			if os.Getenv("GMAIL_PASSWORD") != "" {
-				if len(gmailPassword) > 0 && os.Getenv("GMAIL_PASSWORD") == gmailPassword {
+				if os.Getenv("GMAIL_PASSWORD") == gmailPassword {
 					cfg.GMailPassword = cfg.promptValue("GMAIL_PASSWORD", gmailPassword, false, "string").(string)
 				} else {
 					fmt.Printf("Notice: Environment GMAIL_PASSWORD is set to %s\n", os.Getenv("GMAIL_PASSWORD"))

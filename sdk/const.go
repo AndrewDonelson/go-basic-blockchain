@@ -104,6 +104,9 @@ const (
 
 	// CoinbaseProtocolID is the Coinbase Protocol ID
 	CoinbaseProtocolID = "COINBASE"
+
+	// ChainProtocolID is the Chain Protocol ID
+	ChainProtocolID = "CHAIN"
 )
 
 // AvailableProtocols is a list of all available protocols
@@ -112,4 +115,5 @@ var AvailableProtocols = []string{
 	BankProtocolID,
 	MessageProtocolID,
 	PersistProtocolID,
+	ChainProtocolID,
 }

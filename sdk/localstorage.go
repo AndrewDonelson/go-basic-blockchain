@@ -23,10 +23,10 @@ type LocalStorage struct {
 var localStorage *LocalStorage
 
 // NewLocalStorage creates a new LocalStorage instance.
-func NewLocalStorage(dataPath string) *LocalStorage {
+func NewLocalStorage(dataPath string) error {
 	if localStorage != nil {
 		// Return the existing instance
-		return localStorage
+		return fmt.Errorf("local storage already initialized")
 	}
 
 	// Create the LocalStorage instance
@@ -42,7 +42,8 @@ func NewLocalStorage(dataPath string) *LocalStorage {
 	// Perform any initial setup or data loading if needed
 	localStorage.setup()
 
-	return localStorage
+	fmt.Println("local storage initialized @", localStorage.dataPath)
+	return nil
 }
 
 func GetLocalStorage() (*LocalStorage, error) {
@@ -53,10 +54,21 @@ func GetLocalStorage() (*LocalStorage, error) {
 	return localStorage, nil
 }
 
+// LocalStorageAvailable returns true if the LocalStorage is available, false otherwise.
+func LocalStorageAvailable() bool {
+	return localStorage != nil
+}
+
 // setup performs any initial setup or data loading if needed
 func (ls *LocalStorage) setup() {
 	// Create the data directory if it doesn't exist
 	err := os.MkdirAll(ls.dataPath, 0755)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	// Create the node directory if it doesn't exist
+	err = os.MkdirAll(filepath.Join(ls.dataPath, "node"), 0755)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -72,19 +84,6 @@ func (ls *LocalStorage) setup() {
 	if err != nil {
 		log.Fatal(err)
 	}
-
-	// Create the verification directory if it doesn't exist
-	err = os.MkdirAll(filepath.Join(ls.dataPath, "verification"), 0755)
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	// Create the Accounts directory if it doesn't exist
-	err = os.MkdirAll(filepath.Join(ls.dataPath, "accounts"), 0755)
-	if err != nil {
-		log.Fatal(err)
-	}
-
 }
 
 // file returns the file path for the given type
@@ -96,6 +95,7 @@ func (ls *LocalStorage) file(t interface{}) (filePath string, err error) {
 	case *BlockchainPersistData:
 		filePath = filepath.Join(ls.dataPath, "blockchain.json")
 	case *Block:
+		// where t is a Block
 		filePath = filepath.Join(ls.dataPath, "blocks", fmt.Sprintf("%s.json", (t.(*Block).Index).String()))
 	case *Wallet:
 		filePath = filepath.Join(ls.dataPath, "wallets", tt.Address+".json")

@@ -235,20 +235,16 @@ func SendGmail(to, subject, body string, cfg *Config) error {
 	}
 
 	// Validate recipient email address
-	if isValidEmail(to) == false {
+	if !isValidEmail(to) {
 		return fmt.Errorf("invalid email (TO) format")
 	}
 
 	// Sender data.
 	from := cfg.GMailEmail
-	if isValidEmail(from) == false {
+	if !isValidEmail(from) {
 		return fmt.Errorf("invalid email (FROM) format")
 	}
 	password := cfg.GMailPassword
-
-	// smtp server configuration.
-	smtpHost := "smtp.gmail.com"
-	smtpPort := "587"
 
 	// Message.
 	message := []byte("To: " + to + "\r\n" +
@@ -256,11 +252,7 @@ func SendGmail(to, subject, body string, cfg *Config) error {
 		"\r\n" +
 		body + "\r\n")
 
-	// Authentication.
-	auth := smtp.PlainAuth("", from, password, smtpHost)
-
-	// Sending email.
-	err := smtp.SendMail(smtpHost+":"+smtpPort, auth, from, []string{to}, message)
+	err := smtp.SendMail("smtp.gmail.com:587", smtp.PlainAuth("", from, password, "smtp.gmail.com"), from, []string{to}, message)
 	if err != nil {
 		return err
 	}

@@ -147,16 +147,20 @@ func (p *P2P) RegisterNode(node *Node) {
 	p.mutex.Lock()
 	defer p.mutex.Unlock()
 
+	//todo: check if node already exists and if not send a message to all nodes to add this node
+	if p.IsRegistered(node.ID) {
+		fmt.Printf("Node already registered: %s\n", node.ID)
+		return
+	}
+
+	// Add the node to the P2P network
+	// TODO: You can add other logic here, such as broadcasting the new node to all nodes in the network
 	p.nodes = append(p.nodes, node)
 	fmt.Printf("Registered node: %s\n", node.ID)
 }
 
 // IsRegistered returns true if the given node is registered with the P2P network.
 func (p *P2P) IsRegistered(nodeID string) bool {
-	// Lock the P2P network
-	p.mutex.Lock()
-	defer p.mutex.Unlock()
-
 	// Check if the node is registered
 	for _, node := range p.nodes {
 		if node.ID == nodeID {
@@ -165,6 +169,18 @@ func (p *P2P) IsRegistered(nodeID string) bool {
 	}
 
 	return false
+}
+
+// Broadcast broadcasting p2p message to all nodes in the network
+func (p *P2P) BroadcastMessage(msg P2PTransaction) {
+	// Lock the P2P network
+	p.mutex.Lock()
+	defer p.mutex.Unlock()
+
+	// Send P2P Transaction to all nodes
+	for _, node := range p.nodes {
+		node.ProcessP2PTransaction(msg)
+	}
 }
 
 // OneThird returns a value of one third of the total number of nodes in the P2P network.
@@ -339,6 +355,11 @@ func (p *P2P) ProcessQueue() {
 func (p *P2P) Broadcast(tx P2PTransaction) {
 	p.mutex.Lock()
 	defer p.mutex.Unlock()
+
+	if p.nodes == nil || len(p.nodes) <= 0 {
+		fmt.Printf("Cannot broadcast to empty or invalid nodes\n")
+		return
+	}
 
 	for _, node := range p.nodes {
 		// Send the transaction to each node

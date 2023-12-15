@@ -43,7 +43,7 @@ type Blockchain struct {
 
 // NewBlockchain returns a new blockchain.
 func NewBlockchain(cfg *Config) *Blockchain {
-	localStorage = NewLocalStorage(cfg.DataPath)
+	//localStorage = NewLocalStorage(cfg.DataPath)
 
 	bc := &Blockchain{
 		cfg:               cfg,
@@ -147,7 +147,7 @@ func (bc *Blockchain) createBLockchain() error {
 	if err != nil {
 		return err
 	}
-	minerWallet, err := NewWallet("Wallet2", minerWalletPW, []string{"tag3", "tag4"})
+	minerWallet, err := NewWallet("Miner", minerWalletPW, []string{"blockchain", "node", "miner"})
 	if err != nil {
 		return err
 	}

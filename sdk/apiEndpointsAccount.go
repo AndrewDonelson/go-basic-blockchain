@@ -48,7 +48,7 @@ func (api *API) handleAccountRegister(w http.ResponseWriter, r *http.Request) {
 	ls.Set("email", email)
 
 	// Send a verification email
-	verificationLink := "https://somedomain.com/account/verify?email=" + url.QueryEscape(email) + "&token=" + token
+	verificationLink := api.GetConfig().Domain + "/account/verify?email=" + url.QueryEscape(email) + "&token=" + token
 	err = SendGmail(email, "Verify Your Account", "Click the link to verify: "+verificationLink, api.GetConfig())
 	if err != nil {
 		api.log.Error("Failed to send verification email", "error", err)
@@ -68,13 +68,8 @@ func (api *API) handleAccountLogin(w http.ResponseWriter, r *http.Request) {
 // handleAccountVerify handles the verification of a new account from the email link.
 // email link format: https://somedomain.com/account/verify?email=EMAIL&token=TOKEN
 func (api *API) handleAccountVerify(w http.ResponseWriter, r *http.Request) {
+	token := r.URL.Query().Get("token")
+	api.log.Notice("Received Verification Link: ", token)
 	// Return "Not Yet Implemented"
 	w.Write([]byte("Not Yet Implemented"))
-}
-
-// Helper Functions
-
-// sendVerificationEmail sends an email with a verification link that expires is 30 minutes
-func sendVerificationEmail(email, link string) {
-
 }
