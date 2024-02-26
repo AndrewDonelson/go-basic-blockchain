@@ -6,6 +6,7 @@ USEPORT  = 0
 # >>>>>>>>>>>>>>>>>>>>>>>><<<<<<<<<<<<<<<<<<<<<<<<<<<
 # >>>>>>>>>> DO NOT CHANGE BELOW THIS LINE <<<<<<<<<<
 # >>>>>>>>>>>>>>>>>>>>>>>><<<<<<<<<<<<<<<<<<<<<<<<<<<
+export GO111MODULE=on
 MODULE   = $(shell env GO111MODULE=on $(GO) list -m)
 MODNAME  = $(basename $(notdir $(MODULE)))
 DATE    ?= $(shell date +%FT%T%z)
@@ -22,8 +23,6 @@ TIMEOUT = 15
 V = 0
 Q = $(if $(filter 1,$V),,@)
 M = $(shell printf "\033[34;1m->\033[0m")
-
-export GO111MODULE=on
 
 .PHONY: deploy
 deploy: version clean test-race test-coverage all ## Execute everything
@@ -80,12 +79,13 @@ docker: deploy ## Deploy + Docker Container
 	CMD ["./main"]
 
 # Tools
+#	   env GO111MODULE=off GOPATH=$$tmp GOBIN=$(BIN) $(GO) get $(PACKAGE) \
 
 $(BIN):
 	@mkdir -p $@
 $(BIN)/%: | $(BIN) ; $(info $(M) building $(PACKAGE)…)
 	$Q tmp=$$(mktemp -d); \
-	   env GO111MODULE=off GOPATH=$$tmp GOBIN=$(BIN) $(GO) get $(PACKAGE) \
+	   GOPATH=$$tmp GOBIN=$(BIN) $(GO) get $(PACKAGE) \
 		|| ret=$$?; \
 	   rm -rf $$tmp ; exit $$ret
 
