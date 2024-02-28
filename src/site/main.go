@@ -1,16 +1,13 @@
 package main
 
 import (
-	"crypto/rand"
-	"crypto/sha256"
+	"context"
 	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"net"
 	"net/http"
 	"os"
-	"strings"
 
 	"github.com/gorilla/handlers"
 	"github.com/gorilla/mux"
@@ -26,50 +23,36 @@ type ErrorResponse struct {
 	Message string `json:"message"`
 }
 
-// User is a user
-type User struct {
-	ID        int
-	Username  string
-	FirstName string
-	LastName  string
+type TokenData struct {
+	Key  string
+	User User
 }
 
 // Configuration structure (simplified for demonstration purposes)
 type Config struct {
 	APIKeyHeader string
 	APIKeys      APIKeyList
+	Users        []User
 }
 
 var (
 	apiKeys = APIKeyList{
-		"nlaakald@gmail.com": "69a082ff3996745bd4b48bcc92d5bb40ff97115896183f1cb53a3409f818b15f",
+		"nlaakald@gmail.com": "0065db4b04d8969ad21109084d8e9038444a06692a7625373012c5fb7b1cd131",
 	}
+
 	logger        = logging.MustGetLogger("example")
 	defaultConfig = Config{
 		APIKeyHeader: "Authorization",
 		APIKeys:      apiKeys,
 	}
+
+	r = mux.NewRouter()
 )
 
 func main() {
-	email := "nlaakald@gmail.com"
-	apiKey := generateAPIKeyForEmail(email)
-	fmt.Println("Generated API Key for", email, ":", apiKey)
-
-	// Enable below code to create a new API Key
-	// apiKey, hashedKey, err := generateAPIKey()
-	// if err != nil {
-	// 	fmt.Println("Error generating API key:", err)
-	// 	return
-	// }
-
-	// fmt.Println("Generated API Key:", apiKey)
-	// fmt.Println("Hashed API Key (SHA256):", hashedKey)
-
-	// // append to apiKeys the user email (nlaakald@gmail.com) and the hashedKey
-	// apiKeys["nlaakald@gmail.com"] = hashedKey
-
-	r := mux.NewRouter()
+	defaultConfig.Users = append(defaultConfig.Users, User{ID: 1, Username: "jsmith", Email: "nlaakald@gmail.com", FirstName: "John", Password: "Pa$$w0rD!"})
+	apiKey := defaultConfig.Users[0].NewAPIKey()
+	fmt.Println("Generated API Key for", defaultConfig.Users[0].Email, ":", apiKey)
 
 	// Logging middleware
 	r.Use(loggingMiddleware)
@@ -110,8 +93,7 @@ func loggingMiddleware(next http.Handler) http.Handler {
 }
 
 // ***[API Key Middleware]***
-// curl -H "Authorization: Bearer 69a082ff3996745bd4b48bcc92d5bb40ff97115896183f1cb53a3409f818b15f" http://localhost:8080/protected
-
+// curl -H "Authorization: Bearer 0065db4b04d8969ad21109084d8e9038444a06692a7625373012c5fb7b1cd131" http://localhost:8080/protected
 // ApiKeyMiddleware is a middleware that checks for a valid API key in the request header
 func ApiKeyMiddleware(cfg Config, logger logging.Logger) (func(handler http.Handler) http.Handler, error) {
 	apiKeyHeader := cfg.APIKeyHeader
@@ -138,7 +120,9 @@ func ApiKeyMiddleware(cfg Config, logger logging.Logger) (func(handler http.Hand
 				return
 			}
 
-			if _, ok := apiKeyIsValid(apiKey, decodedAPIKeys); !ok {
+			email, ok := apiKeyIsValid(apiKey, decodedAPIKeys)
+			// Check if the API key is valid
+			if !ok {
 				hostIP, _, err := net.SplitHostPort(r.RemoteAddr)
 				if err != nil {
 					logger.Error("failed to parse remote address", "error", err)
@@ -150,67 +134,11 @@ func ApiKeyMiddleware(cfg Config, logger logging.Logger) (func(handler http.Hand
 				return
 			}
 
+			logger.Info("API key for is valid")
+			ctx = context.WithValue(r.Context(), "user", email)
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}, nil
-}
-
-// bearerToken extracts the content from the header, striping the Bearer prefix
-func bearerToken(r *http.Request, header string) (string, error) {
-	rawToken := r.Header.Get(header)
-	pieces := strings.SplitN(rawToken, " ", 2)
-
-	if len(pieces) < 2 {
-		return "", errors.New("token with incorrect bearer format")
-	}
-
-	token := strings.TrimSpace(pieces[1])
-
-	return token, nil
-}
-
-// apiKeyIsValid checks if the given API key is valid and returns the principal if it is.
-func apiKeyIsValid(rawKey string, availableKeys map[string][]byte) (string, bool) {
-	expectedKey := generateAPIKeyForEmail("nlaakald@gmail.com") // Assuming you have this function
-	logger.Info("Expected API Key:", expectedKey)
-	logger.Info("RAW Key API Key:", rawKey)
-
-	if rawKey == expectedKey {
-		return "nlaakald@gmail.com", true
-	}
-
-	return "", false
-}
-
-// generateAPIKey creates a new random API key and its SHA256 hashed version.
-func generateAPIKey() (apiKey string, hashedKey string, err error) {
-	// Generate a random 16-byte API key.
-	randomBytes := make([]byte, 16)
-	_, err = rand.Read(randomBytes)
-	if err != nil {
-		return "", "", err
-	}
-
-	// Convert the random bytes to a hexadecimal string to get the API key.
-	apiKey = hex.EncodeToString(randomBytes)
-
-	// Hash the API key using SHA256.
-	hash := sha256.Sum256([]byte(apiKey))
-	hashedKey = hex.EncodeToString(hash[:])
-
-	return apiKey, hashedKey, nil
-}
-
-// generateAPIKeyForEmail generates an API key using the server's seed and the provided email.
-func generateAPIKeyForEmail(email string) string {
-	// Combine the server seed and the email
-	combined := serverSeed + email
-
-	// Hash the combined string
-	hash := sha256.Sum256([]byte(combined))
-
-	// Return the hex representation of the hash as the API key
-	return hex.EncodeToString(hash[:])
 }
 
 func homePage(w http.ResponseWriter, r *http.Request) {
@@ -225,11 +153,5 @@ func protectedPage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	user, ok := userValue.(User)
-	if !ok {
-		http.Error(w, "Internal server error", http.StatusInternalServerError)
-		return
-	}
-
-	fmt.Fprintf(w, "Welcome, %s! You're viewing the protected page.", user.Username)
+	fmt.Fprintf(w, "Welcome, %s! You're viewing the protected page\n\n", userValue.(string))
 }
