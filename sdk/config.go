@@ -129,9 +129,10 @@ func NewConfig() *Config {
 					if cfg.PromptYesNo("Do you want have a miner address?") {
 						cfg.MinerAddress = cfg.promptValue("MINER_ADDRESS", minerAddress, true, "string").(string)
 					} else {
-						if cfg.PromptYesNo("Do you want to crate a new wallet for the miner address?") {
+						if cfg.PromptYesNo("Do you want to create a new wallet for the miner address?") {
 							walletName, walletPassPhrase, walletTags := cfg.PromptWalletInfo()
-							minerWallet, err := NewWallet(walletName, walletPassPhrase, walletTags)
+							//minerWallet, err := NewWallet(walletName, walletPassPhrase, walletTags)
+							minerWallet, err := NewWallet(NewWalletOptions(ThisBlockchainOrganizationID, ThisBlockchainAppID, ThisBlockchainAdminUserID, ThisBlockchainMinerID, walletName, walletPassPhrase, walletTags))
 							if err != nil {
 								log.Fatal(err)
 							}

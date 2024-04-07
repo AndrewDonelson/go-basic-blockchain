@@ -18,8 +18,6 @@ import (
 	"log"
 	"strings"
 	"time"
-
-	"github.com/pborman/uuid"
 )
 
 // Transaction is an interface that defines the Processes for the different types of protocol transactions.
@@ -42,7 +40,7 @@ type Transaction interface {
 
 // Tx is a transaction that represents a generic transaction.
 type Tx struct {
-	ID        string    // Unit ID of the transaction (TODO: actually this should be the hash of the transaction)
+	ID        *PUID     // Unit ID of the transaction (TODO: actually this should be the hash of the transaction)
 	Time      time.Time // Time the transaction was created
 	Version   string    // Version of the transaction
 	Protocol  string    // Protocol ID (coinbase, bank, message, etc)
@@ -69,9 +67,20 @@ func NewTransaction(protocol string, from *Wallet, to *Wallet) (*Tx, error) {
 
 	fmt.Printf("[%s] Creating %s-TX - FROM: %s, TO: %s\n", time.Now().Format(logDateTimeFormat), protocol, from.GetAddress(), to.GetAddress())
 
+	toWalletPUID := to.ID
+	if toWalletPUID == nil {
+		return nil, fmt.Errorf("to wallet PUID can't be empty")
+	}
+	assetID, err := NewRandomBigInt()
+	if err != nil {
+		return nil, err
+	}
+
+	toWalletPUID.SetAssetID(assetID)
+
 	// Create the new Message transaction
 	tx := &Tx{
-		ID:       uuid.New(),
+		ID:       toWalletPUID,
 		Time:     time.Now(),
 		Version:  TransactionProtocolVersion,
 		Protocol: protocol,
@@ -111,7 +120,7 @@ func (t *Tx) GetSenderWallet() *Wallet {
 
 // GetID returns the ID of the transaction.
 func (t *Tx) GetID() string {
-	return t.ID
+	return t.ID.String()
 }
 
 // GetHash returns the hash of the transaction.

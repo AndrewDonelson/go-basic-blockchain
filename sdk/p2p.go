@@ -1,5 +1,6 @@
 // Package sdk is a software development kit for building blockchain applications.
 // File: sdk/p2p.go
+// This file handles syncing transactions across the network and broadcasting messages to all nodes in the network.
 package sdk
 
 import (

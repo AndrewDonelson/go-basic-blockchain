@@ -16,7 +16,6 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/pborman/uuid"
 	"golang.org/x/crypto/scrypt"
 )
 
@@ -29,9 +28,31 @@ var RequiredWalletProperties = []string{
 	"private_key",
 }
 
+type WalletOptions struct {
+	OrganizationID *BigInt  // ID of Organization creating this wallet
+	AppID          *BigInt  // ID of App creating this wallet
+	UserID         *BigInt  // ID of User creating this wallet
+	AssetID        *BigInt  // ID of Asset creating this wallet
+	Name           string   // String name for this wallet
+	Passphrase     string   // Passphrase for this wallet
+	Tags           []string // Tags for this wallet
+}
+
+func NewWalletOptions(organizationID, appID, userID, assetID *BigInt, name, passphrase string, tags []string) *WalletOptions {
+	return &WalletOptions{
+		OrganizationID: organizationID,
+		AppID:          appID,
+		UserID:         userID,
+		AssetID:        assetID,
+		Name:           name,
+		Passphrase:     passphrase,
+		Tags:           tags,
+	}
+}
+
 // Wallet represents a user's wallet. Wallets are persisted to disk as individual files.
 type Wallet struct {
-	ID               string
+	ID               *PUID // Unique identifier for the wallet
 	Address          string
 	Encrypted        bool              // Flag to indicate if the private key is encrypted
 	EncryptionParams *EncryptionParams // Encryption parameters for the private key
@@ -60,11 +81,21 @@ func NewDefaultEncryptionParams() *EncryptionParams {
 
 // NewWallet creates a new wallet with a unique ID, name, and set of tags.
 // Please note you must Close() the wallet to save it to disk.
-func NewWallet(name string, passphrase string, tags []string) (*Wallet, error) {
+// func NewWallet(name string, passphrase string, tags []string) (*Wallet, error) {
+func NewWallet(options *WalletOptions) (*Wallet, error) {
+
+	if options == nil {
+		return nil, errors.New("options cannot be nil")
+	}
+
+	// Check if the passphrase is strong enough.
+	if testPasswordStrength(options.Passphrase) != nil {
+		return nil, errors.New("password is too weak")
+	}
 
 	// Create a new wallet with a unique ID, name, and set of tags.
 	wallet := &Wallet{
-		ID:               uuid.New(),
+		ID:               NewPUID(options.OrganizationID, options.AppID, options.UserID, NewBigInt(0)),
 		Address:          "",
 		Encrypted:        false,
 		EncryptionParams: NewDefaultEncryptionParams(),
@@ -78,8 +109,8 @@ func NewWallet(name string, passphrase string, tags []string) (*Wallet, error) {
 		return nil, err
 	}
 
-	wallet.SetData("name", name)
-	wallet.SetData("tags", tags)
+	wallet.SetData("name", options.Name)
+	wallet.SetData("tags", options.Tags)
 	wallet.SetData("balance", fundWalletAmount)
 	wallet.GetAddress()
 

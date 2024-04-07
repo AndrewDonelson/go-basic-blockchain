@@ -9,10 +9,10 @@ import (
 )
 
 func TestPersistTransaction(t *testing.T) {
-	from, err := NewWallet("walletEven", testPassPhrase, []string{"tag2", "tag4"})
+	from, err := NewWallet(NewWalletOptions(ThisBlockchainOrganizationID, ThisBlockchainAppID, ThisBlockchainAdminUserID, ThisBlockchainDevAssetID, "walletEven", testPassPhrase, []string{"tag2", "tag4"}))
 	assert.NoError(t, err)
 
-	to, err := NewWallet("walletOdd", testPassPhrase, []string{"tag1", "tag3"})
+	to, err := NewWallet(NewWalletOptions(ThisBlockchainOrganizationID, ThisBlockchainAppID, ThisBlockchainAdminUserID, ThisBlockchainDevAssetID, "walletOdd", testPassPhrase, []string{"tag1", "tag3"}))
 	assert.NoError(t, err)
 
 	fee := transactionFee

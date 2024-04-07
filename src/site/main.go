@@ -50,9 +50,12 @@ var (
 )
 
 func main() {
+	// For testing / Protyping only ---
+	// this would actually be in redis (plus database)
 	defaultConfig.Users = append(defaultConfig.Users, User{ID: 1, Username: "jsmith", Email: "nlaakald@gmail.com", FirstName: "John", Password: "Pa$$w0rD!"})
 	apiKey := defaultConfig.Users[0].NewAPIKey()
 	fmt.Println("Generated API Key for", defaultConfig.Users[0].Email, ":", apiKey)
+	// --------------------------------
 
 	// Logging middleware
 	r.Use(loggingMiddleware)

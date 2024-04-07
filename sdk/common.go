@@ -273,3 +273,9 @@ func generateRandomToken() string {
 	rand.Read(b)
 	return base64.URLEncoding.EncodeToString(b)
 }
+
+// isBase64Encoded checks if the given string is base64-encoded.
+func isBase64Encoded(s string) bool {
+	_, err := base64.StdEncoding.DecodeString(s)
+	return err == nil
+}

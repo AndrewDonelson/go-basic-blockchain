@@ -6,6 +6,10 @@ import (
 	"testing"
 )
 
+const (
+	DummyTXID = "1234:5678:90ab:cdef"
+)
+
 // TestNewNode tests the NewNode func
 func TestNewNode(t *testing.T) {
 	// Create a 1st Node instance
@@ -80,7 +84,7 @@ func TestBroadcast(t *testing.T) {
 
 	// Create a dummy P2P transaction
 	tx := P2PTransaction{
-		Tx:     Tx{ID: "0x1234567890"},
+		Tx:     Tx{ID: NewPUIDFromString(DummyTXID)}, // "0x1234567890" -> 1234:5678:90ab:cdef
 		Target: "node",
 		Action: "add",
 		Data:   "example node data",

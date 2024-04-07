@@ -42,7 +42,7 @@ func TestBlockchain(t *testing.T) {
 	// Create wallets and add transactions
 	wallets := make([]*Wallet, 2)
 	for i := 0; i < len(wallets); i++ {
-		wallets[i], err = NewWallet("Wallet"+strconv.Itoa(i), testPassPhrase, []string{"tag1", "tag2"})
+		wallets[i], err = NewWallet(NewWalletOptions(ThisBlockchainOrganizationID, ThisBlockchainAppID, ThisBlockchainAdminUserID, ThisBlockchainDevAssetID, "Wallet"+strconv.Itoa(i), testPassPhrase, []string{"tag1", "tag2"}))
 		assert.NoError(t, err)
 	}
 

@@ -61,11 +61,6 @@ func NewBlockchain(cfg *Config) *Blockchain {
 		bc.createBLockchain()
 	}
 
-	// err = bc.LoadExistingBlocks()
-	// if err != nil {
-	// 	log.Fatalln(err)
-	// }
-
 	return bc
 }
 
@@ -127,6 +122,13 @@ func (bc *Blockchain) Save() error {
 // CreateBLockchain creates a new blockchain.
 func (bc *Blockchain) createBLockchain() error {
 
+	// Set the Blockchain Organization ID, App ID and Admin User ID as defined in the constants
+	ThisBlockchainOrganizationID = NewBigInt(BlockhainOrganizationID)
+	ThisBlockchainAppID = NewBigInt(BlockchainAppID)
+	ThisBlockchainAdminUserID = NewBigInt(BlockchainAdminUserID)
+	ThisBlockchainDevAssetID = NewBigInt(BlockchainDevAssetID)
+	ThisBlockchainMinerID = NewBigInt(BlockchainMinerAssetID)
+
 	genesisTxs := []Transaction{}
 
 	// Create two wallets. One for the DEV and one for the Miner
@@ -134,10 +136,12 @@ func (bc *Blockchain) createBLockchain() error {
 	if err != nil {
 		return err
 	}
-	devWallet, err := NewWallet("Dev", devWalletPW, []string{"blockchain", "master"})
+
+	devWallet, err := NewWallet(NewWalletOptions(ThisBlockchainOrganizationID, ThisBlockchainAppID, ThisBlockchainAdminUserID, ThisBlockchainDevAssetID, "Dev", devWalletPW, []string{"blockchain", "master"}))
 	if err != nil {
 		return err
 	}
+
 	devWallet.Close(devWalletPW)
 	devWallet.Open(devWalletPW)
 	bc.cfg.DevAddress = devWallet.GetAddress()
@@ -147,7 +151,8 @@ func (bc *Blockchain) createBLockchain() error {
 	if err != nil {
 		return err
 	}
-	minerWallet, err := NewWallet("Miner", minerWalletPW, []string{"blockchain", "node", "miner"})
+
+	minerWallet, err := NewWallet(NewWalletOptions(ThisBlockchainOrganizationID, ThisBlockchainAppID, ThisBlockchainAdminUserID, ThisBlockchainMinerID, "Miner", minerWalletPW, []string{"blockchain", "node", "miner"}))
 	if err != nil {
 		return err
 	}

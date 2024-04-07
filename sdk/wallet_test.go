@@ -49,7 +49,7 @@ func TestPasswordStrength(t *testing.T) {
 
 func TestCreateWallet(t *testing.T) {
 	// Create a new wallet
-	wallet, err := NewWallet("TestWallet", testPassPhrase, []string{"tag1", "tag2"})
+	wallet, err := NewWallet(NewWalletOptions(ThisBlockchainOrganizationID, ThisBlockchainAppID, ThisBlockchainAdminUserID, ThisBlockchainDevAssetID, "TestWallet", testPassPhrase, []string{"tag1", "tag2"}))
 	assert.NoError(t, err)
 	assert.NotNil(t, wallet)
 
@@ -62,7 +62,7 @@ func TestCreateWallet(t *testing.T) {
 // TestOpneCloseWallet test the open and close wallet functions including the locking and unlocking of the wallet
 func TestOpenCloseWallet(t *testing.T) {
 	// Create a new wallet
-	wallet, err := NewWallet("TestWallet", testPassPhrase, []string{"tag1", "tag2"})
+	wallet, err := NewWallet(NewWalletOptions(ThisBlockchainOrganizationID, ThisBlockchainAppID, ThisBlockchainAdminUserID, ThisBlockchainDevAssetID, "TestWallet", testPassPhrase, []string{"tag1", "tag2"}))
 	assert.NoError(t, err)
 	assert.NotNil(t, wallet)
 
@@ -98,11 +98,12 @@ func TestWalletListCount(t *testing.T) {
 
 func TestWallet(t *testing.T) {
 	// Create two wallets with different data
-	wallet1, err := NewWallet("Wallet1", testPassPhrase, []string{"tag1", "tag2"})
+	wallet1, err := NewWallet(NewWalletOptions(ThisBlockchainOrganizationID, ThisBlockchainAppID, ThisBlockchainAdminUserID, ThisBlockchainDevAssetID, "Wallet1", testPassPhrase, []string{"tag1", "tag2"}))
+
 	assert.NoError(t, err)
 	assert.NotNil(t, wallet1)
 
-	wallet2, err := NewWallet("Wallet2", testPassPhrase, []string{"tag3", "tag4"})
+	wallet2, err := NewWallet(NewWalletOptions(ThisBlockchainOrganizationID, ThisBlockchainAppID, ThisBlockchainAdminUserID, ThisBlockchainDevAssetID, "Wallet2", testPassPhrase, []string{"tag3", "tag4"}))
 	assert.NoError(t, err)
 	assert.NotNil(t, wallet2)
 

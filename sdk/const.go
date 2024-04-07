@@ -10,6 +10,21 @@ const (
 	// BlockchainSymbol is the symbol of the blockchain
 	BlockchainSymbol = "GBB"
 
+	// BlockchainOrganizationID is the organization ID for the blockchain (1 is reserved for this blockchain "Go Basic Blockchain")
+	BlockhainOrganizationID = 1
+
+	// BlockchainAdminUserID is the admin user ID for the blockchain
+	BlockchainAdminUserID = 1
+
+	// BlockchainAppID is the application ID for the blockchain (1 is reserved for this blockchain's Core)
+	BlockchainAppID = 1
+
+	// BlockchainCoreAssetID is the core asset ID for the blockchain
+	BlockchainDevAssetID = 1
+
+	// BlockchainMinerAssetID is the miner asset ID for the blockchain
+	BlockchainMinerAssetID = 2
+
 	// block time is 5 seconds
 	blockTimeInSec = 5
 
