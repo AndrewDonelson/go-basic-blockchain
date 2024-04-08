@@ -24,15 +24,27 @@ V = 0
 Q = $(if $(filter 1,$V),,@)
 M = $(shell printf "\033[34;1m->\033[0m")
 
+# 
 .PHONY: deploy
-deploy: version clean test-race test-coverage all ## Execute everything
 
+# deploy executes the full build and test process, including cleaning the workspace,
+# running race tests, coverage tests, and building the final binary.
+deploy: version clean test-race test-coverage all
+
+# build builds the main binary for the application. It sets the version and build date
+# information in the binary using the VERSION and DATE variables.
 build:
 	$Q $(GO) build \
 		-tags release \
 		-ldflags '-X $(MODULE)/cmd.Version=$(VERSION) -X $(MODULE)/cmd.BuildDate=$(DATE)' \
 		-o $(BIN)/$(basename $(notdir $(MODULE))) src/main.go
 
+# all is a phony target that executes the full build and test process,
+# including cleaning the workspace, running race tests, coverage tests,
+# and building the final binary.
+#
+# It builds the main binary for the application, setting the version and
+# build date information in the binary using the VERSION and DATE variables.
 .PHONY: all
 all: setup fmt lint | $(BIN) ; $(info $(M) building executable…) @ ## Build binary
 	$Q $(GO) build \
@@ -40,6 +52,11 @@ all: setup fmt lint | $(BIN) ; $(info $(M) building executable…) @ ## Build bi
 		-ldflags '-X $(MODULE)/cmd.Version=$(VERSION) -X $(MODULE)/cmd.BuildDate=$(DATE)' \
 		-o $(BIN)/$(basename $(notdir $(MODULE))) main.go
 
+# The `docker` target in the Makefile builds a Docker container image for the application.
+# It first builds the Go binary in a builder container, optimizing the binary by stripping
+# unnecessary symbols and compressing it with UPX. It then copies the optimized binary
+# into a minimal scratch-based container, setting the working directory and environment
+# variables, and running the binary as the container's entrypoint.
 .PHONY: docker
 docker: deploy ## Deploy + Docker Container
 	FROM golang:latest as builder

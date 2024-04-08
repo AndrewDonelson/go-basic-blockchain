@@ -54,9 +54,14 @@ func TestRegister(t *testing.T) {
 // TestAddTransaction tests the AddTransaction func
 func TestAddTransaction(t *testing.T) {
 
+	puid, err := NewPUIDFromString("0x0123456789")
+	if err != nil {
+		t.Errorf("Failed to create PUID from String")
+	}
+
 	// Create a dummy P2P transaction
 	tx := P2PTransaction{
-		Tx:     Tx{ID: "0x0123456789"},
+		Tx:     Tx{ID: puid},
 		Target: "node",
 		Action: "register",
 		Data:   "example node data",
@@ -73,7 +78,7 @@ func TestAddTransaction(t *testing.T) {
 	node3.P2P.AddTransaction(tx)
 
 	// Check if the transaction has been added successfully
-	if !node1.P2P.HasTransaction("0x0123456789") || !node2.P2P.HasTransaction("0x0123456789") || !node3.P2P.HasTransaction("0x0123456789") {
+	if !node1.P2P.HasTransaction(puid) || !node2.P2P.HasTransaction(puid) || !node3.P2P.HasTransaction(puid) {
 		t.Errorf("Failed to add transaction to transactions queue")
 	}
 
@@ -82,9 +87,14 @@ func TestAddTransaction(t *testing.T) {
 // TestBroadcast tests the Broadcast func
 func TestBroadcast(t *testing.T) {
 
+	puid, err := NewPUIDFromString(DummyTXID)
+	if err != nil {
+		t.Errorf("Failed to create PUID from String")
+	}
+
 	// Create a dummy P2P transaction
 	tx := P2PTransaction{
-		Tx:     Tx{ID: NewPUIDFromString(DummyTXID)}, // "0x1234567890" -> 1234:5678:90ab:cdef
+		Tx:     Tx{ID: puid}, // "0x1234567890" -> 1234:5678:90ab:cdef
 		Target: "node",
 		Action: "add",
 		Data:   "example node data",
@@ -101,7 +111,7 @@ func TestBroadcast(t *testing.T) {
 	node3.P2P.Broadcast(tx)
 
 	// Check if the transaction has been broadcast successfully
-	if !node1.P2P.HasTransaction("0x1234567890") || !node2.P2P.HasTransaction("0x1234567890") || !node3.P2P.HasTransaction("0x1234567890") {
+	if !node1.P2P.HasTransaction(puid) || !node2.P2P.HasTransaction(puid) || !node3.P2P.HasTransaction(puid) {
 		t.Errorf("Failed to broadcast transaction")
 	}
 

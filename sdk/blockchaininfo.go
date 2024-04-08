@@ -2,7 +2,8 @@
 // File sdk/blockchaininfo.go - Blockchain Info for all Blockchain related Protocol based transactions
 package sdk
 
-// BlockchainInfo is used by the API endpoint / to return information about the blockchain
+// BlockchainInfo represents information about a blockchain, including its version, name, symbol,
+// block time, difficulty, and transaction fee.
 type BlockchainInfo struct {
 	Version    string  `json:"version,omitempty"`
 	Name       string  `json:"name,omitempty"`

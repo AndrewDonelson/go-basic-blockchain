@@ -15,6 +15,10 @@ import (
 )
 
 // Config is the configuration for the blockchain.
+// It contains various settings and parameters for the blockchain, such as the blockchain name,
+// symbol, block time, difficulty, transaction fee, miner reward percentage, developer reward
+// percentage, API and P2P hostnames, wallet funding amount, token count and price, and other
+// settings related to the blockchain's operation.
 type Config struct {
 	BlockchainName   string
 	BlockchainSymbol string
@@ -40,7 +44,10 @@ type Config struct {
 	Domain           string  // This is the domain name of the server. ie somehost.com or 123.123.123.123, etc
 }
 
-// NewConfig returns a new config.
+// NewConfig creates a new configuration object with default values.
+// It first creates a new Config struct and sets the default values from the constants.
+// It then loads any environment variables from a .env file, if it exists, and updates the configuration values accordingly.
+// Finally, it displays the configuration values that will be used.
 func NewConfig() *Config {
 	// step 1: create a new actual config
 	cfg := &Config{
@@ -305,7 +312,9 @@ func (c *Config) Show() {
 	fmt.Printf("- Data Path: %s\n", c.DataPath)
 }
 
-// Path returns the path to the executable file
+// Path returns the path to the executable file.
+// This function returns the directory path of the current executable.
+// It is useful for determining the location of the application's resources or configuration files.
 func (c *Config) Path() string {
 
 	ex, err := os.Executable()
@@ -316,7 +325,9 @@ func (c *Config) Path() string {
 	return filepath.Dir(ex)
 }
 
-// promptValue prompts the user for a value and returns the value
+// promptValue prompts the user for a value and returns the value of the requested type.
+// If the value is required and the user does not provide one, the function will exit the program.
+// The function will update the promptUpdate flag if the user provides a value different from the default.
 func (c *Config) promptValue(key, defaultValue string, required bool, returnType string) interface{} {
 	value := os.Getenv(key)
 
@@ -371,6 +382,8 @@ func (c *Config) promptValue(key, defaultValue string, required bool, returnType
 }
 
 // PromptYesNo prompts the user with a given question and returns a bool value based on their response.
+// It repeatedly prompts the user until a valid yes/no response is entered. Valid responses are "yes", "y", "true", "t" for true,
+// and "no", "n", "false", "f" for false. If an invalid response is entered, the user is prompted to try again.
 func (c *Config) PromptYesNo(question string) bool {
 	affirmativeResponses := []string{"yes", "y", "true", "t"}
 	negativeResponses := []string{"no", "n", "false", "f"}
@@ -391,7 +404,8 @@ func (c *Config) PromptYesNo(question string) bool {
 	}
 }
 
-// PromptWalletInfo prompts the user to enter wallet information such as Name, passphrase, and comma-delimited list of tags.
+// PromptWalletInfo prompts the user to enter wallet information such as Name, passphrase, and comma-delimited
+// list of tags. It returns the wallet name, passphrase, and a slice of wallet tags.
 func (c *Config) PromptWalletInfo() (walletName string, walletPass string, walletTags []string) {
 	walletName = c.promptValue("Wallet Name", "", false, "string").(string)
 	walletPass = c.promptValue("Passphrase", "", true, "string").(string)
@@ -401,6 +415,8 @@ func (c *Config) PromptWalletInfo() (walletName string, walletPass string, walle
 }
 
 // promptTags prompts the user to enter a comma-delimited list of tags for the wallet.
+// It splits the input string on commas, trims any leading/trailing whitespace from each tag,
+// and returns the resulting slice of tags.
 func (c *Config) promptTags() []string {
 	tagsStr := c.promptValue("Tags (comma-separated)", "", false, "string").(string)
 	tags := strings.Split(tagsStr, ",")
@@ -410,6 +426,8 @@ func (c *Config) promptTags() []string {
 	return tags
 }
 
+// getIntEnv retrieves the value of the environment variable specified by the given key, and returns it as an integer.
+// If the environment variable is not set or its value cannot be parsed as an integer, the provided default value is returned instead.
 func (c *Config) getIntEnv(key string, defaultValue int) int {
 	valueStr := os.Getenv(key)
 	if valueStr == "" {
@@ -425,7 +443,8 @@ func (c *Config) getIntEnv(key string, defaultValue int) int {
 	return value
 }
 
-// getFloatEnv returns the value of an environment variable as a float64. If the environment variable is not set or
+// getFloatEnv retrieves the value of the environment variable specified by the given key, and returns it as a float64.
+// If the environment variable is not set or its value cannot be parsed as a float64, the provided default value is returned instead.
 func (c *Config) getFloatEnv(key string, defaultValue float64) float64 {
 	valueStr := os.Getenv(key)
 	if valueStr == "" {
@@ -441,7 +460,8 @@ func (c *Config) getFloatEnv(key string, defaultValue float64) float64 {
 	return value
 }
 
-// getBoolEnv returns the value of an environment variable as a bool. If the environment variable is not set or
+// getBoolEnv retrieves the value of the environment variable specified by the given key, and returns it as a bool.
+// If the environment variable is not set or its value cannot be parsed as a bool, the provided default value is returned instead.
 func (c *Config) getBoolEnv(key string, defaultValue bool) bool {
 	valueStr := os.Getenv(key)
 	if valueStr == "" {
@@ -457,7 +477,8 @@ func (c *Config) getBoolEnv(key string, defaultValue bool) bool {
 	return value
 }
 
-// writeEnvValue writes a key/value pair to the .env file
+// writeEnvValue writes a key/value pair to the .env file. It takes the file handle, the key, and the value as arguments.
+// If there is an error writing to the file, it will log a fatal error.
 func (c *Config) writeEnvValue(f *os.File, key, value string) {
 	_, err := fmt.Fprintf(f, "%s=%s\n", key, value)
 	if err != nil {
@@ -465,7 +486,9 @@ func (c *Config) writeEnvValue(f *os.File, key, value string) {
 	}
 }
 
-// save writes the current configuration to the .env file
+// save writes the current configuration to the .env file. If the promptUpdate flag is set, it creates a
+// new .env file and writes the current configuration values to it. If no values were modified, it prints
+// a message indicating that no changes were saved.
 func (c *Config) save() error {
 	if c.promptUpdate {
 		f, err := os.Create(cfgFile)

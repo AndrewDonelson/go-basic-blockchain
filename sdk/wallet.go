@@ -20,6 +20,8 @@ import (
 )
 
 // RequiredWalletProperties is a list of required properties for a wallet.
+// This list defines the minimum set of properties that a wallet must have in order to be considered valid.
+// The properties include the wallet name, tags, balance, public key, and private key.
 var RequiredWalletProperties = []string{
 	"name",
 	"tags",
@@ -28,16 +30,32 @@ var RequiredWalletProperties = []string{
 	"private_key",
 }
 
+// WalletOptions is a struct that contains the required options for creating a new wallet.
+//
+// OrganizationID is the ID of the organization creating the wallet.
+// AppID is the ID of the app creating the wallet.
+// UserID is the ID of the user creating the wallet.
+// AssetID is the ID of the asset creating the wallet.
+// Name is the string name for the wallet.
+// Passphrase is the passphrase for the wallet.
+// Tags are the tags associated with the wallet.
 type WalletOptions struct {
-	OrganizationID *BigInt  // ID of Organization creating this wallet
-	AppID          *BigInt  // ID of App creating this wallet
-	UserID         *BigInt  // ID of User creating this wallet
-	AssetID        *BigInt  // ID of Asset creating this wallet
-	Name           string   // String name for this wallet
-	Passphrase     string   // Passphrase for this wallet
-	Tags           []string // Tags for this wallet
+	OrganizationID *BigInt
+	AppID          *BigInt
+	UserID         *BigInt
+	AssetID        *BigInt
+	Name           string
+	Passphrase     string
+	Tags           []string
 }
 
+// NewWalletOptions creates a new WalletOptions struct with the provided parameters.
+// The WalletOptions struct contains the necessary properties for creating a new wallet.
+// The OrganizationID, AppID, UserID, and AssetID fields are pointers to BigInt values,
+// representing the IDs of the organization, app, user, and asset associated with the wallet.
+// The Name field is a string representing the name of the wallet.
+// The Passphrase field is a string representing the passphrase for the wallet.
+// The Tags field is a slice of strings representing the tags associated with the wallet.
 func NewWalletOptions(organizationID, appID, userID, assetID *BigInt, name, passphrase string, tags []string) *WalletOptions {
 	return &WalletOptions{
 		OrganizationID: organizationID,
@@ -51,12 +69,20 @@ func NewWalletOptions(organizationID, appID, userID, assetID *BigInt, name, pass
 }
 
 // Wallet represents a user's wallet. Wallets are persisted to disk as individual files.
+// The Wallet struct contains the following fields:
+//
+// ID: A unique identifier for the wallet.
+// Address: The wallet's address.
+// Encrypted: A flag indicating whether the private key is encrypted.
+// EncryptionParams: The encryption parameters used to encrypt the private key.
+// Ciphertext: The encrypted private key data.
+// vault: A reference to the wallet's associated vault.
 type Wallet struct {
-	ID               *PUID // Unique identifier for the wallet
+	ID               *PUID
 	Address          string
-	Encrypted        bool              // Flag to indicate if the private key is encrypted
-	EncryptionParams *EncryptionParams // Encryption parameters for the private key
-	Ciphertext       []byte            // Encrypted data
+	Encrypted        bool
+	EncryptionParams *EncryptionParams
+	Ciphertext       []byte
 	vault            *Vault
 }
 
@@ -66,7 +92,8 @@ type EncryptionParams struct {
 	NonceSize int // Size of the nonce used for encryption
 }
 
-// NewEncryptionParams creates a new EncryptionParams struct.
+// NewEncryptionParams creates a new EncryptionParams struct with the specified salt and nonce sizes.
+// The salt size and nonce size are used to configure the encryption parameters for a wallet's private key.
 func NewEncryptionParams(saltSize, nonceSize int) *EncryptionParams {
 	return &EncryptionParams{
 		SaltSize:  saltSize,
@@ -75,13 +102,14 @@ func NewEncryptionParams(saltSize, nonceSize int) *EncryptionParams {
 }
 
 // NewDefaultEncryptionParams creates a new EncryptionParams struct with default values.
+// The default salt size is 32 bytes and the default nonce size is 12 bytes.
 func NewDefaultEncryptionParams() *EncryptionParams {
 	return NewEncryptionParams(saltSize, maxNonce)
 }
 
 // NewWallet creates a new wallet with a unique ID, name, and set of tags.
-// Please note you must Close() the wallet to save it to disk.
-// func NewWallet(name string, passphrase string, tags []string) (*Wallet, error) {
+// The wallet is initialized with a new private key and default encryption parameters.
+// The wallet must be closed to save it to disk.
 func NewWallet(options *WalletOptions) (*Wallet, error) {
 
 	if options == nil {
@@ -124,8 +152,8 @@ func NewWallet(options *WalletOptions) (*Wallet, error) {
 }
 
 // SetData sets the data (keypairs) associated with the wallet.
-// This wallet allows the user to store arbitrary data (keypairs) in the wallet.
-// The data included built-in data such as the wallet name, tags, and balance.
+// This method allows the user to store arbitrary data (keypairs) in the wallet.
+// If the wallet is encrypted, this method will return an error.
 func (w *Wallet) SetData(key string, value interface{}) error {
 	if w.Encrypted {
 		return errors.New("cannot set data on an encrypted wallet")
@@ -142,6 +170,7 @@ func (w *Wallet) SetData(key string, value interface{}) error {
 // GetData returns the data (keypairs) associated with the wallet.
 // This wallet allows the user to store arbitrary data (keypairs) in the wallet.
 // The data included built-in data such as the wallet name, tags, and balance.
+// If the wallet is encrypted, this method will return an error.
 func (w *Wallet) GetData(key string) (interface{}, error) {
 	if w.Encrypted {
 		return nil, errors.New("cannot get data from an encrypted wallet")
@@ -156,6 +185,8 @@ func (w *Wallet) GetData(key string) (interface{}, error) {
 }
 
 // GetWalletName returns the wallet name from the data (keypairs) associated with the wallet.
+// If the wallet is encrypted, an empty string is returned. If there is an error
+// retrieving the wallet name, an empty string is also returned.
 func (w *Wallet) GetWalletName() string {
 	if w.Encrypted {
 		return ""
@@ -171,6 +202,9 @@ func (w *Wallet) GetWalletName() string {
 }
 
 // GetBalance returns the wallet balance from the data (keypairs) associated with the wallet.
+// If the wallet is encrypted, this function will return 0.
+// Otherwise, it will retrieve the "balance" key from the wallet data and return it as a float64.
+// If there is an error retrieving the balance, it will log the error and return 0.
 func (w *Wallet) GetBalance() float64 {
 	if w.Encrypted {
 		return 0
@@ -182,10 +216,18 @@ func (w *Wallet) GetBalance() float64 {
 		return 0
 	}
 
-	return float64(balance.(int64))
+	balanceFloat, ok := balance.(float64)
+	if !ok {
+		fmt.Println("balance is not of type float64")
+		return 0
+	}
+
+	return balanceFloat
 }
 
 // GetTags returns the wallet tags from the data (keypairs) associated with the wallet.
+// If the wallet is encrypted, this function will return nil.
+// Otherwise, it will return the tags stored in the wallet data, or nil if there is an error retrieving the tags.
 func (w *Wallet) GetTags() []string {
 	if w.Encrypted {
 		return nil
@@ -201,6 +243,9 @@ func (w *Wallet) GetTags() []string {
 }
 
 // GetAddress generates and returns the wallet address.
+//
+// If the address is already generated, it returns the cached address.
+// Otherwise, it generates a new address by hashing the public key and encoding it in hexadecimal.
 func (w *Wallet) GetAddress() string {
 	// If the address is already generated, return it.
 	if w.Address != "" {
@@ -220,19 +265,21 @@ func (w *Wallet) GetAddress() string {
 	return w.Address
 }
 
-// dataToBytes is an internal (private) method that converts the data (keypairs) associated with the wallet to bytes.
-// this is used by the wallet to encrypt the data (keypairs) associated with the wallet.
+// vaultToBytes is an internal (private) method that converts the wallet's vault data (keypairs) to bytes.
+// This is used by the wallet to encrypt the data (keypairs) associated with the wallet.
 func (w *Wallet) vaultToBytes() ([]byte, error) {
 	return json.Marshal(w.vault)
 }
 
 // bytesToData is an internal (private) method that converts the bytes representation of the data (keypairs) associated with the wallet to the data (keypairs) associated with the wallet.
 // this is used by the wallet to decrypt the data (keypairs) associated with the wallet.
+
 func (w *Wallet) bytesToVault(bytes []byte) error {
 	return json.Unmarshal(bytes, &w.vault)
 }
 
-// PrivateKey returns the private key from the vault associated with the wallet.
+// / PrivateKey returns the private key from the vault associated with the wallet.
+// / If the wallet is encrypted, this method will return an error.
 func (w *Wallet) PrivateKey() (*ecdsa.PrivateKey, error) {
 	if w.Encrypted {
 		return nil, errors.New("cannot get private key from an encrypted wallet")
@@ -241,7 +288,9 @@ func (w *Wallet) PrivateKey() (*ecdsa.PrivateKey, error) {
 	return w.vault.Key, nil
 }
 
-// PrivateBytes returns the bytes representation of the private key.
+// PrivateBytes returns the bytes representation of the private key associated with the wallet.
+// If the wallet is encrypted, this method will return an error. If the private key is nil,
+// this method will also return an error.
 func (w *Wallet) PrivateBytes() ([]byte, error) {
 	if w.Encrypted {
 		return nil, errors.New("cannot get private key from an encrypted wallet")
@@ -259,7 +308,9 @@ func (w *Wallet) PrivateBytes() ([]byte, error) {
 	return bytes, nil
 }
 
-// PrivatePEM returns the PEM representation of the private key.
+// PrivatePEM returns the PEM representation of the private key associated with the wallet.
+// If the wallet is encrypted, this method will return an empty string.
+// If the private key is nil, this method will also return an empty string.
 func (w *Wallet) PrivatePEM() string {
 	if w.Encrypted {
 		return ""
@@ -273,6 +324,8 @@ func (w *Wallet) PrivatePEM() string {
 }
 
 // PublicKey returns the public key from the data (keypairs) associated with the wallet.
+// If the wallet is encrypted, this method will return an error. If the public key is nil,
+// this method will also return an error.
 func (w *Wallet) PublicKey() (*ecdsa.PublicKey, error) {
 	if w.Encrypted {
 		return nil, errors.New("cannot get public key from an encrypted wallet")
@@ -286,6 +339,9 @@ func (w *Wallet) PublicKey() (*ecdsa.PublicKey, error) {
 }
 
 // PublicBytes returns the bytes representation of the public key.
+// If the wallet is encrypted, this returns an error.
+// If the public key is nil, this returns an error.
+// Otherwise, this returns the bytes representation of the public key.
 func (w *Wallet) PublicBytes() ([]byte, error) {
 	if w.Encrypted {
 		return nil, errors.New("cannot get public key from an encrypted wallet")
@@ -304,6 +360,9 @@ func (w *Wallet) PublicBytes() ([]byte, error) {
 }
 
 // PublicPEM returns the PEM representation of the public key.
+// If the wallet is encrypted, this returns an empty string.
+// If the public key is nil, this also returns an empty string.
+// Otherwise, it returns the PEM representation of the public key.
 func (w *Wallet) PublicPEM() string {
 	if w.Encrypted {
 		return ""
@@ -316,7 +375,12 @@ func (w *Wallet) PublicPEM() string {
 	return w.vault.PublicPEM()
 }
 
-// SendTransaction sends a new transaction from the sender's wallet to the recipient's address.
+// SendTransaction sends a transaction from the wallet to the specified address on the blockchain.
+// It first checks if the wallet is encrypted, and returns an error if it is.
+// It then gets the wallet's balance, and checks if it has enough funds to cover the transaction fee.
+// If the wallet has sufficient funds, it prints a log message and sends the transaction to the blockchain.
+// If the transaction is successfully sent, it returns the transaction.
+// If there is an error sending the transaction, it returns the error.
 func (w *Wallet) SendTransaction(to string, tx Transaction, bc *Blockchain) (*Transaction, error) {
 	if w.Encrypted {
 		return nil, errors.New("cannot send transaction from an encrypted wallet")
@@ -342,6 +406,8 @@ func (w *Wallet) SendTransaction(to string, tx Transaction, bc *Blockchain) (*Tr
 }
 
 // encrypt is a private internal method that encrypts the data (keypairs) associated with the wallet.
+// It derives a key from the provided key and salt, creates an AES-GCM cipher, generates a random nonce,
+// and then seals the data using the cipher. The resulting ciphertext is appended with the salt and returned.
 func (w *Wallet) encrypt(key, data []byte) ([]byte, error) {
 	key, salt, err := w.deriveKey(key, nil)
 	if err != nil {
@@ -371,6 +437,10 @@ func (w *Wallet) encrypt(key, data []byte) ([]byte, error) {
 }
 
 // decrypt is a private internal method that decrypts the data (keypairs) associated with the wallet.
+// It takes the encryption key and the encrypted data as input, and returns the decrypted plaintext.
+// The method first extracts the salt from the end of the encrypted data, then derives the encryption key
+// using the provided key and the extracted salt. It then uses the derived key to decrypt the ciphertext
+// using AES-GCM. The decrypted plaintext is returned.
 func (w *Wallet) decrypt(key, data []byte) ([]byte, error) {
 	salt, data := data[len(data)-32:], data[:len(data)-32]
 
@@ -400,6 +470,9 @@ func (w *Wallet) decrypt(key, data []byte) ([]byte, error) {
 }
 
 // deriveKey is a private internal method that derives a key from the provided password and salt.
+// It uses the scrypt key derivation function to derive a 32-byte key from the password and salt.
+// If the salt is nil, a new random 32-byte salt is generated.
+// The derived key and the salt are returned.
 func (w *Wallet) deriveKey(password, salt []byte) ([]byte, []byte, error) {
 	if salt == nil {
 		salt = make([]byte, 32)
@@ -418,6 +491,13 @@ func (w *Wallet) deriveKey(password, salt []byte) ([]byte, []byte, error) {
 
 // Lock locks the wallet using the provided passphrase. Basically the wallet's data (keypairs), including the private key are
 // encrypted using the passphrase.
+//
+// If the wallet is already encrypted, this method will return an error. If the provided passphrase is too weak, this method
+// will also return an error.
+//
+// This method first converts the passphrase to bytes, then gets the wallet's data as bytes using the vaultToBytes method.
+// It then encrypts the wallet's data using the encrypt method and stores the ciphertext in the Ciphertext field.
+// Finally, it sets the vault field to nil and the Encrypted field to true.
 func (w *Wallet) Lock(passphrase string) error {
 
 	// Check if the wallet is already encrypted.
@@ -457,6 +537,13 @@ func (w *Wallet) Lock(passphrase string) error {
 
 // Unlock unlocks the wallet using the provided passphrase. Basically the wallet's data (keypairs), including the private key are
 // decrypted using the passphrase.
+//
+// If the wallet is already decrypted, this method will return an error. If the provided passphrase is incorrect, this method
+// will also return an error.
+//
+// This method first converts the passphrase to bytes, then decrypts the wallet's data using the decrypt method. It then
+// sets the wallet's data by calling the bytesToVault method. Finally, it sets the Ciphertext field to an empty slice and
+// the Encrypted field to false.
 func (w *Wallet) Unlock(passphrase string) error {
 
 	// Check if the wallet is already decrypted.
@@ -486,7 +573,9 @@ func (w *Wallet) Unlock(passphrase string) error {
 	return nil
 }
 
-// Close encrypts and saves the wallet to disk as a JSON file.
+// Close encrypts and saves the wallet to disk as a JSON file. If the wallet is already encrypted, this method will return an error.
+// This method first locks the wallet using the provided passphrase, then saves the encrypted wallet to disk using the localStorage.Set method.
+// If any errors occur during the locking or saving process, this method will return an error.
 func (w *Wallet) Close(passphrase string) error {
 	if w.Encrypted {
 		return errors.New("cannot save an already encrypted wallet")
@@ -502,21 +591,6 @@ func (w *Wallet) Close(passphrase string) error {
 		return fmt.Errorf("failed to save wallet: %v", err)
 	}
 
-	// createFolder(walletFolder)
-
-	// filename := fmt.Sprintf("%s/%s.json", walletFolder, w.GetAddress())
-	// file, err := os.Create(filename)
-	// if err != nil {
-	// 	return fmt.Errorf("failed to save wallet: %v", err)
-	// }
-	// defer file.Close()
-
-	// enc := json.NewEncoder(file)
-	// enc.SetIndent("", " ")
-	// if err := enc.Encode(w); err != nil {
-	// 	return fmt.Errorf("failed to save wallet: %v", err)
-	// }
-
 	if verbose {
 		fmt.Printf("[%s] Wallet [%s] saved to disk\n", time.Now().Format(logDateTimeFormat), w.ID)
 	}
@@ -525,26 +599,12 @@ func (w *Wallet) Close(passphrase string) error {
 }
 
 // Open loads the wallet from disk that was saved as a JSON file.
-// it also unlocks the value and restores the wallet.vault object
+// It also unlocks the value and restores the wallet.vault object.
 func (w *Wallet) Open(passphrase string) error {
 	err := localStorage.Set("wallet", w)
 	if err != nil {
 		return err
 	}
-
-	// filename := fmt.Sprintf("%s/%s.json", walletFolder, w.GetAddress())
-
-	// file, err := os.Open(filename)
-	// if err != nil {
-	// 	return fmt.Errorf("failed to load wallet: %v", err)
-	// }
-	// defer file.Close()
-
-	// dec := json.NewDecoder(file)
-	// err = dec.Decode(w)
-	// if err != nil {
-	// 	return fmt.Errorf("failed to load wallet: %v", err)
-	// }
 
 	if len(passphrase) >= 12 {
 		err = w.Unlock(passphrase)

@@ -10,20 +10,26 @@ import (
 	"encoding/pem"
 )
 
-// PEM is a struct that holds the PEM encoded private and public keys
+// PEM is a struct that holds the PEM encoded private and public keys for a cryptographic key pair.
+// The PrivateKey field contains the PEM encoded private key, and the PublicKey field
+// contains the PEM encoded public key.
 type PEM struct {
 	PrivateKey string
 	PublicKey  string
 }
 
-// NewPEM creates a new PEM struct
+// NewPEM creates a new PEM struct containing the PEM-encoded private and public keys
+// for the provided ECDSA private key.
 func NewPEM(key *ecdsa.PrivateKey) *PEM {
 	pem := &PEM{}
 	pem.PrivateKey, pem.PublicKey = pem.Encode(key, &key.PublicKey)
 	return pem
 }
 
-// Encode encodes the private and public keys into PEM format
+// Encode encodes the provided ECDSA private and public keys into PEM format.
+// The function returns the PEM-encoded private key and public key as strings.
+// The private key is encoded using the "PRIVATE KEY" PEM block type, and the
+// public key is encoded using the "PUBLIC KEY" PEM block type.
 func (p *PEM) Encode(privateKey *ecdsa.PrivateKey, publicKey *ecdsa.PublicKey) (string, string) {
 	x509Encoded, _ := x509.MarshalECPrivateKey(privateKey)
 	pemEncoded := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: x509Encoded})
@@ -34,7 +40,10 @@ func (p *PEM) Encode(privateKey *ecdsa.PrivateKey, publicKey *ecdsa.PublicKey) (
 	return string(pemEncoded), string(pemEncodedPub)
 }
 
-// Decode decodes the private and public keys from PEM format
+// Decode decodes the private and public keys from PEM format. It takes the PEM-encoded
+// private and public keys as input, and returns the corresponding ECDSA private and
+// public keys. The function first decodes the PEM-encoded private key, then decodes
+// the PEM-encoded public key, and returns both the private and public keys.
 func (p *PEM) Decode(pemEncoded string, pemEncodedPub string) (*ecdsa.PrivateKey, *ecdsa.PublicKey) {
 	block, _ := pem.Decode([]byte(pemEncoded))
 	x509Encoded := block.Bytes

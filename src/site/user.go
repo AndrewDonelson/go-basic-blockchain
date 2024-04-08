@@ -6,7 +6,8 @@ import (
 	"fmt"
 )
 
-// User is a user
+// User represents a user of the application. It contains the user's ID, username, email, first name,
+// and hashed password.
 type User struct {
 	ID        int
 	Username  string

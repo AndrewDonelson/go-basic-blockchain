@@ -18,18 +18,21 @@ import (
 type State struct {
 }
 
-// BlockchainPersistData is the data that is persisted for a blockchain to disk.
+// BlockchainPersistData represents the data that is persisted for a blockchain to disk.
+// It contains an index for transactions (TXLookup), the current block index (CurrBlockIndex),
+// and the next block index (NextBlockIndex).
 type BlockchainPersistData struct {
 	TXLookup       *Index
 	CurrBlockIndex *int
 	NextBlockIndex *int
 }
 
+// String returns a string representation of the BlockchainPersistData, including the TXLookup, CurrBlockIndex, and NextBlockIndex.
 func (b *BlockchainPersistData) String() string {
 	return fmt.Sprintf("TXLookup: %v, CurrBlockIndex: %v, NextBlockIndex: %v", b.TXLookup, b.CurrBlockIndex, b.NextBlockIndex)
 }
 
-// Blockchain is a blockchain.
+// Blockchain is the main struct that represents the blockchain. It contains the configuration, blocks, transaction queue, transaction lookup, a mutex for concurrency control, the current and next block indices, and the average number of transactions per block.
 type Blockchain struct {
 	cfg               *Config          // Config is the configuration for the blockchain.
 	Blocks            []*Block         // Blocks is a slice of blocks in the blockchain.
@@ -41,7 +44,16 @@ type Blockchain struct {
 	AvgTxsPerBlock    float64          // AvgTxsPerBlock is the average number of transactions per block.
 }
 
-// NewBlockchain returns a new blockchain.
+// NewBlockchain creates a new instance of the Blockchain struct with the provided configuration.
+// It attempts to load the blockchain data from disk, and if that fails, it creates a new blockchain.
+// The returned Blockchain instance has the following fields initialized:
+// - cfg: the provided configuration
+// - Blocks: an empty slice of Block pointers
+// - TransactionQueue: an empty slice of Transactions
+// - TXLookup: a new TXLookupManager instance
+// - CurrentBlockIndex: 0
+// - NextBlockIndex: 1
+// - AvgTxsPerBlock: 0
 func NewBlockchain(cfg *Config) *Blockchain {
 	//localStorage = NewLocalStorage(cfg.DataPath)
 
@@ -64,7 +76,9 @@ func NewBlockchain(cfg *Config) *Blockchain {
 	return bc
 }
 
-// DisplayStatus displays the status of the blockchain.
+// DisplayStatus displays the current status of the blockchain, including the number of blocks and the size
+// of the transaction queue. It acquires a lock on the blockchain's mutex before accessing the blockchain data,
+// and releases the lock before returning.
 func (bc *Blockchain) DisplayStatus() {
 	bc.mux.Lock()
 	defer bc.mux.Unlock()
@@ -79,11 +93,14 @@ func (bc *Blockchain) DisplayStatus() {
 	}
 }
 
+// GetConfig returns the configuration used to create the Blockchain instance.
 func (bc *Blockchain) GetConfig() *Config {
 	return bc.cfg
 }
 
-// Load loads the blockchain state from disk.
+// Load loads the blockchain state from disk. It acquires a lock on the blockchain's mutex before loading
+// the state, and releases the lock before returning. It loads the blockchain's transaction lookup index,
+// current block index, and next block index from persistent storage.
 func (bc *Blockchain) Load() error {
 	bc.mux.Lock()
 	defer bc.mux.Unlock()
@@ -103,7 +120,9 @@ func (bc *Blockchain) Load() error {
 	return err
 }
 
-// Save saves the blockchain state to disk.
+// Save saves the blockchain state to disk. It acquires a lock on the blockchain's mutex before saving the
+// state, and releases the lock before returning. It saves the blockchain's transaction lookup index, current
+// block index, and next block index to persistent storage.
 func (bc *Blockchain) Save() error {
 	data := &BlockchainPersistData{
 		TXLookup:       bc.TXLookup.index.Get(),
@@ -119,7 +138,10 @@ func (bc *Blockchain) Save() error {
 	return err
 }
 
-// CreateBLockchain creates a new blockchain.
+// createBLockchain creates a new blockchain. It sets the blockchain organization ID, app ID, admin user ID,
+// dev asset ID, and miner asset ID. It then creates two wallets, one for the dev and one for the miner. It
+// generates a coinbase transaction and a bank transaction, and adds them to the genesis block. Finally, it
+// generates the genesis block for the new blockchain.
 func (bc *Blockchain) createBLockchain() error {
 
 	// Set the Blockchain Organization ID, App ID and Admin User ID as defined in the constants
@@ -142,6 +164,9 @@ func (bc *Blockchain) createBLockchain() error {
 		return err
 	}
 
+	// Creates a new blockchain dev wallet and sets the dev address in the blockchain configuration.
+	// The dev wallet is created with a randomly generated password, which is printed to the console.
+	// The dev wallet is then opened using the generated password.
 	devWallet.Close(devWalletPW)
 	devWallet.Open(devWalletPW)
 	bc.cfg.DevAddress = devWallet.GetAddress()
@@ -152,6 +177,10 @@ func (bc *Blockchain) createBLockchain() error {
 		return err
 	}
 
+	// Creates a new miner wallet for the blockchain. The wallet is created with the specified
+	// organization ID, app ID, admin user ID, miner asset ID, wallet name, and password. The
+	// wallet is then closed and reopened, and the miner address is stored in the blockchain
+	// configuration.
 	minerWallet, err := NewWallet(NewWalletOptions(ThisBlockchainOrganizationID, ThisBlockchainAppID, ThisBlockchainAdminUserID, ThisBlockchainMinerID, "Miner", minerWalletPW, []string{"blockchain", "node", "miner"}))
 	if err != nil {
 		return err
@@ -206,6 +235,9 @@ func (bc *Blockchain) createBLockchain() error {
 }
 
 // GenerateGenesisBlock generates the genesis block if there are no existing blocks.
+// It creates a new block with the provided transactions and adds it to the blockchain.
+// If there are no transactions, the genesis block will not contain any. The genesis block
+// is the first block in the blockchain and has no previous hash.
 func (bc *Blockchain) GenerateGenesisBlock(txs []Transaction) {
 	if len(bc.Blocks) == 0 {
 		fmt.Printf("[%s] Generating Genesis Block...\n", time.Now().Format(logDateTimeFormat))
@@ -250,13 +282,9 @@ func (bc *Blockchain) GenerateGenesisBlock(txs []Transaction) {
 	}
 }
 
-// createDataFolders creates the data folders if they dont exist
-// func (bc *Blockchain) createDataFolders() {
-// 	createFolder(dataFolder)
-// 	createFolder(blockFolder)
-// }
-
-// LoadExistingBlocks loads existing blocks from disk.
+// LoadExistingBlocks loads any existing blocks from disk and appends them to the blockchain.
+// If no existing blocks are found, it creates a new blockchain by generating a genesis block.
+// This function returns an error if there is a problem loading the existing blocks.
 func (bc *Blockchain) LoadExistingBlocks() error {
 	//bc.createDataFolders()
 
@@ -290,7 +318,9 @@ func (bc *Blockchain) LoadExistingBlocks() error {
 	return nil
 }
 
-// AddTransaction adds a transaction to the transaction queue. All transactions in the queue will be added to the next block based ont he Blockchain's BlockInterval.
+// AddTransaction adds a new transaction to the transaction queue. This method is thread-safe.
+// The transaction is hashed and appended to the TransactionQueue slice. A message is printed
+// to the log with the current time and the added transaction.
 func (bc *Blockchain) AddTransaction(transaction Transaction) {
 	bc.mux.Lock()
 	transaction.Hash()
@@ -299,7 +329,11 @@ func (bc *Blockchain) AddTransaction(transaction Transaction) {
 	fmt.Printf("[%s] Added TX to que: %v\n", time.Now().Format(logDateTimeFormat), transaction)
 }
 
-// Mine mines a new block with the given transactions and difficulty.
+// Mine attempts to mine a new block for the blockchain. It takes a block and a difficulty
+// parameter, and tries different nonces until it finds a hash with the required number of
+// leading zeros. Once a valid hash is found, the block is saved to disk and appended to
+// the blockchain. The transaction queue is also cleared after a successful mining operation.
+// This function returns the mined block.
 func (bc *Blockchain) Mine(block *Block, difficulty int) *Block {
 	// Prepare difficulty string for comparison. It is a string consisting of `difficulty` number of zeros.
 	prefix := strings.Repeat("0", difficulty)
@@ -324,7 +358,8 @@ func (bc *Blockchain) Mine(block *Block, difficulty int) *Block {
 	return block
 }
 
-// VerifySignature verifies the signature of a transaction using the sender's public key.
+// VerifySignature verifies the signature of the given transaction. It takes the transaction
+// and returns an error if the signature is invalid.
 func (bc *Blockchain) VerifySignature(tx Transaction) error {
 	_, err := tx.Verify([]byte(tx.GetSenderWallet().PublicPEM()), tx.GetSignature())
 	return err
@@ -334,7 +369,11 @@ func (bc *Blockchain) VerifySignature(tx Transaction) error {
 // - cannot use tx.GetSenderWallet().PublicKey (variable of type *ecdsa.PublicKey) as []byte value in argument to VerifySignature
 // - invalid operation: cannot compare err != nil (mismatched types bool and untyped nil)
 
-// Run runs the blockchain.
+// Run is a long-running function that manages the blockchain. It creates two tickers, one that fires every
+// second and one that fires every 5 seconds. The first ticker calls DisplayStatus() to display the current
+// status of the blockchain. The second ticker checks the transaction queue and creates a new block if there
+// are any transactions. The new block is mined, added to the blockchain, and the transaction queue is cleared.
+// The block is also saved to disk.
 func (bc *Blockchain) Run(difficulty int) {
 	// Create a ticker that fires every second
 	statusTicker := time.NewTicker(time.Second)
@@ -396,7 +435,9 @@ func (bc *Blockchain) Run(difficulty int) {
 	}()
 }
 
-// generateHash generates a hash for a block.
+// generateHash generates a SHA-512 hash for the given block. The hash is calculated
+// by concatenating the block's index, timestamp, nonce, and previous hash, and then
+// hashing the resulting string using the SHA-512 algorithm.
 func (bc *Blockchain) generateHash(block *Block) string {
 	record := block.Index.Text(10) + block.Timestamp.String() + block.Nonce + block.PreviousHash
 	h := sha512.New()

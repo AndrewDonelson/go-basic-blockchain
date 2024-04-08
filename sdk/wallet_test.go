@@ -1,6 +1,8 @@
 package sdk
 
 import (
+	"bytes"
+	"crypto/sha256"
 	"encoding/hex"
 	"testing"
 
@@ -151,4 +153,121 @@ func TestWallet(t *testing.T) {
 	sentTx, err := wallet1.SendTransaction(wallet2.GetAddress(), tx, bc)
 	assert.NoError(t, err)
 	assert.NotNil(t, sentTx)
+}
+func TestWallet_SetDataAndGetBalance(t *testing.T) {
+	walletOptions := NewWalletOptions(nil, nil, nil, nil, "Test Wallet", "strongpassphrase", []string{"tag1", "tag2"})
+	wallet, err := NewWallet(walletOptions)
+	if err != nil {
+		t.Fatalf("Failed to create wallet: %v", err)
+	}
+
+	err = wallet.SetData("balance", int64(100))
+	if err != nil {
+		t.Errorf("Failed to set balance: %v", err)
+	}
+
+	balance := wallet.GetBalance()
+	if balance != 100 {
+		t.Errorf("Expected balance to be 100, got %f", balance)
+	}
+}
+
+func TestWallet_LockAndUnlock(t *testing.T) {
+	passphrase := "strongpassphrase"
+	walletOptions := NewWalletOptions(nil, nil, nil, nil, "Test Wallet", passphrase, []string{"tag1", "tag2"})
+	wallet, err := NewWallet(walletOptions)
+	if err != nil {
+		t.Fatalf("Failed to create wallet: %v", err)
+	}
+
+	err = wallet.Lock(passphrase)
+	if err != nil {
+		t.Errorf("Failed to lock wallet: %v", err)
+	}
+
+	if !wallet.Encrypted {
+		t.Errorf("Wallet should be encrypted after locking")
+	}
+
+	err = wallet.Unlock(passphrase)
+	if err != nil {
+		t.Errorf("Failed to unlock wallet: %v", err)
+	}
+
+	if wallet.Encrypted {
+		t.Errorf("Wallet should not be encrypted after unlocking")
+	}
+}
+
+func TestWallet_EncryptDecrypt(t *testing.T) {
+	passphrase := "securepassphrase"
+	data := []byte("test data to encrypt and decrypt")
+
+	wallet := &Wallet{}
+	encryptedData, err := wallet.encrypt([]byte(passphrase), data)
+	if err != nil {
+		t.Fatalf("Failed to encrypt data: %v", err)
+	}
+
+	decryptedData, err := wallet.decrypt([]byte(passphrase), encryptedData)
+	if err != nil {
+		t.Fatalf("Failed to decrypt data: %v", err)
+	}
+
+	if string(decryptedData) != string(data) {
+		t.Errorf("Decrypted data does not match original data. Got %s, want %s", decryptedData, data)
+	}
+}
+
+func TestWallet_DeriveKey(t *testing.T) {
+	passphrase := "anothersecurepassphrase"
+	wallet := &Wallet{}
+
+	key, salt, err := wallet.deriveKey([]byte(passphrase), nil)
+	if err != nil {
+		t.Fatalf("Failed to derive key: %v", err)
+	}
+
+	if len(key) != 32 {
+		t.Errorf("Derived key length is not 32 bytes. Got %d", len(key))
+	}
+
+	if len(salt) != 32 {
+		t.Errorf("Salt length is not 32 bytes. Got %d", len(salt))
+	}
+
+	// Derive key again with the same passphrase and salt to ensure it produces the same key
+	key2, _, err := wallet.deriveKey([]byte(passphrase), salt)
+	if err != nil {
+		t.Fatalf("Failed to derive key with the same salt: %v", err)
+	}
+
+	if !bytes.Equal(key, key2) {
+		t.Errorf("Derived keys with the same passphrase and salt do not match")
+	}
+}
+
+func TestWallet_PublicBytesAndAddress(t *testing.T) {
+	walletOptions := NewWalletOptions(nil, nil, nil, nil, "Test Wallet", "strongpassphrase", []string{"tag1", "tag2"})
+	wallet, err := NewWallet(walletOptions)
+	if err != nil {
+		t.Fatalf("Failed to create wallet: %v", err)
+	}
+
+	address := wallet.GetAddress()
+	if address == "" {
+		t.Errorf("Failed to generate wallet address")
+	}
+
+	pubBytes, err := wallet.PublicBytes()
+	if err != nil {
+		t.Errorf("Failed to get public key bytes: %v", err)
+	}
+
+	hash := sha256.Sum256(pubBytes)
+	expectedAddress := hex.EncodeToString(hash[:])
+
+	if address != expectedAddress {
+		t.Errorf("Generated address does not match expected address. Got %s, want %s", address, expectedAddress)
+	}
 }

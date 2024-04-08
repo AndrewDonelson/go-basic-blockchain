@@ -73,6 +73,8 @@ func (b *BigInt) Base64() string {
 }
 
 // RandomBigInt returns a cryptographically secure random BigInt incorporating the current time in nanoseconds.
+// It generates a random 64-bit integer and combines it with the current time in nanoseconds to create a new BigInt.
+// This function is useful for generating unique, random BigInt values.
 func (b *BigInt) Random() (*BigInt, error) {
 	// Generate a random 64-bit integer
 	var randomInt int64
@@ -185,31 +187,37 @@ func (b *BigInt) Xor(other *BigInt) *BigInt {
 	return &BigInt{Val: b.Val ^ other.Val}
 }
 
-// Bitwise NOT operation
+// Not returns the bitwise complement of the BigInt.
 func (b *BigInt) Not() *BigInt {
 	return &BigInt{Val: ^b.Val}
 }
 
-// Bitwise shift left operation
+// Shl shifts the BigInt left by the given number of bits.
 func (b *BigInt) Shl(n uint) *BigInt {
 	return &BigInt{Val: b.Val << n}
 }
 
 // Bitwise shift right operation
+// Shr shifts the bits of the BigInt to the right by the given number of positions.
+// It returns a new BigInt with the shifted bits.
 func (b *BigInt) Shr(n uint) *BigInt {
 	return &BigInt{Val: b.Val >> n}
 }
 
 // Helper functions
 
+// parseInt64 parses the given string as a 64-bit integer in base 10.
+// It returns the parsed integer and any error that occurred during parsing.
 func parseInt64(s string) (int64, error) {
 	return strconv.ParseInt(s, 10, 64)
 }
 
+// formatInt64 converts an int64 value to a string representation.
 func formatInt64(val int64) string {
 	return strconv.FormatInt(val, 10)
 }
 
+// encodeToBase64 encodes the given byte slice to a base64 string.
 func encodeToBase64(data []byte) string {
 	return base64.StdEncoding.EncodeToString(data)
 }

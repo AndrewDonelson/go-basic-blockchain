@@ -60,28 +60,29 @@ func TestProcessQueue(t *testing.T) {
 	p2p.ProcessQueue() // should do nothing
 
 	// Add some mock transactions
+	puidTX1 := NewPUIDThis()
 	tx1 := P2PTransaction{
-		Tx:     Tx{ID: "tx1"},
+		Tx:     Tx{ID: puidTX1},
 		Target: "node",
 		Action: "status",
 	}
 	tx2 := P2PTransaction{
-		Tx:     Tx{ID: "tx2"},
+		Tx:     Tx{ID: NewPUIDThis()},
 		Target: "node",
 		Action: "add",
 	}
 	tx3 := P2PTransaction{
-		Tx:     Tx{ID: "tx3"},
+		Tx:     Tx{ID: NewPUIDThis()},
 		Target: "node",
 		Action: "remove",
 	}
 	tx4 := P2PTransaction{
-		Tx:     Tx{ID: "tx4"},
+		Tx:     Tx{ID: NewPUIDThis()},
 		Target: "node",
 		Action: "register",
 	}
 	tx5 := P2PTransaction{
-		Tx:     Tx{ID: "tx5"},
+		Tx:     Tx{ID: NewPUIDThis()},
 		Target: "node",
 		Action: "validate",
 	}
@@ -97,7 +98,7 @@ func TestProcessQueue(t *testing.T) {
 	p2p.ProcessQueue() // should do nothing
 
 	// Check if the transaction is in the network
-	if !p2p.HasTransaction("tx1") {
+	if !p2p.HasTransaction(puidTX1) {
 		t.Errorf("Transaction not found in the network")
 	}
 

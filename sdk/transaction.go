@@ -20,7 +20,21 @@ import (
 	"time"
 )
 
-// Transaction is an interface that defines the Processes for the different types of protocol transactions.
+// Transaction is an interface that defines the common methods for all Dynamic Protocol based transactions.
+// Process() executes the transaction logic.
+// GetProtocol() returns the protocol name associated with the transaction.
+// GetID() returns the unique identifier for the transaction.
+// GetHash() returns the hash of the transaction.
+// GetSignature() returns the signature of the transaction.
+// GetSenderWallet() returns the wallet of the transaction sender.
+// Sign(privPEM []byte) signs the transaction with the provided private key.
+// Verify(pubKey []byte, sign string) verifies the transaction signature with the provided public key.
+// Send(bc *Blockchain) sends the transaction to the provided blockchain.
+// String() returns a string representation of the transaction.
+// Hex() returns the hexadecimal representation of the transaction.
+// Hash() returns the hash of the transaction.
+// Bytes() returns the byte representation of the transaction.
+// JSON() returns the JSON representation of the transaction.
 type Transaction interface {
 	Process() string
 	GetProtocol() string
@@ -38,7 +52,17 @@ type Transaction interface {
 	JSON() string
 }
 
-// Tx is a transaction that represents a generic transaction.
+// Tx is a generic transaction that represents a transfer of value between two wallets.
+// The ID field is a unique identifier for the transaction, which is typically the hash of the transaction.
+// The Time field represents the time the transaction was created.
+// The Version field specifies the version of the transaction.
+// The Protocol field identifies the protocol associated with the transaction (e.g. coinbase, bank, message).
+// The From and To fields represent the sending and receiving wallets, respectively.
+// The Fee field specifies the transaction fee.
+// The Status field tracks the current status of the transaction (e.g. pending, confirmed, inserted, failed).
+// The BlockNum field indicates the block number the transaction was inserted into.
+// The Signature field contains the signature of the transaction.
+// The hash field stores the hash of the transaction.
 type Tx struct {
 	ID        *PUID     // Unit ID of the transaction (TODO: actually this should be the hash of the transaction)
 	Time      time.Time // Time the transaction was created
@@ -53,7 +77,12 @@ type Tx struct {
 	hash      string    // Hash of the transaction
 }
 
-// NewTransaction creates a new Base transaction with no protocol. This is used for coinbase transactions.
+// NewTransaction creates a new transaction with the specified protocol, sender wallet, and recipient wallet.
+// If the protocol is invalid, an error is returned.
+// If either the sender or recipient wallet is nil, an error is returned.
+// The new transaction is initialized with the current time, the specified protocol, the sender and recipient wallets,
+// and a default transaction fee. The transaction ID is set to the recipient wallet's PUID, and a random asset ID is
+// assigned to the recipient wallet's PUID.
 func NewTransaction(protocol string, from *Wallet, to *Wallet) (*Tx, error) {
 	err := isValidProtocol(protocol)
 	if err != nil {

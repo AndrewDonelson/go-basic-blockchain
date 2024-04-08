@@ -6,7 +6,9 @@ import (
 	"fmt"
 )
 
-// Coinbase is the Coinbase transaction.
+// Coinbase represents a coinbase transaction, which is a special type of transaction
+// that is used to reward miners for mining a new block. It contains information
+// about the block, the miner's reward, and any additional rewards or fees.
 type Coinbase struct {
 	Tx
 	BlockchainName   string
@@ -24,7 +26,9 @@ type Coinbase struct {
 	AllowNewTokens   bool
 }
 
-// NewCoinbaseTransaction creates a new Coinbase transaction.
+// NewCoinbaseTransaction creates a new coinbase transaction. It takes a from wallet, a to wallet, and a configuration object as input.
+// The function returns a new Coinbase transaction and an error if any.
+// The Coinbase transaction contains information about the block, the miner's reward, and any additional rewards or fees.
 func NewCoinbaseTransaction(from *Wallet, to *Wallet, cfg *Config) (*Coinbase, error) {
 	tx, err := NewTransaction(CoinbaseProtocolID, from, to)
 	if err != nil {
@@ -49,7 +53,8 @@ func NewCoinbaseTransaction(from *Wallet, to *Wallet, cfg *Config) (*Coinbase, e
 	}, nil
 }
 
-// Process processes the bank transaction.
+// Process updates the wallet balance with the token count and returns a string
+// describing the transfer of the transaction fee.
 func (c *Coinbase) Process() string {
 	err := c.From.SetData("balance", c.TokenCount)
 	if err != nil {

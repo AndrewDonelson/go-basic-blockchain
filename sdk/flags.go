@@ -1,3 +1,5 @@
+// Package sdk is a software development kit for building blockchain applications.
+// File sdk/flags.go - Flags for the blockchain
 package sdk
 
 import (

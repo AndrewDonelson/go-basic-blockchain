@@ -8,12 +8,14 @@ import (
 )
 
 // Address represents a blockchain address.
+// It contains the raw address string and a prepended version of the address.
 type Address struct {
 	RawAddress       string
 	PrependedAddress string
 }
 
-// NewAddress creates a new Address object with the given raw address and blockchain symbol.
+// NewAddress creates a new Address with the given raw address and blockchain symbol.
+// The raw address is prepended with the blockchain symbol to create the prepended address.
 func NewAddress(rawAddress, blockchainSymbol string) *Address {
 	prependedAddress := prependSymbol(rawAddress, blockchainSymbol)
 	return &Address{
@@ -22,7 +24,7 @@ func NewAddress(rawAddress, blockchainSymbol string) *Address {
 	}
 }
 
-// GetRawAddress returns the raw address.
+// GetRawAddress returns the raw address string of the Address.
 func (a *Address) GetRawAddress() string {
 	return a.RawAddress
 }

@@ -230,7 +230,7 @@ func (p *P2P) AddTransaction(tx P2PTransaction) {
 }
 
 // HasTransaction checks if the P2P network has a specified transaction. it will request the same transaction from other nodes in the network.
-func (p *P2P) HasTransaction(id string) bool {
+func (p *P2P) HasTransaction(id *PUID) bool {
 	p.mutex.Lock()
 	defer p.mutex.Unlock()
 

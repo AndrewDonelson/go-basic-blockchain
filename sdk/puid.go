@@ -42,6 +42,7 @@ type PUID struct {
 }
 
 // NewPUIDEmpty creates a new PUID instance with all fields set to zero.
+// NewPUIDEmpty creates a new PUID instance with all fields set to zero.
 func NewPUIDEmpty() *PUID {
 	return &PUID{
 		UserID:         *NewBigInt(0),
@@ -49,6 +50,11 @@ func NewPUIDEmpty() *PUID {
 		AppID:          *NewBigInt(0),
 		AssetID:        *NewBigInt(0),
 	}
+}
+
+// NewPUIDThis creates a new PUID for this blockchain using the ThisBlockchain* constants
+func NewPUIDThis() *PUID {
+	return NewPUID(ThisBlockchainOrganizationID, ThisBlockchainAppID, ThisBlockchainAdminUserID, ThisBlockchainDevAssetID)
 }
 
 // NewPUID creates a new PUID instance.

@@ -14,21 +14,29 @@ import (
 	"github.com/op/go-logging"
 )
 
+// serverSeed is a constant that holds a hex-encoded 32-byte seed value used for cryptographic purposes.
 const serverSeed = "0ebe1955e527d0a3f354315d0af97e88be3d4a499c9dacd0d947bf1bd5c71bca"
 
+// APIKeyList is a map that associates API keys with their corresponding values.
+// This type is used to store and manage API keys in the application.
 type APIKeyList map[string]string
 
-// ErrorResponse represents the structure of an error response.
+// ErrorResponse represents the structure of an error response returned by the API.
+// It contains a single field, Message, which holds a string describing the error.
 type ErrorResponse struct {
 	Message string `json:"message"`
 }
 
+// TokenData represents the data associated with an API token.
+// It contains the token key and the user associated with the token.
 type TokenData struct {
 	Key  string
 	User User
 }
 
-// Configuration structure (simplified for demonstration purposes)
+// Config is a configuration structure that holds various settings for the application.
+// It includes the header name for API keys, a map of API keys and their associated values,
+// and a slice of User structs representing the application's users.
 type Config struct {
 	APIKeyHeader string
 	APIKeys      APIKeyList
@@ -36,16 +44,29 @@ type Config struct {
 }
 
 var (
+
+	// apiKeys is a map that associates API keys with their corresponding values.
+	// This map is used to store and manage API keys in the application.
+	// The example key-value pair associates the email "nlaakald@gmail.com" with the API key
+	// "0065db4b04d8969ad21109084d8e9038444a06692a7625373012c5fb7b1cd131".
 	apiKeys = APIKeyList{
 		"nlaakald@gmail.com": "0065db4b04d8969ad21109084d8e9038444a06692a7625373012c5fb7b1cd131",
 	}
 
-	logger        = logging.MustGetLogger("example")
+	// logger is a global logger instance used throughout the application.
+	// It is initialized with the name "example" and can be used to log messages
+	// at various log levels (e.g. debug, info, error).
+	logger = logging.MustGetLogger("example")
+
+	// defaultConfig is a configuration object that sets the API key header name to "Authorization"
+	// and initializes the API keys map with the predefined apiKeys.
 	defaultConfig = Config{
 		APIKeyHeader: "Authorization",
 		APIKeys:      apiKeys,
 	}
 
+	// NewRouter creates a new router instance. It is the entry point for defining HTTP
+	// routes and handlers in the application.
 	r = mux.NewRouter()
 )
 
@@ -144,11 +165,15 @@ func ApiKeyMiddleware(cfg Config, logger logging.Logger) (func(handler http.Hand
 	}, nil
 }
 
+// homePage is a public HTTP handler that writes a welcome message to the response.
 func homePage(w http.ResponseWriter, r *http.Request) {
 	// Public page
 	w.Write([]byte("Welcome to the public page!"))
 }
 
+// protectedPage is a HTTP handler that displays a welcome message to the authenticated user.
+// It retrieves the user email from the request context and uses it to display a personalized
+// welcome message. If the user is not found in the context, it returns a 500 Internal Server Error.
 func protectedPage(w http.ResponseWriter, r *http.Request) {
 	userValue := r.Context().Value("user")
 	if userValue == nil {
