@@ -30,6 +30,8 @@ func (a *Address) GetRawAddress() string {
 }
 
 // GetPrependedAddress returns the address with the blockchain symbol prepended.
+// This method returns the full address string that includes the blockchain symbol
+// prepended to the raw address.
 func (a *Address) GetPrependedAddress() string {
 	return a.PrependedAddress
 }
@@ -39,7 +41,7 @@ func prependSymbol(address, symbol string) string {
 	return symbol + address
 }
 
-// GetAddressHash calculates and returns the SHA-256 hash of the address.
+// GetAddressHash calculates and returns the SHA-256 hash of the prepended address.
 func (a *Address) GetAddressHash() string {
 	hash := sha256.Sum256([]byte(a.PrependedAddress))
 	return hex.EncodeToString(hash[:])

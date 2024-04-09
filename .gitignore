@@ -33,3 +33,4 @@ _data/
 data/
 data_test/
 chaind_data/
+cmd/chaind/chaind

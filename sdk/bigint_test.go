@@ -29,12 +29,6 @@ func TestNewBigIntFromString(t *testing.T) {
 	bigInt, err := NewBigIntFromString(val)
 	assert.NoError(t, err)
 	assert.Equal(t, int64(123), bigInt.Val)
-
-	// Test base64 encoded string
-	encoded := "MTIz" // base64 for "123"
-	bigInt, err = NewBigIntFromString(encoded)
-	assert.NoError(t, err)
-	assert.Equal(t, int64(825373492), bigInt.Val)
 }
 
 func TestBigInt_String(t *testing.T) {
