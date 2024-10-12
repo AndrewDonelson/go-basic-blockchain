@@ -40,7 +40,7 @@ ENV_FILE     := $(CURDIR)/.local.env
 all: setup fmt lint test build ## Run setup, format, lint, test, and build
 
 .PHONY: build
-build: ; $(info $(M) building executable...) @ ## Build production binary
+build: ; $(info $(M) building executable ($(MODNAME))...) @ ## Build production binary
 	$Q $(GO) build \
 		-tags release \
 		-ldflags '-X $(MODULE)/cmd.Version=$(VERSION) -X $(MODULE)/cmd.BuildDate=$(DATE)' \

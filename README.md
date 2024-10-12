@@ -1,6 +1,35 @@
 # go-basic-blockchain
 
-A Basic Blockchain written from scratch (in golang) and not using any 3rd party blockchain (go-ethereum, bitcoin, etc) to teach others.
+## Educational Blockchain Implementation in Go
+
+Welcome to go-basic-blockchain, an educational project designed to demystify blockchain technology through a hands-on, from-scratch implementation in Go. This project serves as a comprehensive learning tool for developers, students, and blockchain enthusiasts who want to understand the fundamental mechanics of blockchain systems.
+
+Key Features:
+- Built from Scratch: Every component of this blockchain is implemented from the ground up, without relying on third-party blockchain libraries like go-ethereum or bitcoin. This approach ensures a deep understanding of each blockchain element.
+- Go Programming Language: Utilizing Go's simplicity and efficiency, this project demonstrates how to build complex systems with a clean, readable codebase.
+- Readable JSON Format: We've chosen to use human-readable JSON for data structures and storage, making it easier for learners to inspect and understand the blockchain's state at any given time.
+- No Third-Party Dependencies: By avoiding external blockchain libraries, we encourage learners to think through and implement core blockchain concepts themselves, fostering a deeper understanding of the technology.
+- Educational Focus: Each component is thoroughly commented and documented, explaining not just the how, but the why behind design decisions and implementations.
+
+## Learning Objectives:
+
+- Understand the fundamental structure of a blockchain
+- Implement core blockchain components: blocks, transactions, wallets, and mining
+- Explore consensus mechanisms and proof-of-work algorithms
+- Learn about cryptographic principles used in blockchain technology
+- Gain insights into blockchain data structures and their implementations
+
+## Who is this for?
+
+This project is ideal for:
+
+- Software developers looking to expand their blockchain knowledge
+- Computer science students studying distributed systems and cryptography
+- Blockchain enthusiasts who want to peek under the hood of blockchain technology
+- Anyone interested in understanding how blockchain works at a fundamental level
+
+By exploring this codebase, you'll gain hands-on experience with blockchain concepts, preparing you to work with or develop more complex blockchain systems in the future. Whether you're looking to contribute to existing blockchain projects or innovate with your own, this educational implementation provides the foundational knowledge you need.
+Let's dive in and start building a blockchain from the ground up!
 
 Here is a current screenshot of a debug session:
 
