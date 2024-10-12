@@ -77,11 +77,16 @@ func NewConfig() *Config {
 	if verbose {
 		if !cfg.testing {
 			//  step 3: Load all values in the .env file if it exists
-			err := godotenv.Load(cfgFile)
+			envFile := os.Getenv("ENV_FILE")
+			if envFile == "" {
+				envFile = cfgFile // fallback to default
+			}
+
+			err := godotenv.Load(envFile)
 			if err != nil {
-				log.Fatal("Error loading .env file")
+				log.Printf("Error loading [%s] environment file: %v", envFile, err)
 			} else {
-				log.Print("Loaded .env file")
+				log.Printf("Loaded [%s] environment file", envFile)
 			}
 
 			// step 4: set the values from the environment variables

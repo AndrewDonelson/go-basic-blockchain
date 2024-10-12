@@ -1,3 +1,4 @@
+// file: sdk/address_test.gogo build
 package sdk
 
 import (

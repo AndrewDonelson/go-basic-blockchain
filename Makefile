@@ -1,190 +1,133 @@
-# Change this to your organization name
-ORGANIZATION = Nlaak Studios, LLC
-# If you need to expose a port and/or use docker then set this value
-USEPORT  = 0
+# Improved Makefile for Go Basic Blockchain Project
+# Organization: Nlaak Studios, LLC
+# Version: 2.1
 
-# >>>>>>>>>>>>>>>>>>>>>>>><<<<<<<<<<<<<<<<<<<<<<<<<<<
-# >>>>>>>>>> DO NOT CHANGE BELOW THIS LINE <<<<<<<<<<
-# >>>>>>>>>>>>>>>>>>>>>>>><<<<<<<<<<<<<<<<<<<<<<<<<<<
-export GO111MODULE=on
-MODULE   = $(shell env GO111MODULE=on $(GO) list -m)
-MODNAME  = $(basename $(notdir $(MODULE)))
-DATE    ?= $(shell date +%FT%T%z)
-VERSION ?= $(shell git describe --tags --always --dirty --match=v* 2> /dev/null || \
-			cat $(CURDIR)/.version 2> /dev/null || echo v0)
-PKGS     = $(or $(PKG),$(shell env GO111MODULE=on $(GO) list ./...))
-TESTPKGS = $(shell env GO111MODULE=on $(GO) list -f \
-			'{{ if or .TestGoFiles .XTestGoFiles }}{{ .ImportPath }}{{ end }}' \
-			$(PKGS))
-BIN      = $(CURDIR)/bin
+# Project configuration
+ORGANIZATION := Nlaak Studios, LLC
+MODNAME      := $(shell basename $(shell go list -m))
+MODULE       := $(shell go list -m)
+VERSION      := $(shell git describe --tags --always --dirty --match=v* 2> /dev/null || echo v0.0.0)
+DATE         := $(shell date -u +"%Y-%m-%dT%H:%M:%SZ")
+USEPORT      := 0
 
-GO      = go
-TIMEOUT = 15
-V = 0
-Q = $(if $(filter 1,$V),,@)
-M = $(shell printf "\033[34;1m->\033[0m")
+# Go related variables
+GO           := go
+GOPATH       := $(shell go env GOPATH)
+GOBIN        := $(GOPATH)/bin
+GOLANGCI     := $(GOBIN)/golangci-lint
+DELVE        := $(GOBIN)/dlv
 
-# 
-.PHONY: deploy
+# Build variables
+BIN          := $(CURDIR)/bin
+PKGS         := $(or $(PKG),$(shell $(GO) list ./...))
+TESTPKGS     := $(shell $(GO) list -f '{{ if or .TestGoFiles .XTestGoFiles }}{{ .ImportPath }}{{ end }}' $(PKGS))
+TIMEOUT      := 15
+V            := 0
+Q            := $(if $(filter 1,$V),,@)
+M            := $(shell printf "\033[34;1m->\033[0m")
 
-# deploy executes the full build and test process, including cleaning the workspace,
-# running race tests, coverage tests, and building the final binary.
-deploy: version clean test-race test-coverage all
+# Test coverage variables
+COVERAGE_DIR    := $(CURDIR)/test/coverage
+COVERAGE_PROFILE := $(COVERAGE_DIR)/profile.out
+COVERAGE_XML    := $(COVERAGE_DIR)/coverage.xml
+COVERAGE_HTML   := $(COVERAGE_DIR)/index.html
 
-# build builds the main binary for the application. It sets the version and build date
-# information in the binary using the VERSION and DATE variables.
-build:
-	$Q $(GO) build \
-		-tags release \
-		-ldflags '-X $(MODULE)/cmd.Version=$(VERSION) -X $(MODULE)/cmd.BuildDate=$(DATE)' \
-		-o $(BIN)/$(basename $(notdir $(MODULE))) src/main.go
+# Development variables
+DEV_MAIN     := ./cmd/chaind/main.go
+ENV_FILE     := $(CURDIR)/.local.env
 
-# all is a phony target that executes the full build and test process,
-# including cleaning the workspace, running race tests, coverage tests,
-# and building the final binary.
-#
-# It builds the main binary for the application, setting the version and
-# build date information in the binary using the VERSION and DATE variables.
 .PHONY: all
-all: setup fmt lint | $(BIN) ; $(info $(M) building executable…) @ ## Build binary
+all: setup fmt lint test build ## Run setup, format, lint, test, and build
+
+.PHONY: build
+build: ; $(info $(M) building executable...) @ ## Build production binary
 	$Q $(GO) build \
 		-tags release \
 		-ldflags '-X $(MODULE)/cmd.Version=$(VERSION) -X $(MODULE)/cmd.BuildDate=$(DATE)' \
-		-o $(BIN)/$(basename $(notdir $(MODULE))) main.go
+		-o $(BIN)/$(MODNAME) main.go
 
-# The `docker` target in the Makefile builds a Docker container image for the application.
-# It first builds the Go binary in a builder container, optimizing the binary by stripping
-# unnecessary symbols and compressing it with UPX. It then copies the optimized binary
-# into a minimal scratch-based container, setting the working directory and environment
-# variables, and running the binary as the container's entrypoint.
-.PHONY: docker
-docker: deploy ## Deploy + Docker Container
-	FROM golang:latest as builder
+.PHONY: run-dev
+run-dev: ; $(info $(M) running development version...) @ ## Run development version
+	$Q ENV_FILE=$(ENV_FILE) $(GO) run -tags dev $(DEV_MAIN)
 
-	# install xz
-	RUN apt-get update && apt-get install -y \
-		xz-utils \
-		&& rm -rf /var/lib/apt/lists/*
+.PHONY: debug
+debug: ; $(info $(M) debugging development version...) @ ## Debug development version
+	$Q $(GO) build -gcflags="all=-N -l" -o $(BIN)/$(MODNAME)-debug $(DEV_MAIN)
+	$Q $(DELVE) exec $(BIN)/$(MODNAME)-debug
 
-	# install UPX
-	ADD https://github.com/upx/upx/releases/download/v3.95/upx-3.95-amd64_linux.tar.xz /usr/local
-	RUN xz -d -c /usr/local/upx-3.95-amd64_linux.tar.xz | \
-		tar -xOf - upx-3.95-amd64_linux/upx > /bin/upx && \
-		chmod a+x /bin/upx
+.PHONY: setup
+setup: ; $(info $(M) setting up dependencies...) @ ## Setup go modules
+	$Q $(GO) mod init || true
+	$Q $(GO) mod tidy
+	$Q $(GO) mod vendor
 
-	# Create and change into our source code folder
-	RUN mkdir --parents ~/$(MODNAME) \
-		&& cd /$(MODNAME)
+.PHONY: fmt
+fmt: ; $(info $(M) running gofmt...) @ ## Run gofmt on all source files
+	$Q $(GO) fmt $(PKGS)
 
-	# Set the default working folder and add our source
-	WORKDIR /$(MODNAME)
-	ADD . ./
+.PHONY: lint
+lint: | $(GOLANGCI) ; $(info $(M) running golangci-lint...) @ ## Run golangci-lint
+	$Q $(GOLANGCI) run
 
-	# Build it
-	RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -ldflags '-extldflags "-static"' -o main .
+.PHONY: test
+test: fmt lint ; $(info $(M) running tests...) @ ## Run tests
+	$Q $(GO) test -v -race -cover $(TESTPKGS)
 
-	# Strip and Compress the binary
-	RUN strip --strip-unneeded main
-	RUN upx main
-
-	# Build image to be deployed
-	FROM scratch
-	COPY --from=builder ~/$(MODNAME) ~
-
-	WORKDIR ~
-	ENV PORT=$(USEPORT)
-	CMD ["./main"]
-
-# Tools
-#	   env GO111MODULE=off GOPATH=$$tmp GOBIN=$(BIN) $(GO) get $(PACKAGE) \
-
-$(BIN):
-	@mkdir -p $@
-$(BIN)/%: | $(BIN) ; $(info $(M) building $(PACKAGE)…)
-	$Q tmp=$$(mktemp -d); \
-	   GOPATH=$$tmp GOBIN=$(BIN) $(GO) get $(PACKAGE) \
-		|| ret=$$?; \
-	   rm -rf $$tmp ; exit $$ret
-
-GOLINT = $(BIN)/golint
-$(BIN)/golint: PACKAGE=golang.org/x/lint/golint
-
-GOCOV = $(BIN)/gocov
-$(BIN)/gocov: PACKAGE=github.com/axw/gocov/...
-
-GOCOVXML = $(BIN)/gocov-xml
-$(BIN)/gocov-xml: PACKAGE=github.com/AlekSi/gocov-xml
-
-GO2XUNIT = $(BIN)/go2xunit
-$(BIN)/go2xunit: PACKAGE=github.com/tebeka/go2xunit
-
-# Tests
-
-TEST_TARGETS := test-default test-bench test-short test-verbose test-race
-.PHONY: $(TEST_TARGETS) test-xml check test tests
-test-bench:   ARGS=-run=__absolutelynothing__ -bench=. ## Run benchmarks
-test-short:   ARGS=-short        ## Run only short tests
-test-verbose: ARGS=-v            ## Run tests in verbose mode with coverage reporting
-test-race:    ARGS=-race         ## Run tests with race detector
-$(TEST_TARGETS): NAME=$(MAKECMDGOALS:test-%=%)
-$(TEST_TARGETS): test
-check test tests: fmt lint ; $(info $(M) running $(NAME:%=% )tests…) @ ## Run tests
-	$Q $(GO) test -timeout $(TIMEOUT)s $(ARGS) $(TESTPKGS)
-
-test-xml: fmt lint | $(GO2XUNIT) ; $(info $(M) running xUnit tests…) @ ## Run tests with xUnit output
-	$Q mkdir -p test
-	$Q 2>&1 $(GO) test -timeout $(TIMEOUT)s -v $(TESTPKGS) | tee test/tests.output
-	$(GO2XUNIT) -fail -input test/tests.output -output test/tests.xml
-
-COVERAGE_MODE    = atomic
-COVERAGE_PROFILE = $(COVERAGE_DIR)/profile.out
-COVERAGE_XML     = $(COVERAGE_DIR)/coverage.xml
-COVERAGE_HTML    = $(COVERAGE_DIR)/index.html
-.PHONY: test-coverage test-coverage-tools
-test-coverage-tools: | $(GOCOV) $(GOCOVXML)
-test-coverage: COVERAGE_DIR := $(CURDIR)/test/coverage.$(shell date -u +"%Y-%m-%dT%H:%M:%SZ")
-test-coverage: fmt lint test-coverage-tools ; $(info $(M) running coverage tests…) @ ## Run coverage tests
+.PHONY: test-coverage
+test-coverage: fmt lint ; $(info $(M) running coverage tests...) @ ## Run coverage tests
 	$Q mkdir -p $(COVERAGE_DIR)
 	$Q $(GO) test \
 		-coverpkg=$$($(GO) list -f '{{ join .Deps "\n" }}' $(TESTPKGS) | \
 					grep '^$(MODULE)/' | \
 					tr '\n' ',' | sed 's/,$$//') \
-		-covermode=$(COVERAGE_MODE) \
+		-covermode=atomic \
 		-coverprofile="$(COVERAGE_PROFILE)" $(TESTPKGS)
 	$Q $(GO) tool cover -html=$(COVERAGE_PROFILE) -o $(COVERAGE_HTML)
-	$Q $(GOCOV) convert $(COVERAGE_PROFILE) | $(GOCOVXML) > $(COVERAGE_XML)
+	$Q $(GO) tool cover -func=$(COVERAGE_PROFILE)
 
-.PHONY: lint
-lint: | $(GOLINT) ; $(info $(M) running golint…) @ ## Run golint
-	$Q $(GOLINT) -set_exit_status $(PKGS)
-
-.PHONY: fmt
-fmt: ; $(info $(M) running gofmt…) @ ## Run gofmt on all source files
-	$Q $(GO) fmt $(PKGS)
-
-# Misc
-
-.PHONY: setup
-setup: ## setup: setup go modules
-	@go mod init \
-	&& go mod tidy \
-	&& go mod vendor
-		
 .PHONY: clean
-clean: ; $(info $(M) cleaning…)	@ ## Cleanup everything
+clean: ; $(info $(M) cleaning...) @ ## Clean build artifacts
 	@rm -rf $(BIN)
-	@rm -rf test/tests.* test/coverage.*
+	@rm -rf test
+	@rm -rf vendor
+	@rm -f go.sum
+
+.PHONY: docker
+docker: all ; $(info $(M) building docker image...) @ ## Build docker image
+	docker build -t $(MODNAME):$(VERSION) -f Dockerfile .
 
 .PHONY: help
 help:
-	@echo 
-	@echo $(ORGANIZATION) Standardized Makefile v1.0
-	@echo ---------------------------------------------------
-	@echo Current target is [$(MODNAME)-$(VERSION)] 
-	@grep -hE '^[ a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | \
-		awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-17s\033[0m %s\n", $$1, $$2}'
-	@echo ---------------------------------------------------
+	@echo ""
+	@echo "$(ORGANIZATION) Go Basic Blockchain Project"
+	@echo "Version: $(VERSION)"
+	@echo "Date: $(DATE)"
+	@echo "---------------------------------------------------"
+	@echo "Usage: make [target]"
+	@echo ""
+	@echo "Targets:"
+	@awk 'BEGIN {FS = ":.*?## "} /^[a-zA-Z_-]+:.*?## / {printf "  \033[36m%-15s\033[0m %s\n", $$1, $$2}' $(MAKEFILE_LIST)
 
-.PHONY: version
-version:
-	@echo $(VERSION)
+# Tools
+$(GOBIN):
+	@mkdir -p $@
+
+$(GOLANGCI): | $(GOBIN) ; $(info $(M) installing golangci-lint...)
+	$Q curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | sh -s -- -b $(GOBIN) v1.41.1
+
+$(DELVE): | $(GOBIN) ; $(info $(M) installing delve...)
+	$Q $(GO) install github.com/go-delve/delve/cmd/dlv@latest
+
+# Cross-compilation targets
+.PHONY: build-linux build-windows build-darwin
+build-linux: GOOS := linux
+build-windows: GOOS := windows
+build-darwin: GOOS := darwin
+build-linux build-windows build-darwin: ; $(info $(M) building for $(GOOS)...) @ ## Build for specific OS
+	$Q GOOS=$(GOOS) $(GO) build \
+		-tags release \
+		-ldflags '-X $(MODULE)/cmd.Version=$(VERSION) -X $(MODULE)/cmd.BuildDate=$(DATE)' \
+		-o $(BIN)/$(MODNAME)-$(GOOS) main.go
+
+# Default target
+.DEFAULT_GOAL := help

@@ -19,6 +19,7 @@ import (
 	"os"
 	"reflect"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -104,6 +105,37 @@ func IntToBytes(n int) []byte {
 	binary.BigEndian.PutUint32(byteSlice, uint32(n))
 
 	return byteSlice
+}
+
+// ConvertToFloat64 converts various types to float64.
+// It supports the following types: float64, float32, int, int64, int32, and string.
+// If the input is a string, it attempts to parse it as a float64.
+// If the conversion is successful, it returns the float64 value and a nil error.
+// If the conversion fails or the type is unsupported, it returns 0 and an error.
+//
+// Parameters:
+// - value: The input value of type interface{} to be converted.
+//
+// Returns:
+// - float64: The converted float64 value.
+// - error: An error if the conversion fails or the type is unsupported.
+func ConvertToFloat64(value interface{}) (float64, error) {
+	switch v := value.(type) {
+	case float64:
+		return v, nil
+	case float32:
+		return float64(v), nil
+	case int:
+		return float64(v), nil
+	case int64:
+		return float64(v), nil
+	case int32:
+		return float64(v), nil
+	case string:
+		return strconv.ParseFloat(v, 64)
+	default:
+		return 0, fmt.Errorf("unexpected type for conversion to float64: %T", value)
+	}
 }
 
 // ValidateAddress validates the provided Ethereum address string. It decodes the address

@@ -77,7 +77,7 @@ const (
 	EnableAPI = true
 
 	// verbose is a flag to enable/disable verbose logging
-	verbose = false
+	verbose = true
 
 	/*************************************** Internal Constants ***************************************/
 
@@ -85,7 +85,7 @@ const (
 	BlockchainVersion = "0.1.0"
 
 	// cfgFolder is the folder where the config file is stored
-	cfgFile = "../.env"
+	cfgFile = "../../.local.env"
 
 	// walletFolder is the folder where the wallets are stored (within the data folder)
 	walletFolder = dataFolder + "/wallets"

@@ -139,7 +139,7 @@ func NewWallet(options *WalletOptions) (*Wallet, error) {
 
 	wallet.SetData("name", options.Name)
 	wallet.SetData("tags", options.Tags)
-	wallet.SetData("balance", fundWalletAmount)
+	wallet.SetData("balance", float64(fundWalletAmount))
 	wallet.GetAddress()
 
 	if verbose {
@@ -159,12 +159,15 @@ func (w *Wallet) SetData(key string, value interface{}) error {
 		return errors.New("cannot set data on an encrypted wallet")
 	}
 
-	err := w.vault.SetData(key, value)
-	if err != nil {
-		return err
+	if key == "balance" {
+		convertedValue, err := ConvertToFloat64(value)
+		if err != nil {
+			return fmt.Errorf("error converting balance: %v", err)
+		}
+		value = convertedValue
 	}
 
-	return nil
+	return w.vault.SetData(key, value)
 }
 
 // GetData returns the data (keypairs) associated with the wallet.
@@ -216,13 +219,12 @@ func (w *Wallet) GetBalance() float64 {
 		return 0
 	}
 
-	balanceFloat, ok := balance.(float64)
-	if !ok {
-		fmt.Println("balance is not of type float64")
+	convertedBalance, err := ConvertToFloat64(balance)
+	if err != nil {
+		fmt.Printf("Error converting balance: %v\n", err)
 		return 0
 	}
-
-	return balanceFloat
+	return convertedBalance
 }
 
 // GetTags returns the wallet tags from the data (keypairs) associated with the wallet.

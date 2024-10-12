@@ -282,6 +282,30 @@ func (bc *Blockchain) GenerateGenesisBlock(txs []Transaction) {
 	}
 }
 
+// HasTransaction checks if a transaction with the given ID exists in the blockchain.
+func (bc *Blockchain) HasTransaction(id *PUID) bool {
+	bc.mux.Lock()
+	defer bc.mux.Unlock()
+
+	// First, check the transaction queue
+	for _, tx := range bc.TransactionQueue {
+		if tx.GetID() == id.String() {
+			return true
+		}
+	}
+
+	// Then, check all blocks
+	for _, block := range bc.Blocks {
+		for _, tx := range block.Transactions {
+			if tx.GetID() == id.String() {
+				return true
+			}
+		}
+	}
+
+	return false
+}
+
 // LoadExistingBlocks loads any existing blocks from disk and appends them to the blockchain.
 // If no existing blocks are found, it creates a new blockchain by generating a genesis block.
 // This function returns an error if there is a problem loading the existing blocks.

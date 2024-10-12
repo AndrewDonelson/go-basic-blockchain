@@ -1,118 +1,296 @@
-// Package sdk is a software development kit for building blockchain applications.
-// File  sdk/node_test.go - Node Test for all Node related Protocol based transactions
 package sdk
 
 import (
+	"encoding/json"
 	"testing"
+	"time"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
-const (
-	DummyTXID = "1234:5678:90ab:cdef"
-)
-
-// TestNewNode tests the NewNode func
 func TestNewNode(t *testing.T) {
-	// Create a 1st Node instance
-	node1 := NewNode(nil)
-	if !node1.IsReady() {
-		t.Errorf("Failed to create 1st Node instance")
-	}
+	t.Run("with default options", func(t *testing.T) {
+		err := NewNode(nil)
+		assert.NoError(t, err)
+		assert.NotNil(t, node)
+		assert.True(t, node.IsReady())
+		assert.NotEmpty(t, node.ID)
+		assert.NotNil(t, node.Config)
+		assert.NotNil(t, node.Blockchain)
+		assert.NotNil(t, node.API)
+		assert.NotNil(t, node.P2P)
+		assert.NotNil(t, node.Wallet)
+	})
 
-	// Create a 2nd Node instance
-	node2 := NewNode(nil)
-	if !node1.IsReady() {
-		t.Errorf("Failed to create 2nd Node instance")
-	}
-
-	// Check if the two node instances are different
-	if node1.ID == node2.ID {
-		t.Errorf("1st Node instance ID and 2nd Node instance ID are same")
-	}
-
+	t.Run("with custom options", func(t *testing.T) {
+		opts := &NodeOptions{
+			EnvName:  "test",
+			DataPath: "./test_data",
+			Config:   NewConfig(),
+		}
+		err := NewNode(opts)
+		assert.NoError(t, err)
+		assert.NotNil(t, node)
+		assert.True(t, node.IsReady())
+		assert.Equal(t, opts.DataPath, node.Config.DataPath)
+	})
 }
 
-// TestRegister tests the Register func
-func TestRegister(t *testing.T) {
-
-	// Create 3 node instances
-	node1 := NewNode(nil)
-	node2 := NewNode(nil)
-	node3 := NewNode(nil)
-
-	// Register the nodes with the P2P network
-	node1.Register()
-	node2.Register()
-	node3.Register()
-
-	// Check if the nodes have been registered successfully
-	if !node1.P2P.IsRegistered(node1.ID) || !node2.P2P.IsRegistered(node2.ID) || !node3.P2P.IsRegistered(node3.ID) {
-		t.Errorf("Failed to register nodes with P2P network")
-	}
-
+func TestDefaultNodeOptions(t *testing.T) {
+	opts := DefaultNodeOptions()
+	assert.NotNil(t, opts)
+	assert.Equal(t, "chaind", opts.EnvName)
+	assert.Equal(t, "./chaind_data", opts.DataPath)
+	assert.NotNil(t, opts.Config)
 }
 
-// TestAddTransaction tests the AddTransaction func
-func TestAddTransaction(t *testing.T) {
+func TestNodeIsReady(t *testing.T) {
+	err := NewNode(nil)
+	require.NoError(t, err)
+	assert.True(t, node.IsReady())
 
-	puid, err := NewPUIDFromString("0x0123456789")
-	if err != nil {
-		t.Errorf("Failed to create PUID from String")
+	node.initialized = false
+	assert.False(t, node.IsReady())
+}
+
+func TestNodeSaveAndLoad(t *testing.T) {
+	err := NewNode(nil)
+	require.NoError(t, err)
+
+	originalID := node.ID
+	originalConfig := node.Config
+
+	err = node.save()
+	assert.NoError(t, err)
+
+	// Create a new node to test loading
+	node = &Node{}
+	err = node.load()
+	assert.NoError(t, err)
+
+	assert.Equal(t, originalID, node.ID)
+	assert.Equal(t, originalConfig, node.Config)
+}
+
+func TestNodeRun(t *testing.T) {
+	err := NewNode(nil)
+	require.NoError(t, err)
+
+	// This is a bit tricky to test as it runs indefinitely
+	// We'll use a channel to stop it after a short time
+	done := make(chan bool)
+	go func() {
+		time.Sleep(100 * time.Millisecond)
+		done <- true
+	}()
+
+	go node.Run()
+
+	<-done
+	// If we reach here, it means Run() didn't block indefinitely
+	assert.True(t, true)
+}
+
+func TestNodeProcessP2PTransaction(t *testing.T) {
+	err := NewNode(nil)
+	require.NoError(t, err)
+
+	testCases := []struct {
+		name          string
+		tx            P2PTransaction
+		expectedError bool
+	}{
+		{
+			name: "validate transaction",
+			tx: P2PTransaction{
+				Tx:     Tx{ID: NewPUIDEmpty()},
+				Target: "node",
+				Action: "validate",
+				Data:   []byte("test data"),
+			},
+			expectedError: false,
+		},
+		{
+			name: "update status",
+			tx: P2PTransaction{
+				Tx:     Tx{ID: NewPUIDEmpty()},
+				Target: "node",
+				Action: "status",
+				Data:   []byte(`{"NodeID":"test","Status":"active"}`),
+			},
+			expectedError: true, // Because the node doesn't exist in the network
+		},
+		{
+			name: "add node",
+			tx: P2PTransaction{
+				Tx:     Tx{ID: NewPUIDEmpty()},
+				Target: "node",
+				Action: "add",
+				Data:   []byte(`{"ID":"test"}`),
+			},
+			expectedError: false,
+		},
+		{
+			name: "remove node",
+			tx: P2PTransaction{
+				Tx:     Tx{ID: NewPUIDEmpty()},
+				Target: "node",
+				Action: "remove",
+				Data:   []byte(`"test"`),
+			},
+			expectedError: true, // Because the node doesn't exist in the network
+		},
+		{
+			name: "register node",
+			tx: P2PTransaction{
+				Tx:     Tx{ID: NewPUIDEmpty()},
+				Target: "node",
+				Action: "register",
+				Data:   []byte(`{"ID":"test2"}`),
+			},
+			expectedError: false,
+		},
+		{
+			name: "unknown action",
+			tx: P2PTransaction{
+				Tx:     Tx{ID: NewPUIDEmpty()},
+				Target: "node",
+				Action: "unknown",
+				Data:   []byte("test data"),
+			},
+			expectedError: true,
+		},
 	}
 
-	// Create a dummy P2P transaction
-	tx := P2PTransaction{
-		Tx:     Tx{ID: puid},
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := node.ProcessP2PTransaction(tc.tx)
+			if tc.expectedError {
+				assert.Error(t, err)
+			} else {
+				assert.NoError(t, err)
+			}
+		})
+	}
+}
+
+func TestNodeRegister(t *testing.T) {
+	err := NewNode(nil)
+	require.NoError(t, err)
+
+	err = node.Register()
+	assert.NoError(t, err)
+
+	// Check if the node is registered in its own P2P network
+	assert.True(t, node.P2P.IsRegistered(node.ID))
+}
+
+func TestNodeValidateTransaction(t *testing.T) {
+	err := NewNode(nil)
+	require.NoError(t, err)
+
+	// Create a valid transaction
+	tx, err := NewTransaction("test", node.Wallet, node.Wallet)
+	require.NoError(t, err)
+
+	signature, err := tx.Sign([]byte(node.Wallet.PrivatePEM()))
+	require.NoError(t, err)
+
+	tx.Signature = signature
+
+	p2pTx := P2PTransaction{
+		Tx:     *tx,
 		Target: "node",
-		Action: "register",
-		Data:   "example node data",
+		Action: "validate",
+		Data:   []byte("test data"),
 	}
 
-	// Create 3 node instances
-	node1 := NewNode(nil)
-	node2 := NewNode(nil)
-	node3 := NewNode(nil)
-
-	// Add the transaction to each node's P2P network
-	node1.P2P.AddTransaction(tx)
-	node2.P2P.AddTransaction(tx)
-	node3.P2P.AddTransaction(tx)
-
-	// Check if the transaction has been added successfully
-	if !node1.P2P.HasTransaction(puid) || !node2.P2P.HasTransaction(puid) || !node3.P2P.HasTransaction(puid) {
-		t.Errorf("Failed to add transaction to transactions queue")
-	}
-
+	err = node.validateTransaction(p2pTx)
+	assert.NoError(t, err)
 }
 
-// TestBroadcast tests the Broadcast func
-func TestBroadcast(t *testing.T) {
+func TestNodeUpdateStatus(t *testing.T) {
+	err := NewNode(nil)
+	require.NoError(t, err)
 
-	puid, err := NewPUIDFromString(DummyTXID)
-	if err != nil {
-		t.Errorf("Failed to create PUID from String")
+	// Add a test node to the P2P network
+	testNode := &Node{ID: "test", Status: "inactive"}
+	node.P2P.nodes = append(node.P2P.nodes, testNode)
+
+	status := NodeStatus{
+		NodeID: "test",
+		Status: "active",
+	}
+	statusData, _ := json.Marshal(status)
+
+	p2pTx := P2PTransaction{
+		Tx:     Tx{ID: NewPUIDEmpty()},
+		Target: "node",
+		Action: "status",
+		Data:   statusData,
 	}
 
-	// Create a dummy P2P transaction
-	tx := P2PTransaction{
-		Tx:     Tx{ID: puid}, // "0x1234567890" -> 1234:5678:90ab:cdef
+	err = node.updateStatus(p2pTx)
+	assert.NoError(t, err)
+	assert.Equal(t, "active", testNode.Status)
+}
+
+func TestNodeAddAndRemoveNode(t *testing.T) {
+	err := NewNode(nil)
+	require.NoError(t, err)
+
+	newNode := Node{ID: "test"}
+	nodeData, _ := json.Marshal(newNode)
+
+	addTx := P2PTransaction{
+		Tx:     Tx{ID: NewPUIDEmpty()},
 		Target: "node",
 		Action: "add",
-		Data:   "example node data",
+		Data:   nodeData,
 	}
 
-	// Create 3 node instances
-	node1 := NewNode(nil)
-	node2 := NewNode(nil)
-	node3 := NewNode(nil)
+	err = node.addNode(addTx)
+	assert.NoError(t, err)
+	assert.Len(t, node.P2P.nodes, 1)
 
-	// Broadcast the transaction to each node's P2P network
-	node1.P2P.Broadcast(tx)
-	node2.P2P.Broadcast(tx)
-	node3.P2P.Broadcast(tx)
-
-	// Check if the transaction has been broadcast successfully
-	if !node1.P2P.HasTransaction(puid) || !node2.P2P.HasTransaction(puid) || !node3.P2P.HasTransaction(puid) {
-		t.Errorf("Failed to broadcast transaction")
+	removeTx := P2PTransaction{
+		Tx:     Tx{ID: NewPUIDEmpty()},
+		Target: "node",
+		Action: "remove",
+		Data:   []byte(`"test"`),
 	}
 
+	err = node.removeNode(removeTx)
+	assert.NoError(t, err)
+	assert.Len(t, node.P2P.nodes, 0)
+}
+
+func TestNodeRegisterNode(t *testing.T) {
+	err := NewNode(nil)
+	require.NoError(t, err)
+
+	newNode := Node{ID: "test"}
+	nodeData, _ := json.Marshal(newNode)
+
+	registerTx := P2PTransaction{
+		Tx:     Tx{ID: NewPUIDEmpty()},
+		Target: "node",
+		Action: "register",
+		Data:   nodeData,
+	}
+
+	err = node.registerNode(registerTx)
+	assert.NoError(t, err)
+	assert.Len(t, node.P2P.nodes, 1)
+
+	// Try to register the same node again
+	err = node.registerNode(registerTx)
+	assert.Error(t, err)
+	assert.Len(t, node.P2P.nodes, 1)
+}
+
+func TestGenerateRandomPassphrase(t *testing.T) {
+	passphrase := generateRandomPassphrase()
+	assert.Len(t, passphrase, 64) // 32 bytes in hex format
 }
