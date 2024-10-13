@@ -14,6 +14,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"sync"
 	"time"
 
 	"golang.org/x/crypto/scrypt"
@@ -84,6 +85,8 @@ type Wallet struct {
 	EncryptionParams *EncryptionParams
 	Ciphertext       []byte
 	vault            *Vault
+	nonce            uint64
+	mutex            sync.Mutex
 }
 
 // EncryptionParams holds the encryption parameters for the private key.
@@ -129,6 +132,7 @@ func NewWallet(options *WalletOptions) (*Wallet, error) {
 		EncryptionParams: NewDefaultEncryptionParams(),
 		vault:            NewVault(),
 		Ciphertext:       []byte{},
+		nonce:            0,
 	}
 
 	// Generate a new private key.
@@ -149,6 +153,30 @@ func NewWallet(options *WalletOptions) (*Wallet, error) {
 	}
 
 	return wallet, nil
+}
+
+// GetNextNonce returns the next available nonce for the wallet and increments the internal nonce counter.
+func (w *Wallet) GetNextNonce() uint64 {
+	w.mutex.Lock()
+	defer w.mutex.Unlock()
+	nonce := w.nonce
+	w.nonce++
+	return nonce
+}
+
+// SetNonce sets the nonce for the wallet to a specific value.
+// This should be used carefully, typically only when initializing a wallet from existing data.
+func (w *Wallet) SetNonce(nonce uint64) {
+	w.mutex.Lock()
+	defer w.mutex.Unlock()
+	w.nonce = nonce
+}
+
+// GetCurrentNonce returns the current nonce value without incrementing it.
+func (w *Wallet) GetCurrentNonce() uint64 {
+	w.mutex.Lock()
+	defer w.mutex.Unlock()
+	return w.nonce
 }
 
 // SetData sets the data (keypairs) associated with the wallet.
@@ -270,14 +298,30 @@ func (w *Wallet) GetAddress() string {
 // vaultToBytes is an internal (private) method that converts the wallet's vault data (keypairs) to bytes.
 // This is used by the wallet to encrypt the data (keypairs) associated with the wallet.
 func (w *Wallet) vaultToBytes() ([]byte, error) {
-	return json.Marshal(w.vault)
+	vaultData := struct {
+		Vault *Vault `json:"vault"`
+		Nonce uint64 `json:"nonce"`
+	}{
+		Vault: w.vault,
+		Nonce: w.nonce,
+	}
+	return json.Marshal(vaultData)
 }
 
 // bytesToData is an internal (private) method that converts the bytes representation of the data (keypairs) associated with the wallet to the data (keypairs) associated with the wallet.
 // this is used by the wallet to decrypt the data (keypairs) associated with the wallet.
-
 func (w *Wallet) bytesToVault(bytes []byte) error {
-	return json.Unmarshal(bytes, &w.vault)
+	var vaultData struct {
+		Vault *Vault `json:"vault"`
+		Nonce uint64 `json:"nonce"`
+	}
+	err := json.Unmarshal(bytes, &vaultData)
+	if err != nil {
+		return err
+	}
+	w.vault = vaultData.Vault
+	w.nonce = vaultData.Nonce
+	return nil
 }
 
 // / PrivateKey returns the private key from the vault associated with the wallet.
@@ -588,7 +632,15 @@ func (w *Wallet) Close(passphrase string) error {
 		return fmt.Errorf("failed to save wallet: %v", err)
 	}
 
-	err = localStorage.Set("wallet", w)
+	walletData := struct {
+		*Wallet
+		Nonce uint64 `json:"nonce"`
+	}{
+		Wallet: w,
+		Nonce:  w.nonce,
+	}
+
+	err = localStorage.Set("wallet", walletData)
 	if err != nil {
 		return fmt.Errorf("failed to save wallet: %v", err)
 	}
@@ -603,10 +655,17 @@ func (w *Wallet) Close(passphrase string) error {
 // Open loads the wallet from disk that was saved as a JSON file.
 // It also unlocks the value and restores the wallet.vault object.
 func (w *Wallet) Open(passphrase string) error {
-	err := localStorage.Set("wallet", w)
+	var walletData struct {
+		*Wallet
+		Nonce uint64 `json:"nonce"`
+	}
+
+	err := localStorage.Get("wallet", &walletData)
 	if err != nil {
 		return err
 	}
+
+	w.nonce = walletData.Nonce
 
 	if len(passphrase) >= 12 {
 		err = w.Unlock(passphrase)
