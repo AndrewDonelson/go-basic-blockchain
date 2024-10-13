@@ -18,9 +18,6 @@ import (
 )
 
 const (
-	// MaxBlockSize is the maximum size of a block in bytes (1MB)
-	MaxBlockSize = 1000000
-
 	// InitialDifficulty is the starting difficulty for mining blocks
 	InitialDifficulty = 4
 

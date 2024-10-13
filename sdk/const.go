@@ -3,125 +3,72 @@
 package sdk
 
 const (
+	// Blockchain Identification
+	BlockchainName           = "Go Basic Blockchain"
+	BlockchainSymbol         = "GBB"
+	BlockchainVersion        = "0.2.0"
+	BlockchainOrganizationID = 1 // 1 is reserved for this blockchain "Go Basic Blockchain"
+	BlockchainAdminUserID    = 1
+	BlockchainAppID          = 1 // 1 is reserved for this blockchain's Core
+	BlockchainDevAssetID     = 1
+	BlockchainMinerAssetID   = 2
 
-	// BlockchainName is the name of the blockchain
-	BlockchainName = "Go Basic Blockchain"
+	// Blockchain Parameters
+	BlockTimeInSec        = 5
+	ProofOfWorkDifficulty = 4
+	TransactionFee        = 0.05    // 5 hundredths of a coin (a nickel-ish)
+	MinTransactionFee     = 0.01    // Minimum transaction fee
+	MinerRewardPCT        = 50.0    // Miner reward is 50% of the transaction fee
+	DevRewardPCT          = 50.0    // Developer reward is 50% of the transaction fee
+	MaxBlockSize          = 1000000 // Maximum block size in bytes (1MB)
+	IndexCacheSize        = 65536   // Size of the block/transaction index cache (1,572,864 bytes or 1.5 MB)
 
-	// BlockchainSymbol is the symbol of the blockchain
-	BlockchainSymbol = "GBB"
+	// Token Related
+	TokenCount       = 33554432
+	TokenPrice       = 0.01 // Price of a token in USD
+	AllowNewTokens   = false
+	FundWalletAmount = 100.0 // Default amount to fund new wallets
 
-	// BlockchainOrganizationID is the organization ID for the blockchain (1 is reserved for this blockchain "Go Basic Blockchain")
-	BlockhainOrganizationID = 1
+	// Network Settings
+	APIHostname = ":8100"
+	P2PHostname = ":8101"
 
-	// BlockchainAdminUserID is the admin user ID for the blockchain
-	BlockchainAdminUserID = 1
+	// Default Addresses
+	MinerAddress = "MINER" // Will be supplied by the environment
+	DevAddress   = "DEV"   // Will be supplied by the genesis block
 
-	// BlockchainAppID is the application ID for the blockchain (1 is reserved for this blockchain's Core)
-	BlockchainAppID = 1
+	// Data Storage
+	DataFolder   = "../data"
+	WalletFolder = DataFolder + "/wallets"
+	BlockFolder  = DataFolder + "/blocks"
+	ConfigFile   = "../../.local.env"
 
-	// BlockchainCoreAssetID is the core asset ID for the blockchain
-	BlockchainDevAssetID = 1
+	// Email Settings
+	GmailEmail    = ""
+	GmailPassword = "" // Should be supplied by the environment
 
-	// BlockchainMinerAssetID is the miner asset ID for the blockchain
-	BlockchainMinerAssetID = 2
-
-	// block time is 5 seconds
-	blockTimeInSec = 5
-
-	// proofOfWorkDifficulty is the number of leading zeros that must be found in the hash of a block
-	proofOfWorkDifficulty = 4
-
-	// transaction fee is 5 hunderths of a coin (a nickle-ish)
-	transactionFee = 0.05
-
-	// tokenCount is the number of tokens to create
-	tokenCount = 33554432
-
-	// tokenPrice is the price of a token is USD
-	tokenPrice = 0.01
-
-	// allowNewTokens is a flag to allow/disallow new tokens
-	allowNewTokens = false
-
-	// miner reward is 50% of the transaction fee
-	minerRewardPCT = 50.0
-
-	// minerAddress is the address of the miner (will be supplied by the environment)
-	minerAddress = "MINER"
-
-	// devreward is 50% of the transaction fee
-	devRewardPCT = 50.0
-
-	// devAddress is the address of the developer
-	devAddress = "DEV" // will be supplied by the genesis block
-
-	// hostname & port for the API
-	apiHostname = ":8100"
-
-	// hostname & port for the P2P server
-	p2pHostname = ":8101"
-
-	// default Amount to fund new wallets is 100 coins
-	fundWalletAmount = 100.0
-
-	// data folder is the folder where the blockchain data is stored
-	dataFolder = "../data"
-
-	// gmailEmail is the email address for the gmail account to send emails from
-	gmailEmail = ""
-
-	// gmailPassword is the password for the gmail account to send emails from (should be supplied by the environment)
-	gmailPassword = ""
-
-	// EnableAPI is a flag to enable/disable the API
+	// Feature Flags
 	EnableAPI = true
+	Verbose   = true
 
-	// verbose is a flag to enable/disable verbose logging
-	verbose = true
+	// Cryptographic Constants
+	SaltSize = 32
+	MaxNonce = 12 // bytes
 
-	/*************************************** Internal Constants ***************************************/
+	// Formatting
+	LogDateTimeFormat = "2006-01-02 15:04:05"
 
-	// BlockchainVersion is the version of the blockchain
-	BlockchainVersion = "0.1.0"
-
-	// cfgFolder is the folder where the config file is stored
-	cfgFile = "../../.local.env"
-
-	// walletFolder is the folder where the wallets are stored (within the data folder)
-	walletFolder = dataFolder + "/wallets"
-
-	// blockFolder is the folder where the blocks are stored (within the data folder)
-	blockFolder = dataFolder + "/blocks"
-
-	// Log Date/Time format
-	logDateTimeFormat = "2006-01-02 15:04:05"
-
-	// maxNonce is the maximum value for a nonce
-	maxNonce = 12 // bytes
-
-	// saltSize is the size of the salt used for hashing
-	saltSize = 32
-
-	// indexCacheSize is the size of the block/transaction index cache (1,572,864 bytes or 1.5 MB)
-	indexCacheSize = 65536 // 2^16
-
-	// TransactionProtocolVersion is the Tranasction Protocol Version
+	// Protocol Versions
 	TransactionProtocolVersion = "1.0"
+)
 
-	// PersistProtocolID is the Data Persistance Protocol ID
-	PersistProtocolID = "PERSIST"
-
-	// BankProtocolID is the Bank Protocol ID
-	BankProtocolID = "BANK"
-
-	// MessageProtocolID is the Message Protocol ID
-	MessageProtocolID = "MESSAGE"
-
-	// CoinbaseProtocolID is the Coinbase Protocol ID
+// Protocol IDs
+const (
+	PersistProtocolID  = "PERSIST"
+	BankProtocolID     = "BANK"
+	MessageProtocolID  = "MESSAGE"
 	CoinbaseProtocolID = "COINBASE"
-
-	// ChainProtocolID is the Chain Protocol ID
-	ChainProtocolID = "CHAIN"
+	ChainProtocolID    = "CHAIN"
 )
 
 // AvailableProtocols is a list of all available protocols
