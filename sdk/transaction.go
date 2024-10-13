@@ -9,6 +9,7 @@ import (
 	"crypto/sha256"
 	"crypto/x509"
 	"encoding/base64"
+	"encoding/gob"
 	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
@@ -20,21 +21,19 @@ import (
 	"time"
 )
 
+// TransactionVersion represents the current version of the transaction structure.
+const TransactionVersion = 1
+
+// TransactionStatus represents the possible states of a transaction.
+type TransactionStatus string
+
+const (
+	StatusPending   TransactionStatus = "pending"
+	StatusConfirmed TransactionStatus = "confirmed"
+	StatusFailed    TransactionStatus = "failed"
+)
+
 // Transaction is an interface that defines the common methods for all Dynamic Protocol based transactions.
-// Process() executes the transaction logic.
-// GetProtocol() returns the protocol name associated with the transaction.
-// GetID() returns the unique identifier for the transaction.
-// GetHash() returns the hash of the transaction.
-// GetSignature() returns the signature of the transaction.
-// GetSenderWallet() returns the wallet of the transaction sender.
-// Sign(privPEM []byte) signs the transaction with the provided private key.
-// Verify(pubKey []byte, sign string) verifies the transaction signature with the provided public key.
-// Send(bc *Blockchain) sends the transaction to the provided blockchain.
-// String() returns a string representation of the transaction.
-// Hex() returns the hexadecimal representation of the transaction.
-// Hash() returns the hash of the transaction.
-// Bytes() returns the byte representation of the transaction.
-// JSON() returns the JSON representation of the transaction.
 type Transaction interface {
 	Process() string
 	GetProtocol() string
@@ -50,51 +49,42 @@ type Transaction interface {
 	Hash() string
 	Bytes() []byte
 	JSON() string
+	Validate() error
+	Size() int
+	EstimateFee(feePerByte float64) float64
+	SetPriority(priority int)
+	GetPriority() int
 }
 
 // Tx is a generic transaction that represents a transfer of value between two wallets.
-// The ID field is a unique identifier for the transaction, which is typically the hash of the transaction.
-// The Time field represents the time the transaction was created.
-// The Version field specifies the version of the transaction.
-// The Protocol field identifies the protocol associated with the transaction (e.g. coinbase, bank, message).
-// The From and To fields represent the sending and receiving wallets, respectively.
-// The Fee field specifies the transaction fee.
-// The Status field tracks the current status of the transaction (e.g. pending, confirmed, inserted, failed).
-// The BlockNum field indicates the block number the transaction was inserted into.
-// The Signature field contains the signature of the transaction.
-// The hash field stores the hash of the transaction.
 type Tx struct {
-	ID        *PUID     // Unit ID of the transaction (TODO: actually this should be the hash of the transaction)
-	Time      time.Time // Time the transaction was created
-	Version   string    // Version of the transaction
-	Protocol  string    // Protocol ID (coinbase, bank, message, etc)
-	From      *Wallet   // Wallet sending the transaction
-	To        *Wallet   // Wallet receiving the transaction
-	Fee       float64   // Fee for the transaction
-	Status    string    // Status of the transaction (pending, confirmed, inserted, failed)
-	BlockNum  int       // Block number the transaction was inserted into
-	Signature string    // Signature of the transaction
-	hash      string    // Hash of the transaction
+	ID        *PUID             `json:"id"`
+	Time      time.Time         `json:"time"`
+	Version   int               `json:"version"`
+	Protocol  string            `json:"protocol"`
+	From      *Wallet           `json:"from"`
+	To        *Wallet           `json:"to"`
+	Fee       float64           `json:"fee"`
+	Status    TransactionStatus `json:"status"`
+	BlockNum  int               `json:"block_num"`
+	Signature string            `json:"signature"`
+	hash      string            `json:"-"`
+	priority  int               `json:"-"`
+	Nonce     uint64            `json:"nonce"`
+	Data      []byte            `json:"data"`
 }
 
 // NewTransaction creates a new transaction with the specified protocol, sender wallet, and recipient wallet.
-// If the protocol is invalid, an error is returned.
-// If either the sender or recipient wallet is nil, an error is returned.
-// The new transaction is initialized with the current time, the specified protocol, the sender and recipient wallets,
-// and a default transaction fee. The transaction ID is set to the recipient wallet's PUID, and a random asset ID is
-// assigned to the recipient wallet's PUID.
 func NewTransaction(protocol string, from *Wallet, to *Wallet) (*Tx, error) {
-	err := isValidProtocol(protocol)
-	if err != nil {
+	if err := isValidProtocol(protocol); err != nil {
 		return nil, err
 	}
 
-	// Validate if wallets exist
 	if from == nil || to == nil {
 		return nil, fmt.Errorf("wallets can't be nil")
 	}
 
-	fmt.Printf("[%s] Creating %s-TX - FROM: %s, TO: %s\n", time.Now().Format(logDateTimeFormat), protocol, from.GetAddress(), to.GetAddress())
+	log.Printf("[%s] Creating %s-TX - FROM: %s, TO: %s\n", time.Now().Format(time.RFC3339), protocol, from.GetAddress(), to.GetAddress())
 
 	toWalletPUID := to.ID
 	if toWalletPUID == nil {
@@ -107,33 +97,29 @@ func NewTransaction(protocol string, from *Wallet, to *Wallet) (*Tx, error) {
 
 	toWalletPUID.SetAssetID(assetID)
 
-	// Create the new Message transaction
 	tx := &Tx{
 		ID:       toWalletPUID,
 		Time:     time.Now(),
-		Version:  TransactionProtocolVersion,
+		Version:  TransactionVersion,
 		Protocol: protocol,
 		From:     from,
 		To:       to,
 		Fee:      transactionFee,
+		Status:   StatusPending,
+		Nonce:    from.GetNextNonce(),
 	}
 
 	return tx, nil
 }
 
 // isValidProtocol validates a provided protocol against the available protocols.
-// It returns an error if the protocol is not valid.
 func isValidProtocol(protocol string) error {
-	// Convert the provided protocol to lowercase
 	protocol = strings.ToUpper(protocol)
-
-	// Check if the protocol exists in the available protocols slice
 	for _, p := range AvailableProtocols {
 		if protocol == p {
 			return nil
 		}
 	}
-
 	return fmt.Errorf("invalid protocol: %s", protocol)
 }
 
@@ -159,18 +145,8 @@ func (t *Tx) GetHash() string {
 
 // String returns a string representation of the transaction.
 func (t *Tx) String() string {
-	return fmt.Sprintf("%s%v%s%s%s%s%f%s%d%s",
-		t.ID,
-		t.Time,
-		t.Version,
-		t.Protocol,
-		t.From.GetAddress(),
-		t.To.GetAddress(),
-		t.Fee,
-		t.Status,
-		t.BlockNum,
-		t.Signature,
-	)
+	return fmt.Sprintf("ID: %s, Time: %v, Version: %d, Protocol: %s, From: %s, To: %s, Fee: %f, Status: %s, BlockNum: %d, Nonce: %d",
+		t.ID, t.Time, t.Version, t.Protocol, t.From.GetAddress(), t.To.GetAddress(), t.Fee, t.Status, t.BlockNum, t.Nonce)
 }
 
 // Log returns a string with the log of the transaction.
@@ -185,10 +161,9 @@ func (t *Tx) Hex() string {
 
 // Hash returns the hash of the transaction as a string.
 func (t *Tx) Hash() string {
-	// make a copy and clear the hash property
 	txCopy := *t
 	txCopy.hash = ""
-
+	txCopy.Signature = ""
 	hash := sha256.Sum256(txCopy.Bytes())
 	t.hash = hex.EncodeToString(hash[:])
 	return t.hash
@@ -196,13 +171,23 @@ func (t *Tx) Hash() string {
 
 // Bytes returns the serialized byte representation of the transaction.
 func (t *Tx) Bytes() []byte {
-	data, _ := json.Marshal(t)
-	return data
+	var buf bytes.Buffer
+	enc := gob.NewEncoder(&buf)
+	err := enc.Encode(t)
+	if err != nil {
+		log.Printf("Error encoding transaction: %v", err)
+		return nil
+	}
+	return buf.Bytes()
 }
 
 // JSON returns the JSON representation of the transaction as a string.
 func (t *Tx) JSON() string {
-	data, _ := json.MarshalIndent(t, "", "  ")
+	data, err := json.MarshalIndent(t, "", "  ")
+	if err != nil {
+		log.Printf("Error marshaling transaction to JSON: %v", err)
+		return ""
+	}
 	return string(data)
 }
 
@@ -218,85 +203,118 @@ func (t *Tx) Process() string {
 
 // Send sends the filled and signed transaction to the network queue to be added to the blockchain.
 func (t *Tx) Send(bc *Blockchain) error {
-	// Add the transaction to the transaction queue in the blockchain
+	if err := t.Validate(); err != nil {
+		return fmt.Errorf("invalid transaction: %v", err)
+	}
+
 	bc.AddTransaction(t)
-
-	// Placeholder implementation
-	fmt.Printf("Transaction %s added to the transaction queue\n", t.ID)
-
+	log.Printf("Transaction %s added to the transaction queue\n", t.ID)
 	return nil
 }
 
 // Sign signs the transaction with the provided private key.
 func (t *Tx) Sign(privPEM []byte) (string, error) {
-
 	txBytes, err := json.Marshal(t)
 	if err != nil {
-		log.Fatal(err)
+		return "", fmt.Errorf("error marshaling transaction: %v", err)
 	}
 	reader := bytes.NewReader(txBytes)
 
-	// Load the private key file in x509 format
 	block, _ := pem.Decode(privPEM)
 	if block == nil {
-		return "", errors.New("privKey no pem data found")
+		return "", errors.New("failed to decode PEM block containing private key")
 	}
 
 	pk, err := x509.ParseECPrivateKey(block.Bytes)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("error parsing private key: %v", err)
 	}
 
-	// Hash the input to get a summary of the information
 	h := sha256.New()
-	_, err = io.Copy(h, reader)
-	if err != nil {
-		return "", err
+	if _, err := io.Copy(h, reader); err != nil {
+		return "", fmt.Errorf("error hashing transaction: %v", err)
 	}
 	hash := h.Sum(nil)
-	// ECDSA Signing
+
 	sign, err := ecdsa.SignASN1(rand.Reader, pk, hash)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("error signing transaction: %v", err)
 	}
 	return base64.StdEncoding.EncodeToString(sign), nil
 }
 
 // Verify verifies the signature of the transaction with the provided public key.
 func (t *Tx) Verify(pubKey []byte, sign string) (bool, error) {
-
 	txBytes, err := json.Marshal(t)
 	if err != nil {
-		log.Fatal(err)
+		return false, fmt.Errorf("error marshaling transaction: %v", err)
 	}
 	reader := bytes.NewReader(txBytes)
 
-	// Load the public key in x509 format
 	block, _ := pem.Decode(pubKey)
 	if block == nil {
-		return false, errors.New("pubKey no pem data found")
+		return false, errors.New("failed to decode PEM block containing public key")
 	}
 	genericPublicKey, err := x509.ParsePKIXPublicKey(block.Bytes)
 	if err != nil {
-		return false, err
+		return false, fmt.Errorf("error parsing public key: %v", err)
 	}
-	pk := genericPublicKey.(*ecdsa.PublicKey)
-	// Hash the input to get a summary of the information
+	pk, ok := genericPublicKey.(*ecdsa.PublicKey)
+	if !ok {
+		return false, errors.New("not an ECDSA public key")
+	}
+
 	h := sha256.New()
-	_, err = io.Copy(h, reader)
-	if err != nil {
-		return false, err
+	if _, err := io.Copy(h, reader); err != nil {
+		return false, fmt.Errorf("error hashing transaction: %v", err)
 	}
 	hash := h.Sum(nil)
-	// ECDSA Validation
+
 	bSign, err := base64.StdEncoding.DecodeString(sign)
 	if err != nil {
-		return false, err
+		return false, fmt.Errorf("error decoding signature: %v", err)
 	}
 	return ecdsa.VerifyASN1(pk, hash, bSign), nil
 }
 
-// GetSignature returns the signature of the Persist transaction.
+// GetSignature returns the signature of the transaction.
 func (t *Tx) GetSignature() string {
 	return t.Signature
+}
+
+// Validate checks if the transaction is valid.
+func (t *Tx) Validate() error {
+	if t.From == nil || t.To == nil {
+		return errors.New("invalid sender or recipient")
+	}
+	if t.Fee < 0 {
+		return errors.New("invalid fee")
+	}
+	if t.Version != TransactionVersion {
+		return fmt.Errorf("unsupported transaction version: %d", t.Version)
+	}
+	if err := isValidProtocol(t.Protocol); err != nil {
+		return err
+	}
+	return nil
+}
+
+// Size returns the size of the transaction in bytes.
+func (t *Tx) Size() int {
+	return len(t.Bytes())
+}
+
+// EstimateFee estimates the fee for the transaction based on its size and the given fee per byte.
+func (t *Tx) EstimateFee(feePerByte float64) float64 {
+	return float64(t.Size()) * feePerByte
+}
+
+// SetPriority sets the priority of the transaction.
+func (t *Tx) SetPriority(priority int) {
+	t.priority = priority
+}
+
+// GetPriority returns the priority of the transaction.
+func (t *Tx) GetPriority() int {
+	return t.priority
 }
