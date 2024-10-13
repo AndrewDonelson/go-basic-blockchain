@@ -1,5 +1,6 @@
 // Package sdk is a software development kit for building blockchain applications.
 // File sdk/blockchain.go - The main Blockchain file
+
 package sdk
 
 import (
@@ -14,49 +15,38 @@ import (
 	"time"
 )
 
-// State is the state of the blockchain.
+// State represents the current state of the blockchain.
 type State struct {
+	// Add state-related fields here if needed
 }
 
 // BlockchainPersistData represents the data that is persisted for a blockchain to disk.
-// It contains an index for transactions (TXLookup), the current block index (CurrBlockIndex),
-// and the next block index (NextBlockIndex).
 type BlockchainPersistData struct {
-	TXLookup       *Index
-	CurrBlockIndex *int
-	NextBlockIndex *int
+	TXLookup       *Index `json:"tx_lookup"`
+	CurrBlockIndex *int   `json:"current_block_index"`
+	NextBlockIndex *int   `json:"next_block_index"`
 }
 
-// String returns a string representation of the BlockchainPersistData, including the TXLookup, CurrBlockIndex, and NextBlockIndex.
+// String returns a string representation of the BlockchainPersistData.
 func (b *BlockchainPersistData) String() string {
 	return fmt.Sprintf("TXLookup: %v, CurrBlockIndex: %v, NextBlockIndex: %v", b.TXLookup, b.CurrBlockIndex, b.NextBlockIndex)
 }
 
-// Blockchain is the main struct that represents the blockchain. It contains the configuration, blocks, transaction queue, transaction lookup, a mutex for concurrency control, the current and next block indices, and the average number of transactions per block.
+// Blockchain is the main struct that represents the blockchain.
 type Blockchain struct {
-	cfg               *Config          // Config is the configuration for the blockchain.
-	Blocks            []*Block         // Blocks is a slice of blocks in the blockchain.
-	TransactionQueue  []Transaction    // TransactionQueue is a queue of transactions to be added to the blockchain.
-	TXLookup          *TXLookupManager // TXLookup is a map of Block Number/Index (Key) and Transaction ID (Value) that is stored in memory and persisted to disk.
-	mux               sync.Mutex       // mux is a mutex to protect concurrent access to the blockchain.
-	CurrentBlockIndex int              // CurrentBlockIndex is the current block index.
-	NextBlockIndex    int              // NextBlockIndex is the next block index.
-	AvgTxsPerBlock    float64          // AvgTxsPerBlock is the average number of transactions per block.
+	cfg               *Config          // Configuration for the blockchain
+	Blocks            []*Block         // Slice of blocks in the blockchain
+	TransactionQueue  []Transaction    // Queue of transactions to be added to the blockchain
+	TXLookup          *TXLookupManager // Map of Block Number/Index (Key) and Transaction ID (Value)
+	mux               sync.Mutex       // Mutex to protect concurrent access to the blockchain
+	CurrentBlockIndex int              // Current block index
+	NextBlockIndex    int              // Next block index
+	AvgTxsPerBlock    float64          // Average number of transactions per block
+	State             *State           // Current state of the blockchain
 }
 
 // NewBlockchain creates a new instance of the Blockchain struct with the provided configuration.
-// It attempts to load the blockchain data from disk, and if that fails, it creates a new blockchain.
-// The returned Blockchain instance has the following fields initialized:
-// - cfg: the provided configuration
-// - Blocks: an empty slice of Block pointers
-// - TransactionQueue: an empty slice of Transactions
-// - TXLookup: a new TXLookupManager instance
-// - CurrentBlockIndex: 0
-// - NextBlockIndex: 1
-// - AvgTxsPerBlock: 0
 func NewBlockchain(cfg *Config) *Blockchain {
-	//localStorage = NewLocalStorage(cfg.DataPath)
-
 	bc := &Blockchain{
 		cfg:               cfg,
 		Blocks:            []*Block{},
@@ -65,20 +55,19 @@ func NewBlockchain(cfg *Config) *Blockchain {
 		CurrentBlockIndex: 0,
 		NextBlockIndex:    1,
 		AvgTxsPerBlock:    0,
+		State:             &State{},
 	}
 
 	err := bc.Load()
 	if err != nil {
 		fmt.Printf("Error loading blockchain...\n%v\n. Creating new blockchain.\n", err)
-		bc.createBLockchain()
+		bc.createBlockchain()
 	}
 
 	return bc
 }
 
-// DisplayStatus displays the current status of the blockchain, including the number of blocks and the size
-// of the transaction queue. It acquires a lock on the blockchain's mutex before accessing the blockchain data,
-// and releases the lock before returning.
+// DisplayStatus displays the current status of the blockchain.
 func (bc *Blockchain) DisplayStatus() {
 	bc.mux.Lock()
 	defer bc.mux.Unlock()
@@ -86,7 +75,6 @@ func (bc *Blockchain) DisplayStatus() {
 	staticBlocksLen := len(bc.Blocks)
 	staticTransactionQueueLen := len(bc.TransactionQueue)
 
-	// Check if the length of Blocks or TransactionQueue has changed
 	if staticBlocksLen != len(bc.Blocks) || staticTransactionQueueLen != len(bc.TransactionQueue) {
 		fmt.Printf("[%s] Blockchain Activity: Blocks: %d, Transaction Queue: %d\n",
 			time.Now().Format(logDateTimeFormat), len(bc.Blocks), len(bc.TransactionQueue))
@@ -98,16 +86,13 @@ func (bc *Blockchain) GetConfig() *Config {
 	return bc.cfg
 }
 
-// Load loads the blockchain state from disk. It acquires a lock on the blockchain's mutex before loading
-// the state, and releases the lock before returning. It loads the blockchain's transaction lookup index,
-// current block index, and next block index from persistent storage.
+// Load loads the blockchain state from disk.
 func (bc *Blockchain) Load() error {
 	bc.mux.Lock()
 	defer bc.mux.Unlock()
 
 	data := &BlockchainPersistData{}
 
-	// Load the state from disk
 	err := localStorage.Get("state", data)
 	if err != nil {
 		return err
@@ -117,12 +102,10 @@ func (bc *Blockchain) Load() error {
 	bc.CurrentBlockIndex = *data.CurrBlockIndex
 	bc.NextBlockIndex = *data.NextBlockIndex
 
-	return err
+	return nil
 }
 
-// Save saves the blockchain state to disk. It acquires a lock on the blockchain's mutex before saving the
-// state, and releases the lock before returning. It saves the blockchain's transaction lookup index, current
-// block index, and next block index to persistent storage.
+// Save saves the blockchain state to disk.
 func (bc *Blockchain) Save() error {
 	data := &BlockchainPersistData{
 		TXLookup:       bc.TXLookup.index.Get(),
@@ -133,18 +116,11 @@ func (bc *Blockchain) Save() error {
 	bc.mux.Lock()
 	defer bc.mux.Unlock()
 
-	// Save the state to disk
-	err := localStorage.Set("state", data)
-	return err
+	return localStorage.Set("state", data)
 }
 
-// createBLockchain creates a new blockchain. It sets the blockchain organization ID, app ID, admin user ID,
-// dev asset ID, and miner asset ID. It then creates two wallets, one for the dev and one for the miner. It
-// generates a coinbase transaction and a bank transaction, and adds them to the genesis block. Finally, it
-// generates the genesis block for the new blockchain.
-func (bc *Blockchain) createBLockchain() error {
-
-	// Set the Blockchain Organization ID, App ID and Admin User ID as defined in the constants
+// createBlockchain creates a new blockchain.
+func (bc *Blockchain) createBlockchain() error {
 	ThisBlockchainOrganizationID = NewBigInt(BlockhainOrganizationID)
 	ThisBlockchainAppID = NewBigInt(BlockchainAppID)
 	ThisBlockchainAdminUserID = NewBigInt(BlockchainAdminUserID)
@@ -153,7 +129,6 @@ func (bc *Blockchain) createBLockchain() error {
 
 	genesisTxs := []Transaction{}
 
-	// Create two wallets. One for the DEV and one for the Miner
 	devWalletPW, err := GenerateRandomPassword()
 	if err != nil {
 		return err
@@ -164,9 +139,6 @@ func (bc *Blockchain) createBLockchain() error {
 		return err
 	}
 
-	// Creates a new blockchain dev wallet and sets the dev address in the blockchain configuration.
-	// The dev wallet is created with a randomly generated password, which is printed to the console.
-	// The dev wallet is then opened using the generated password.
 	devWallet.Close(devWalletPW)
 	devWallet.Open(devWalletPW)
 	bc.cfg.DevAddress = devWallet.GetAddress()
@@ -177,10 +149,6 @@ func (bc *Blockchain) createBLockchain() error {
 		return err
 	}
 
-	// Creates a new miner wallet for the blockchain. The wallet is created with the specified
-	// organization ID, app ID, admin user ID, miner asset ID, wallet name, and password. The
-	// wallet is then closed and reopened, and the miner address is stored in the blockchain
-	// configuration.
 	minerWallet, err := NewWallet(NewWalletOptions(ThisBlockchainOrganizationID, ThisBlockchainAppID, ThisBlockchainAdminUserID, ThisBlockchainMinerID, "Miner", minerWalletPW, []string{"blockchain", "node", "miner"}))
 	if err != nil {
 		return err
@@ -190,84 +158,61 @@ func (bc *Blockchain) createBLockchain() error {
 	bc.cfg.MinerAddress = minerWallet.GetAddress()
 	fmt.Printf("A Node miner wallet was created for you with address [%s] and password [%s] (you can change this later)\n", bc.cfg.MinerAddress, minerWalletPW)
 
-	// Create the Coinbase Transaction
 	cbTX, err := NewCoinbaseTransaction(devWallet, devWallet, bc.cfg)
 	if err != nil {
 		return err
 	}
 
-	// Set the Dev Wallet balance to config TokenCount
 	err = devWallet.SetData("balance", bc.cfg.TokenCount)
 	if err != nil {
 		return err
 	}
 
-	// Sign the Coinbase Transaction with the DEV Wallet
 	cbTX.Signature, err = cbTX.Sign([]byte(devWallet.PrivatePEM()))
 	if err != nil {
 		return err
 	}
 	fmt.Printf("A Coinbase Transaction was created and set Dev wallet Balance to [%d] tokens)\n", cbTX.TokenCount)
 
-	// Add the Coinbase Transaction to the genesis block
 	genesisTxs = append(genesisTxs, cbTX)
 
-	// Create a Bank Transaction and send fundWalletAmount to the Miner Wallet
 	bankTX, err := NewBankTransaction(devWallet, minerWallet, bc.cfg.FundWalletAmount)
 	if err != nil {
 		return err
 	}
 
-	// Sign the Bank Transaction with the DEV Wallet
 	bankTX.Signature, err = bankTX.Sign([]byte(devWallet.PrivatePEM()))
 	if err != nil {
 		return err
 	}
 	fmt.Printf("A Bank Transaction was created sent [%0.4f] tokens to the miner wallet)\n", bankTX.Amount)
 
-	// Add the Coinbase Transaction to the genesis block
 	genesisTxs = append(genesisTxs, bankTX)
 
-	// Create the genesis block
 	bc.GenerateGenesisBlock(genesisTxs)
 
 	return nil
 }
 
 // GenerateGenesisBlock generates the genesis block if there are no existing blocks.
-// It creates a new block with the provided transactions and adds it to the blockchain.
-// If there are no transactions, the genesis block will not contain any. The genesis block
-// is the first block in the blockchain and has no previous hash.
 func (bc *Blockchain) GenerateGenesisBlock(txs []Transaction) {
 	if len(bc.Blocks) == 0 {
 		fmt.Printf("[%s] Generating Genesis Block...\n", time.Now().Format(logDateTimeFormat))
 
-		genesisBlock := &Block{
-			Index:        *big.NewInt(0),
-			Timestamp:    time.Now(),
-			Transactions: []Transaction{}, // Genesis block usually does not contain transactions
-			Nonce:        "",
-			Hash:         "",
-			PreviousHash: "", // There is no previous block for the genesis block
-		}
+		genesisBlock := NewBlock([]Transaction{}, "")
+		genesisBlock.Index = *big.NewInt(0)
 
-		// if we have any transactions, add them to the genesis block
 		if len(txs) > 0 {
 			genesisBlock.Transactions = txs
-			// clear the transaction queue
-			bc.TransactionQueue = nil // clear the transaction queue
+			bc.TransactionQueue = nil
 		}
 
 		genesisBlock.Hash = bc.generateHash(genesisBlock)
 
 		bc.Mine(genesisBlock, 1)
 
-		//genesisBlock.save()
-
-		// add the block to the blockchain
 		bc.Blocks = append(bc.Blocks, genesisBlock)
 
-		// add the block transactions to the transaction lookup
 		err := bc.TXLookup.Add(genesisBlock)
 		if err != nil {
 			fmt.Printf("[%s] Error adding block to TXLookup: %v\n", time.Now().Format(logDateTimeFormat), err)
@@ -287,14 +232,12 @@ func (bc *Blockchain) HasTransaction(id *PUID) bool {
 	bc.mux.Lock()
 	defer bc.mux.Unlock()
 
-	// First, check the transaction queue
 	for _, tx := range bc.TransactionQueue {
 		if tx.GetID() == id.String() {
 			return true
 		}
 	}
 
-	// Then, check all blocks
 	for _, block := range bc.Blocks {
 		for _, tx := range block.Transactions {
 			if tx.GetID() == id.String() {
@@ -307,72 +250,44 @@ func (bc *Blockchain) HasTransaction(id *PUID) bool {
 }
 
 // LoadExistingBlocks loads any existing blocks from disk and appends them to the blockchain.
-// If no existing blocks are found, it creates a new blockchain by generating a genesis block.
-// This function returns an error if there is a problem loading the existing blocks.
 func (bc *Blockchain) LoadExistingBlocks() error {
-	//bc.createDataFolders()
-
 	files, _ := filepath.Glob(fmt.Sprintf("%s/*.json", blockFolder))
 	if len(files) == 0 {
 		fmt.Printf("[%s] No existing Blocks\n", time.Now().Format(logDateTimeFormat))
-
-		// If no blocks loaded, generate Genesis Block.
-		//bc.GenerateGenesisBlock([]Transaction{})
-		bc.createBLockchain()
-
+		bc.createBlockchain()
 		return nil
 	}
 
 	fmt.Printf("[%s] Loading Blockchain [%d]...\n", time.Now().Format(logDateTimeFormat), len(files))
 
-	// Load all the blocks
-	// for _, file := range files {
-	// 	block := Block{}
-	// 	err := block.load(file)
-	// 	//err := block.load(file)
-	// 	if err != nil {
-	// 		return err
-	// 	}
-
-	// 	bc.Blocks = append(bc.Blocks, &block)
-	// }
+	// TODO: Implement block loading logic here
 
 	fmt.Printf("[%s] Done\n", time.Now().Format(logDateTimeFormat))
 
 	return nil
 }
 
-// AddTransaction adds a new transaction to the transaction queue. This method is thread-safe.
-// The transaction is hashed and appended to the TransactionQueue slice. A message is printed
-// to the log with the current time and the added transaction.
+// AddTransaction adds a new transaction to the transaction queue.
 func (bc *Blockchain) AddTransaction(transaction Transaction) {
 	bc.mux.Lock()
 	transaction.Hash()
 	bc.TransactionQueue = append(bc.TransactionQueue, transaction)
 	bc.mux.Unlock()
-	fmt.Printf("[%s] Added TX to que: %v\n", time.Now().Format(logDateTimeFormat), transaction)
+	fmt.Printf("[%s] Added TX to queue: %v\n", time.Now().Format(logDateTimeFormat), transaction)
 }
 
-// Mine attempts to mine a new block for the blockchain. It takes a block and a difficulty
-// parameter, and tries different nonces until it finds a hash with the required number of
-// leading zeros. Once a valid hash is found, the block is saved to disk and appended to
-// the blockchain. The transaction queue is also cleared after a successful mining operation.
-// This function returns the mined block.
+// Mine attempts to mine a new block for the blockchain.
 func (bc *Blockchain) Mine(block *Block, difficulty int) *Block {
-	// Prepare difficulty string for comparison. It is a string consisting of `difficulty` number of zeros.
 	prefix := strings.Repeat("0", difficulty)
 
-	// Try different nonces until we get a hash with `difficulty` leading zeros.
 	for i := 0; i < maxNonce; i++ {
-		block.Nonce = strconv.Itoa(i)
-		block.Hash = block.hash()
+		block.Header.Nonce = uint32(i)
+		block.Hash = block.CalculateHash()
 
-		// Compare the prefix of the hash and our difficulty string.
-		// If they are equal, we've mined a block.
 		if strings.HasPrefix(block.Hash, prefix) {
-			block.save() // Save the block to the disk
+			block.save()
 			bc.Blocks = append(bc.Blocks, block)
-			bc.TransactionQueue = []Transaction{} // Clear the transaction queue
+			bc.TransactionQueue = []Transaction{}
 
 			fmt.Printf("[%s] Mined a new Block with [%d] TXs & Hash [%s]\n", time.Now().Format(logDateTimeFormat), len(block.Transactions), block.Hash)
 			break
@@ -382,70 +297,46 @@ func (bc *Blockchain) Mine(block *Block, difficulty int) *Block {
 	return block
 }
 
-// VerifySignature verifies the signature of the given transaction. It takes the transaction
-// and returns an error if the signature is invalid.
+// VerifySignature verifies the signature of the given transaction.
 func (bc *Blockchain) VerifySignature(tx Transaction) error {
 	_, err := tx.Verify([]byte(tx.GetSenderWallet().PublicPEM()), tx.GetSignature())
 	return err
 }
 
-// Errors/Issues:
-// - cannot use tx.GetSenderWallet().PublicKey (variable of type *ecdsa.PublicKey) as []byte value in argument to VerifySignature
-// - invalid operation: cannot compare err != nil (mismatched types bool and untyped nil)
-
-// Run is a long-running function that manages the blockchain. It creates two tickers, one that fires every
-// second and one that fires every 5 seconds. The first ticker calls DisplayStatus() to display the current
-// status of the blockchain. The second ticker checks the transaction queue and creates a new block if there
-// are any transactions. The new block is mined, added to the blockchain, and the transaction queue is cleared.
-// The block is also saved to disk.
+// Run is a long-running function that manages the blockchain.
 func (bc *Blockchain) Run(difficulty int) {
-	// Create a ticker that fires every second
 	statusTicker := time.NewTicker(time.Second)
+	blockTicker := time.NewTicker(time.Duration(bc.cfg.BlockTime) * time.Second)
 
-	// Create a ticker that fires every 5 seconds
-	blockTicker := time.NewTicker(blockTimeInSec * time.Second)
-
-	// Run a goroutine that calls DisplayStatus() every second
 	go func() {
 		for range statusTicker.C {
 			bc.DisplayStatus()
 		}
 	}()
 
-	// Run a goroutine that checks for transactions every 5 seconds
 	go func() {
 		for range blockTicker.C {
-			// check the queue for transactions
 			bc.mux.Lock()
 			if len(bc.TransactionQueue) == 0 {
 				bc.mux.Unlock()
 				continue
 			}
 
-			// create a new block
 			index := len(bc.Blocks)
 			previousHash := ""
 			if index > 0 {
 				previousHash = bc.Blocks[index-1].Hash
 			}
 
-			// Mine a new block with the current transaction queue and given difficulty
-			block := &Block{Index: *big.NewInt(int64(index)), Timestamp: time.Now(), Transactions: bc.TransactionQueue, Nonce: "", Hash: "", PreviousHash: previousHash}
+			block := NewBlock(bc.TransactionQueue, previousHash)
+			block.Index = *big.NewInt(int64(index))
 			bc.Mine(block, difficulty)
 
-			// add the block to the blockchain
-			//bc.Blocks = append(bc.Blocks, block)
-
-			// clear the transaction queue
-			//bc.TransactionQueue = nil // clear the transaction queue
-
-			// add the block transactions to the transaction lookup
 			err := bc.TXLookup.Add(block)
 			if err != nil {
 				fmt.Printf("[%s] Error adding block to TXLookup: %v\n", time.Now().Format(logDateTimeFormat), err)
 			}
 
-			// save the block to disk
 			block.save()
 
 			err = bc.Save()
@@ -453,19 +344,236 @@ func (bc *Blockchain) Run(difficulty int) {
 				fmt.Printf("[%s] Error saving blockchain state: %v\n", time.Now().Format(logDateTimeFormat), err)
 			}
 
-			// unlock the mutex
 			bc.mux.Unlock()
 		}
 	}()
 }
 
-// generateHash generates a SHA-512 hash for the given block. The hash is calculated
-// by concatenating the block's index, timestamp, nonce, and previous hash, and then
-// hashing the resulting string using the SHA-512 algorithm.
+// generateHash generates a SHA-512 hash for the given block.
 func (bc *Blockchain) generateHash(block *Block) string {
-	record := block.Index.Text(10) + block.Timestamp.String() + block.Nonce + block.PreviousHash
+	record := block.Index.Text(10) + block.Header.Timestamp.String() + strconv.FormatUint(uint64(block.Header.Nonce), 10) + block.Header.PreviousHash
 	h := sha512.New()
 	h.Write([]byte(record))
 	hashed := h.Sum(nil)
 	return hex.EncodeToString(hashed)
+}
+
+// GetLatestBlock returns the latest block in the blockchain.
+func (bc *Blockchain) GetLatestBlock() *Block {
+	bc.mux.Lock()
+	defer bc.mux.Unlock()
+	if len(bc.Blocks) == 0 {
+		return nil
+	}
+	return bc.Blocks[len(bc.Blocks)-1]
+}
+
+// GetBlockByHash returns a block with the given hash.
+func (bc *Blockchain) GetBlockByHash(hash string) *Block {
+	bc.mux.Lock()
+	defer bc.mux.Unlock()
+	for _, block := range bc.Blocks {
+		if block.Hash == hash {
+			return block
+		}
+	}
+	return nil
+}
+
+// GetBlockByIndex returns a block at the given index.
+func (bc *Blockchain) GetBlockByIndex(index int64) *Block {
+	bc.mux.Lock()
+	defer bc.mux.Unlock()
+	if index < 0 || int(index) >= len(bc.Blocks) {
+		return nil
+	}
+	return bc.Blocks[index]
+}
+
+// GetTransactionByID returns a transaction with the given ID.
+func (bc *Blockchain) GetTransactionByID(id string) Transaction {
+	bc.mux.Lock()
+	defer bc.mux.Unlock()
+
+	// First, check the transaction queue
+	for _, tx := range bc.TransactionQueue {
+		if tx.GetID() == id {
+			return tx
+		}
+	}
+
+	// Then, check all blocks
+	for _, block := range bc.Blocks {
+		for _, tx := range block.Transactions {
+			if tx.GetID() == id {
+				return tx
+			}
+		}
+	}
+
+	return nil
+}
+
+// GetBalance returns the balance of a given wallet address.
+func (bc *Blockchain) GetBalance(address string) float64 {
+	bc.mux.Lock()
+	defer bc.mux.Unlock()
+
+	balance := 0.0
+	for _, block := range bc.Blocks {
+		for _, tx := range block.Transactions {
+			if tx.GetSenderWallet().GetAddress() == address {
+				balance -= tx.GetFee()
+				if bankTx, ok := tx.(*Bank); ok {
+					balance -= bankTx.Amount
+				}
+			}
+			if tx.GetProtocol() == BankProtocolID {
+				if bankTx, ok := tx.(*Bank); ok {
+					if bankTx.To.GetAddress() == address {
+						balance += bankTx.Amount
+					}
+				}
+			}
+		}
+	}
+	return balance
+}
+
+// CalculateTotalSupply calculates the total supply of tokens in the blockchain.
+func (bc *Blockchain) CalculateTotalSupply() float64 {
+	bc.mux.Lock()
+	defer bc.mux.Unlock()
+
+	totalSupply := 0.0
+	for _, block := range bc.Blocks {
+		for _, tx := range block.Transactions {
+			if tx.GetProtocol() == CoinbaseProtocolID {
+				if coinbaseTx, ok := tx.(*Coinbase); ok {
+					totalSupply += float64(coinbaseTx.TokenCount)
+				}
+			}
+		}
+	}
+	return totalSupply
+}
+
+// ValidateChain validates the entire blockchain.
+func (bc *Blockchain) ValidateChain() error {
+	bc.mux.Lock()
+	defer bc.mux.Unlock()
+
+	for i := 1; i < len(bc.Blocks); i++ {
+		currentBlock := bc.Blocks[i]
+		previousBlock := bc.Blocks[i-1]
+
+		if currentBlock.Header.PreviousHash != previousBlock.Hash {
+			return fmt.Errorf("invalid previous hash at block %d", i)
+		}
+
+		if currentBlock.Hash != currentBlock.CalculateHash() {
+			return fmt.Errorf("invalid hash at block %d", i)
+		}
+
+		if err := currentBlock.Validate(previousBlock); err != nil {
+			return fmt.Errorf("invalid block at index %d: %v", i, err)
+		}
+
+		for _, tx := range currentBlock.Transactions {
+			if err := tx.Validate(); err != nil {
+				return fmt.Errorf("invalid transaction %s in block %d: %v", tx.GetID(), i, err)
+			}
+		}
+	}
+
+	return nil
+}
+
+// GetTransactionHistory returns the transaction history for a given wallet address.
+func (bc *Blockchain) GetTransactionHistory(address string) []Transaction {
+	bc.mux.Lock()
+	defer bc.mux.Unlock()
+
+	var history []Transaction
+
+	for _, block := range bc.Blocks {
+		for _, tx := range block.Transactions {
+			if tx.GetSenderWallet().GetAddress() == address || (tx.GetProtocol() == BankProtocolID && tx.(*Bank).To.GetAddress() == address) {
+				history = append(history, tx)
+			}
+		}
+	}
+
+	return history
+}
+
+// GetPendingTransactions returns all pending transactions in the queue.
+func (bc *Blockchain) GetPendingTransactions() []Transaction {
+	bc.mux.Lock()
+	defer bc.mux.Unlock()
+
+	return bc.TransactionQueue
+}
+
+// RemoveTransaction removes a transaction from the pending queue.
+func (bc *Blockchain) RemoveTransaction(id string) bool {
+	bc.mux.Lock()
+	defer bc.mux.Unlock()
+
+	for i, tx := range bc.TransactionQueue {
+		if tx.GetID() == id {
+			bc.TransactionQueue = append(bc.TransactionQueue[:i], bc.TransactionQueue[i+1:]...)
+			return true
+		}
+	}
+
+	return false
+}
+
+// UpdateConfig updates the blockchain configuration.
+func (bc *Blockchain) UpdateConfig(newConfig *Config) error {
+	bc.mux.Lock()
+	defer bc.mux.Unlock()
+
+	// Validate the new configuration
+	if err := newConfig.Validate(); err != nil {
+		return fmt.Errorf("invalid configuration: %v", err)
+	}
+
+	// Update the configuration
+	bc.cfg = newConfig
+
+	// Save the updated configuration
+	return bc.Save()
+}
+
+// GetBlockchainInfo returns general information about the blockchain.
+func (bc *Blockchain) GetBlockchainInfo() BlockchainInfo {
+	bc.mux.Lock()
+	defer bc.mux.Unlock()
+
+	return BlockchainInfo{
+		Version:    BlockchainVersion,
+		Name:       bc.cfg.BlockchainName,
+		Symbol:     bc.cfg.BlockchainSymbol,
+		BlockTime:  bc.cfg.BlockTime,
+		Difficulty: bc.cfg.Difficulty,
+		Fee:        bc.cfg.TransactionFee,
+	}
+}
+
+// GetMempoolSize returns the number of transactions in the mempool (transaction queue).
+func (bc *Blockchain) GetMempoolSize() int {
+	bc.mux.Lock()
+	defer bc.mux.Unlock()
+
+	return len(bc.TransactionQueue)
+}
+
+// GetBlockCount returns the total number of blocks in the blockchain.
+func (bc *Blockchain) GetBlockCount() int {
+	bc.mux.Lock()
+	defer bc.mux.Unlock()
+
+	return len(bc.Blocks)
 }
