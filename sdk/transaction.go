@@ -41,6 +41,9 @@ type Transaction interface {
 	GetHash() string
 	GetSignature() string
 	GetSenderWallet() *Wallet
+	GetFee() float64 // New method to get the transaction fee
+	GetStatus() TransactionStatus
+	SetStatus(status TransactionStatus)
 	Sign(privPEM []byte) (string, error)
 	Verify(pubKey []byte, sign string) (bool, error)
 	Send(bc *Blockchain) error
@@ -121,6 +124,21 @@ func isValidProtocol(protocol string) error {
 		}
 	}
 	return fmt.Errorf("invalid protocol: %s", protocol)
+}
+
+// GetFee returns the fee for the transaction.
+func (t *Tx) GetFee() float64 {
+	return t.Fee
+}
+
+// GetStatus returns the current status of the transaction.
+func (t *Tx) GetStatus() TransactionStatus {
+	return t.Status
+}
+
+// SetStatus sets the status of the transaction.
+func (t *Tx) SetStatus(status TransactionStatus) {
+	t.Status = status
 }
 
 // GetProtocol returns the protocol ID of the transaction.

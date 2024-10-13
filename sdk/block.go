@@ -1,38 +1,79 @@
 // Package sdk is a software development kit for building blockchain applications.
-// File sdk/block.go - Block in the blockchain
+// File: sdk/block.go - Block in the blockchain
 package sdk
 
 import (
+	"bytes"
 	"crypto/sha256"
+	"encoding/binary"
+	"encoding/gob"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"math"
 	"math/big"
 	"os"
 	"time"
 )
 
-// Block represents a block in the blockchain. Blocks are persisted to disk as separate JSON files.
-// The Block struct contains the following fields:
-//
-// - Index: The index of the block in the blockchain.
-// - Timestamp: The timestamp of when the block was created.
-// - Transactions: The list of transactions included in the block.
-// - Nonce: A value used in the proof-of-work algorithm to mine the block.
-// - Hash: The hash of the block.
-// - PreviousHash: The hash of the previous block in the blockchain.
-type Block struct {
-	Index        big.Int
-	Timestamp    time.Time
-	Transactions []Transaction
-	Nonce        string
-	Hash         string
-	PreviousHash string
+const (
+	// MaxBlockSize is the maximum size of a block in bytes (1MB)
+	MaxBlockSize = 1000000
+
+	// InitialDifficulty is the starting difficulty for mining blocks
+	InitialDifficulty = 4
+
+	// BlockRewardHalvingInterval is the number of blocks between each halving of the block reward
+	BlockRewardHalvingInterval = 210000
+
+	// InitialBlockReward is the initial reward for mining a block
+	InitialBlockReward = 50.0
+)
+
+// BlockHeader represents the header of a block in the blockchain.
+type BlockHeader struct {
+	Version      int32     `json:"version"`
+	PreviousHash string    `json:"previousHash"`
+	MerkleRoot   []byte    `json:"merkleRoot"`
+	Timestamp    time.Time `json:"timestamp"`
+	Difficulty   uint32    `json:"difficulty"`
+	Nonce        uint32    `json:"nonce"`
 }
 
-// / String returns a string representation of the block, including its index, timestamp, number of transactions, nonce, hash, and previous hash.
+// Block represents a block in the blockchain.
+type Block struct {
+	Header       BlockHeader   `json:"header"`
+	Transactions []Transaction `json:"transactions"`
+	bloomFilter  *BloomFilter
+	Index        big.Int `json:"index"` // Maintain original Index for backwards compatibility
+	Hash         string  `json:"hash"`  // Maintain original Hash for backwards compatibility
+}
+
+// NewBlock creates a new block with the given transactions and previous hash.
+func NewBlock(transactions []Transaction, previousHash string) *Block {
+	block := &Block{
+		Header: BlockHeader{
+			Version:      1,
+			PreviousHash: previousHash,
+			Timestamp:    time.Now(),
+			Difficulty:   InitialDifficulty,
+			Nonce:        0,
+		},
+		Transactions: transactions,
+		Index:        *big.NewInt(0), // Initialize with zero, should be set properly when adding to blockchain
+	}
+	block.Header.MerkleRoot = block.CalculateMerkleRoot()
+	block.bloomFilter = block.CreateBloomFilter()
+	block.Hash = block.CalculateHash() // Set the Hash field for backwards compatibility
+	return block
+}
+
+// String returns a string representation of the block.
 func (b *Block) String() string {
-	return fmt.Sprintf("Index: %v, Timestamp: %s, Transactions: %d, Nonce: %s, Hash: %s, PreviousHash: %s", b.Index, b.Timestamp.Format(logDateTimeFormat), len(b.Transactions), b.Nonce, b.Hash, b.PreviousHash)
+	return fmt.Sprintf("Index: %v, Timestamp: %s, Transactions: %d, Nonce: %d, Hash: %s, PreviousHash: %s",
+		b.Index, b.Header.Timestamp.Format(time.RFC3339), len(b.Transactions),
+		b.Header.Nonce, b.Hash, b.Header.PreviousHash)
 }
 
 // Bytes returns the serialized byte representation of the block.
@@ -41,7 +82,9 @@ func (b *Block) Bytes() []byte {
 	return data
 }
 
-// GetTransactions returns the transactions in the block that match the given transaction ID. If an ID is provided, it returns a slice containing only the transaction with the matching ID. If no ID is provided, it returns all the transactions in the block.
+// GetTransactions returns the transactions in the block that match the given transaction ID.
+// If an ID is provided, it returns a slice containing only the transaction with the matching ID.
+// If no ID is provided, it returns all the transactions in the block.
 func (b *Block) GetTransactions(id string) []Transaction {
 	if id != "" {
 		for _, tx := range b.Transactions {
@@ -51,46 +94,254 @@ func (b *Block) GetTransactions(id string) []Transaction {
 		}
 		return []Transaction{}
 	}
-
 	return b.Transactions
 }
 
-// hash returns the hash of the block as a string. It creates a copy of the block, clears the Hash field, and then calculates the SHA-256 hash of the serialized block data.
+// hash returns the hash of the block as a string.
 func (b *Block) hash() string {
-	// make a copy and clear the hash property
 	blockCopy := *b
 	blockCopy.Hash = ""
-
 	hash := sha256.Sum256(blockCopy.Bytes())
 	return hex.EncodeToString(hash[:])
 }
 
 // blockExists checks if a block file with the given filename exists.
-// It returns true if the file exists, and false otherwise.
 func (b *Block) blockExists(filename string) bool {
 	_, err := os.Stat(filename)
 	return !os.IsNotExist(err)
 }
 
-// save saves the block to disk as a JSON file. It uses the localStorage.Set function to persist the block data, and logs a message with the current time and the block index.
+// save saves the block to disk using localStorage.
 func (b *Block) save() error {
 	err := localStorage.Set("block", b)
 	if err != nil {
 		return err
 	}
-
-	fmt.Printf("[%s] Block [%s] saved to disk.\n", time.Now().Format(logDateTimeFormat), b.Index.String())
-
+	fmt.Printf("[%s] Block [%s] saved to disk.\n", time.Now().Format(time.RFC3339), b.Index.String())
 	return nil
 }
 
-// load loads the block from disk. It sets the block's Index property to the provided blockNumber, and then uses the localStorage.Get function to retrieve the block data from disk. If an error occurs during the load, it is returned.
+// load loads the block from disk using localStorage.
 func (b *Block) load(blockNumber big.Int) error {
 	b.Index = blockNumber
 	err := localStorage.Get("block", b)
 	if err != nil {
 		return err
 	}
-
 	return nil
+}
+
+// Validate checks if the block is valid.
+func (b *Block) Validate(previousBlock *Block) error {
+	if b.Header.PreviousHash != previousBlock.Hash {
+		return errors.New("invalid previous hash")
+	}
+	if b.Header.Timestamp.After(time.Now()) {
+		return errors.New("block timestamp is in the future")
+	}
+	for _, tx := range b.Transactions {
+		if tx.GetStatus() != StatusConfirmed {
+			return fmt.Errorf("invalid transaction status: %v", tx.GetStatus())
+		}
+		if err := tx.Validate(); err != nil {
+			return fmt.Errorf("invalid transaction: %v", err)
+		}
+	}
+	if b.Hash != b.CalculateHash() {
+		return errors.New("invalid block hash")
+	}
+	return nil
+}
+
+// CalculateMerkleRoot calculates the Merkle root of the block's transactions.
+func (b *Block) CalculateMerkleRoot() []byte {
+	var transactions [][]byte
+	for _, tx := range b.Transactions {
+		transactions = append(transactions, []byte(tx.Hash()))
+	}
+	tree := NewMerkleTree(transactions)
+	return tree.Root.Data
+}
+
+// AdjustDifficulty adjusts the mining difficulty based on the time taken to mine recent blocks.
+func (b *Block) AdjustDifficulty(previousBlock *Block, targetBlockTime time.Duration) uint32 {
+	if b.Header.Timestamp.Sub(previousBlock.Header.Timestamp) < targetBlockTime/2 {
+		return previousBlock.Header.Difficulty + 1
+	} else if b.Header.Timestamp.Sub(previousBlock.Header.Timestamp) > targetBlockTime*2 {
+		return previousBlock.Header.Difficulty - 1
+	}
+	return previousBlock.Header.Difficulty
+}
+
+// Serialize serializes the block into a byte slice.
+func (b *Block) Serialize() ([]byte, error) {
+	var result bytes.Buffer
+	encoder := gob.NewEncoder(&result)
+	err := encoder.Encode(b)
+	if err != nil {
+		return nil, err
+	}
+	return result.Bytes(), nil
+}
+
+// DeserializeBlock deserializes a byte slice into a Block.
+func DeserializeBlock(d []byte) (*Block, error) {
+	var block Block
+	decoder := gob.NewDecoder(bytes.NewReader(d))
+	err := decoder.Decode(&block)
+	if err != nil {
+		return nil, err
+	}
+	return &block, nil
+}
+
+// CalculateTotalFees calculates the total transaction fees in the block.
+func (b *Block) CalculateTotalFees() float64 {
+	var totalFees float64
+	for _, tx := range b.Transactions {
+		totalFees += tx.GetFee()
+	}
+	return totalFees
+}
+
+// CanAddTransaction checks if adding a new transaction would exceed the maximum block size.
+func (b *Block) CanAddTransaction(tx Transaction) bool {
+	blockSize, _ := b.Serialize()
+	return len(blockSize)+tx.Size() <= MaxBlockSize
+}
+
+// CreateBloomFilter creates a Bloom filter for quick transaction lookups within the block.
+func (b *Block) CreateBloomFilter() *BloomFilter {
+	bf := &BloomFilter{
+		bitset: make([]byte, 256),
+		k:      3,
+	}
+	for _, tx := range b.Transactions {
+		bf.Add([]byte(tx.GetID()))
+	}
+	return bf
+}
+
+// Mine performs the proof-of-work algorithm to mine the block.
+func (b *Block) Mine(difficulty uint) {
+	target := big.NewInt(1)
+	target.Lsh(target, uint(256-difficulty))
+
+	for {
+		hash := b.CalculateHash()
+		hashInt := new(big.Int).SetBytes([]byte(hash))
+
+		if hashInt.Cmp(target) == -1 {
+			b.Header.Nonce++
+			b.Hash = hash // Update Hash for backwards compatibility
+			return
+		}
+		b.Header.Nonce++
+	}
+}
+
+// CalculateBlockReward calculates the block reward based on the current block height.
+func (b *Block) CalculateBlockReward(currentBlockHeight int64) float64 {
+	halvings := currentBlockHeight / BlockRewardHalvingInterval
+	return InitialBlockReward * math.Pow(0.5, float64(halvings))
+}
+
+// CalculateHash calculates and returns the hash of the block.
+func (b *Block) CalculateHash() string {
+	record := fmt.Sprintf("%d%s%x%s%d%d",
+		b.Header.Version,
+		b.Header.PreviousHash,
+		b.Header.MerkleRoot,
+		b.Header.Timestamp.String(),
+		b.Header.Difficulty,
+		b.Header.Nonce)
+	h := sha256.New()
+	h.Write([]byte(record))
+	hashed := h.Sum(nil)
+	return hex.EncodeToString(hashed)
+}
+
+// MerkleNode represents a node in the Merkle tree.
+type MerkleNode struct {
+	Left  *MerkleNode
+	Right *MerkleNode
+	Data  []byte
+}
+
+// MerkleTree represents a Merkle tree of transactions.
+type MerkleTree struct {
+	Root *MerkleNode
+}
+
+// NewMerkleTree creates a new Merkle tree from a list of data.
+func NewMerkleTree(data [][]byte) *MerkleTree {
+	var nodes []*MerkleNode
+
+	if len(data)%2 != 0 {
+		data = append(data, data[len(data)-1])
+	}
+
+	for _, datum := range data {
+		node := NewMerkleNode(nil, nil, datum)
+		nodes = append(nodes, node)
+	}
+
+	for i := 0; i < len(data)/2; i++ {
+		var newLevel []*MerkleNode
+
+		for j := 0; j < len(nodes); j += 2 {
+			node := NewMerkleNode(nodes[j], nodes[j+1], nil)
+			newLevel = append(newLevel, node)
+		}
+
+		nodes = newLevel
+	}
+
+	return &MerkleTree{Root: nodes[0]}
+}
+
+// NewMerkleNode creates a new Merkle node.
+func NewMerkleNode(left, right *MerkleNode, data []byte) *MerkleNode {
+	node := MerkleNode{}
+
+	if left == nil && right == nil {
+		hash := sha256.Sum256(data)
+		node.Data = hash[:]
+	} else {
+		prevHashes := append(left.Data, right.Data...)
+		hash := sha256.Sum256(prevHashes)
+		node.Data = hash[:]
+	}
+
+	node.Left = left
+	node.Right = right
+
+	return &node
+}
+
+// BloomFilter represents a Bloom filter for quick transaction lookups.
+type BloomFilter struct {
+	bitset []byte
+	k      uint
+}
+
+// Add adds data to the Bloom filter.
+func (bf *BloomFilter) Add(data []byte) {
+	h := sha256.Sum256(data)
+	for i := uint(0); i < bf.k; i++ {
+		idx := binary.BigEndian.Uint64(h[i*8:]) % uint64(len(bf.bitset)*8)
+		bf.bitset[idx/8] |= 1 << (idx % 8)
+	}
+}
+
+// Contains checks if the Bloom filter possibly contains the given data.
+func (bf *BloomFilter) Contains(data []byte) bool {
+	h := sha256.Sum256(data)
+	for i := uint(0); i < bf.k; i++ {
+		idx := binary.BigEndian.Uint64(h[i*8:]) % uint64(len(bf.bitset)*8)
+		if bf.bitset[idx/8]&(1<<(idx%8)) == 0 {
+			return false
+		}
+	}
+	return true
 }
