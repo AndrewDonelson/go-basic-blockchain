@@ -10,6 +10,7 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"math/big"
@@ -201,61 +202,54 @@ func testPasswordStrength(password string) error {
 //
 // If the generated password does not meet these requirements, an error is returned.
 func GenerateRandomPassword() (string, error) {
-	// Define the character sets for each requirement
-	uppercaseChars := "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
-	lowercaseChars := "abcdefghijklmnopqrstuvwxyz"
-	digitChars := "0123456789"
-	specialChars := "~!@#$%^&*()=+[]{}|\\/?<>"
+	const (
+		uppercaseChars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+		lowercaseChars = "abcdefghijklmnopqrstuvwxyz"
+		digitChars     = "0123456789"
+		specialChars   = "~!@#$%^&*()_+-=[]{}|;:,.<>?"
+		allChars       = uppercaseChars + lowercaseChars + digitChars + specialChars
+		passwordLength = 24
+	)
 
-	// Initialize the password
-	password := ""
+	for attempts := 0; attempts < 100; attempts++ {
+		password := make([]byte, passwordLength)
 
-	// Generate random characters for each requirement
-	uppercaseCount := 0
-	lowercaseCount := 0
-	digitCount := 0
-	specialCharCount := 0
+		// Ensure at least 2 characters from each category
+		password[0] = uppercaseChars[secureRandomInt(len(uppercaseChars))]
+		password[1] = uppercaseChars[secureRandomInt(len(uppercaseChars))]
+		password[2] = lowercaseChars[secureRandomInt(len(lowercaseChars))]
+		password[3] = lowercaseChars[secureRandomInt(len(lowercaseChars))]
+		password[4] = digitChars[secureRandomInt(len(digitChars))]
+		password[5] = digitChars[secureRandomInt(len(digitChars))]
+		password[6] = specialChars[secureRandomInt(len(specialChars))]
+		password[7] = specialChars[secureRandomInt(len(specialChars))]
 
-	for len(password) < 24 {
-		// Generate a random index for the character set
-		index, err := rand.Int(rand.Reader, big.NewInt(4))
-		if err != nil {
-			return "", fmt.Errorf("failed to generate random password: %v", err)
+		// Fill the rest with random characters
+		for i := 8; i < passwordLength; i++ {
+			password[i] = allChars[secureRandomInt(len(allChars))]
 		}
 
-		// Get the character set based on the index
-		var charSet string
-		switch index.Int64() {
-		case 0:
-			charSet = uppercaseChars
-			uppercaseCount++
-		case 1:
-			charSet = lowercaseChars
-			lowercaseCount++
-		case 2:
-			charSet = digitChars
-			digitCount++
-		case 3:
-			charSet = specialChars
-			specialCharCount++
+		// Shuffle the password
+		for i := len(password) - 1; i > 0; i-- {
+			j := secureRandomInt(i + 1)
+			password[i], password[j] = password[j], password[i]
 		}
 
-		// Generate a random index for the character set
-		charIndex, err := rand.Int(rand.Reader, big.NewInt(int64(len(charSet))))
-		if err != nil {
-			return "", fmt.Errorf("failed to generate random password: %v", err)
+		// Test the password strength
+		if testPasswordStrength(string(password)) == nil {
+			return string(password), nil
 		}
-
-		// Add the random character to the password
-		password += string(charSet[charIndex.Int64()])
 	}
 
-	// Check password strength
-	if uppercaseCount < 2 || lowercaseCount < 2 || digitCount < 2 || specialCharCount < 2 {
-		return "", fmt.Errorf("generated password does not meet the strength criteria")
-	}
+	return "", errors.New("failed to generate a password meeting the strength criteria after 100 attempts")
+}
 
-	return password, nil
+func secureRandomInt(max int) int {
+	n, err := rand.Int(rand.Reader, big.NewInt(int64(max)))
+	if err != nil {
+		panic(err) // In a production environment, handle this error more gracefully
+	}
+	return int(n.Int64())
 }
 
 // countMatches returns the number of non-overlapping matches of the regular expression pattern in the string s.

@@ -3,10 +3,10 @@
 package sdk
 
 import (
-	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"sync"
 	"time"
 
@@ -15,9 +15,11 @@ import (
 
 // NodeOptions is the options for a node.
 type NodeOptions struct {
-	EnvName  string
-	DataPath string
-	Config   *Config
+	EnvName     string
+	DataPath    string
+	Config      *Config
+	IsSeed      bool
+	SeedAddress string
 }
 
 // NewNodeOptions creates a new NodeOptions instance.
@@ -39,9 +41,8 @@ type NodePersistData struct {
 }
 
 type NodeStatus struct {
-	NodeID string
-	Status string
-	// Add other status fields as needed
+	NodeID string `json:"node_id"`
+	Status string `json:"status"`
 }
 
 // Node is a node in the blockchain network.
@@ -65,8 +66,8 @@ func GetNode() *Node {
 	return node
 }
 
-// NewNode returns a new node instance.
 func NewNode(opts *NodeOptions) error {
+	log.Println("Starting NewNode function")
 	node = &Node{}
 	node.Lock()
 	defer node.Unlock()
@@ -76,35 +77,50 @@ func NewNode(opts *NodeOptions) error {
 	} else {
 		node.Config = NewConfig()
 	}
+	log.Println("Config initialized")
 
 	err := NewLocalStorage(node.Config.DataPath)
 	if err != nil {
 		return fmt.Errorf("error initializing local storage: %w", err)
 	}
+	log.Println("Local storage initialized")
 
 	err = node.load()
 	if err != nil {
-		fmt.Printf("No existing node state found: %s\n", err)
+		log.Printf("No existing node state found: %s\n", err)
 		node.ID = uuid.New()
 	}
+	log.Println("Node state loaded or new ID generated")
 
 	err = node.save()
 	if err != nil {
 		return fmt.Errorf("error saving node state: %w", err)
 	}
+	log.Println("Node state saved")
 
 	node.Blockchain = NewBlockchain(node.Config)
+	log.Println("Blockchain initialized")
+
 	node.API = NewAPI(node.Blockchain)
+	log.Println("API initialized")
+
 	node.P2P = NewP2P()
+	log.Println("P2P initialized")
 
 	// Initialize wallet
+	password, err := GenerateRandomPassword()
+	if err != nil {
+		return fmt.Errorf("error generating random password: %w", err)
+	}
+	log.Println("Random password generated")
+
 	walletOptions := &WalletOptions{
-		OrganizationID: NewBigInt(1), // Example value, adjust as needed
-		AppID:          NewBigInt(1), // Example value, adjust as needed
-		UserID:         NewBigInt(1), // Example value, adjust as needed
-		AssetID:        NewBigInt(1), // Example value, adjust as needed
+		OrganizationID: NewBigInt(1),
+		AppID:          NewBigInt(1),
+		UserID:         NewBigInt(1),
+		AssetID:        NewBigInt(1),
 		Name:           "NodeWallet",
-		Passphrase:     generateRandomPassphrase(),
+		Passphrase:     password,
 		Tags:           []string{"node", "wallet"},
 	}
 	wallet, err := NewWallet(walletOptions)
@@ -112,14 +128,40 @@ func NewNode(opts *NodeOptions) error {
 		return fmt.Errorf("error creating node wallet: %w", err)
 	}
 	node.Wallet = wallet
+	log.Println("Node wallet created")
 
-	err = node.Register()
-	if err != nil {
-		return fmt.Errorf("error registering node: %w", err)
+	if opts.IsSeed {
+		log.Println("Initializing as seed node")
+		node.P2P.SetAsSeedNode()
+		log.Println("Node set as seed node")
+	} else if opts.SeedAddress != "" {
+		log.Println("Attempting to connect to seed node")
+		err := node.P2P.ConnectToSeedNode(opts.SeedAddress)
+		if err != nil {
+			return fmt.Errorf("failed to connect to seed node: %w", err)
+		}
+		log.Println("Connected to seed node")
+
+		log.Println("Registering node with P2P network")
+		err = node.Register()
+		if err != nil {
+			return fmt.Errorf("error registering node: %w", err)
+		}
+		log.Println("Node registered with P2P network")
+	} else {
+		log.Println("Warning: Node is neither a seed node nor connected to a seed node")
 	}
 
 	node.Config.Show()
 	node.initialized = true
+
+	err = node.save()
+	if err != nil {
+		return fmt.Errorf("error saving node state: %w", err)
+	}
+	log.Println("Node state saved")
+
+	log.Println("Node initialization complete")
 
 	return nil
 }
@@ -212,21 +254,28 @@ func (n *Node) ProcessP2PTransaction(tx P2PTransaction) error {
 
 // Register registers the node with the P2P network.
 func (n *Node) Register() error {
+	log.Println("Starting node registration")
 	if n.Wallet == nil {
 		return errors.New("node wallet is nil")
 	}
 
+	log.Println("Registering node with P2P network")
 	n.P2P.RegisterNode(n)
+	log.Println("Node registered with P2P network")
 
+	log.Println("Marshaling node data to JSON")
 	jsonNodeData, err := json.Marshal(n)
 	if err != nil {
 		return fmt.Errorf("error marshaling node data: %w", err)
 	}
+	log.Println("Node data marshaled to JSON")
 
+	log.Println("Creating new transaction")
 	tx, err := NewTransaction("chain", n.Wallet, n.Wallet)
 	if err != nil {
 		return fmt.Errorf("error creating transaction: %w", err)
 	}
+	log.Println("New transaction created")
 
 	p2pTx := P2PTransaction{
 		Tx:     *tx,
@@ -235,8 +284,16 @@ func (n *Node) Register() error {
 		Data:   jsonNodeData,
 	}
 
+	log.Println("Adding transaction to P2P network")
 	n.P2P.AddTransaction(p2pTx)
-	n.P2P.Broadcast(p2pTx)
+	log.Println("Transaction added to P2P network")
+
+	log.Println("Broadcasting transaction to P2P network")
+	err = n.P2P.Broadcast(p2pTx)
+	if err != nil {
+		return fmt.Errorf("error broadcasting transaction: %w", err)
+	}
+	log.Println("Transaction broadcast completed")
 
 	return nil
 }
@@ -268,13 +325,11 @@ func (n *Node) updateStatus(tx P2PTransaction) error {
 		return fmt.Errorf("error unmarshaling node status: %w", err)
 	}
 
-	for i, node := range n.P2P.nodes {
-		if node.ID == status.NodeID {
-			n.P2P.nodes[i].LastSeen = time.Now()
-			n.P2P.nodes[i].Status = status.Status
-			fmt.Printf("Updated status of node %s: %s\n", status.NodeID, status.Status)
-			return nil
-		}
+	if node, exists := n.P2P.nodes[status.NodeID]; exists {
+		node.LastSeen = time.Now()
+		node.Status = status.Status
+		fmt.Printf("Updated status of node %s: %s\n", status.NodeID, status.Status)
+		return nil
 	}
 
 	return fmt.Errorf("node %s not found in the network", status.NodeID)
@@ -291,13 +346,11 @@ func (n *Node) addNode(tx P2PTransaction) error {
 		return fmt.Errorf("error unmarshaling new node data: %w", err)
 	}
 
-	for _, node := range n.P2P.nodes {
-		if node.ID == newNode.ID {
-			return fmt.Errorf("node %s already exists in the network", newNode.ID)
-		}
+	if _, exists := n.P2P.nodes[newNode.ID]; exists {
+		return fmt.Errorf("node %s already exists in the network", newNode.ID)
 	}
 
-	n.P2P.nodes = append(n.P2P.nodes, &newNode)
+	n.P2P.nodes[newNode.ID] = &newNode
 	fmt.Printf("Added new node to the network: %s\n", newNode.ID)
 	return nil
 }
@@ -313,12 +366,10 @@ func (n *Node) removeNode(tx P2PTransaction) error {
 		return fmt.Errorf("error unmarshaling node ID: %w", err)
 	}
 
-	for i, node := range n.P2P.nodes {
-		if node.ID == nodeID {
-			n.P2P.nodes = append(n.P2P.nodes[:i], n.P2P.nodes[i+1:]...)
-			fmt.Printf("Removed node from the network: %s\n", nodeID)
-			return nil
-		}
+	if _, exists := n.P2P.nodes[nodeID]; exists {
+		delete(n.P2P.nodes, nodeID)
+		fmt.Printf("Removed node from the network: %s\n", nodeID)
+		return nil
 	}
 
 	return fmt.Errorf("node %s not found in the network", nodeID)
@@ -335,13 +386,11 @@ func (n *Node) registerNode(tx P2PTransaction) error {
 		return fmt.Errorf("error unmarshaling new node data: %w", err)
 	}
 
-	for _, node := range n.P2P.nodes {
-		if node.ID == newNode.ID {
-			return fmt.Errorf("node %s is already registered in the network", newNode.ID)
-		}
+	if _, exists := n.P2P.nodes[newNode.ID]; exists {
+		return fmt.Errorf("node %s is already registered in the network", newNode.ID)
 	}
 
-	n.P2P.nodes = append(n.P2P.nodes, &newNode)
+	n.P2P.nodes[newNode.ID] = &newNode
 	fmt.Printf("Registered new node in the network: %s\n", newNode.ID)
 
 	n.P2P.Broadcast(P2PTransaction{
@@ -352,13 +401,4 @@ func (n *Node) registerNode(tx P2PTransaction) error {
 	})
 
 	return nil
-}
-
-func generateRandomPassphrase() string {
-	b := make([]byte, 32)
-	_, err := rand.Read(b)
-	if err != nil {
-		panic(err)
-	}
-	return fmt.Sprintf("%x", b)
 }

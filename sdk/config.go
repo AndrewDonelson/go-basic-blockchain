@@ -4,8 +4,8 @@
 package sdk
 
 import (
+	"encoding/json"
 	"errors"
-	"flag"
 	"fmt"
 	"log"
 	"os"
@@ -41,6 +41,8 @@ type Config struct {
 	Version           string  // New field: Configuration version
 	MaxBlockSize      int     // New field: Maximum block size in bytes
 	MinTransactionFee float64 // New field: Minimum transaction fee
+	IsSeed            bool    // New field: Is this a seed node
+	SeedAddress       string  // New field: Address of the seed node to connect to
 	promptUpdate      bool
 	testing           bool
 }
@@ -54,8 +56,10 @@ func NewConfig() *Config {
 
 	cfg.setDefaultValues()
 	cfg.loadFromEnv()
+	cfg.loadFromFile()
+	cfg.applyCommandLineFlags()
 
-	if !cfg.testing {
+	if !cfg.testing && !fileExists(cfgFile) {
 		cfg.promptForValues()
 		cfg.save()
 	}
@@ -87,7 +91,7 @@ func (c *Config) setDefaultValues() {
 
 // loadFromEnv loads configuration values from environment variables.
 func (c *Config) loadFromEnv() {
-	c.testing = (flag.Lookup("test.v") != nil)
+	c.testing = (os.Getenv("TESTING") == "true")
 
 	if !c.testing {
 		envFile := os.Getenv("ENV_FILE")
@@ -124,6 +128,36 @@ func (c *Config) loadFromEnv() {
 		c.Domain = getEnv("DOMAIN", c.Domain)
 		c.MaxBlockSize = getEnvAsInt("MAX_BLOCK_SIZE", c.MaxBlockSize)
 		c.MinTransactionFee = getEnvAsFloat("MIN_TRANSACTION_FEE", c.MinTransactionFee)
+	}
+}
+
+// loadFromFile loads configuration from a file if it exists
+func (c *Config) loadFromFile() {
+	if fileExists(cfgFile) {
+		data, err := os.ReadFile(cfgFile)
+		if err != nil {
+			log.Printf("Error reading config file: %v", err)
+			return
+		}
+		err = json.Unmarshal(data, c)
+		if err != nil {
+			log.Printf("Error parsing config file: %v", err)
+			return
+		}
+		log.Printf("Loaded configuration from file: %s", cfgFile)
+	}
+}
+
+// applyCommandLineFlags applies command line flags to override config values
+func (c *Config) applyCommandLineFlags() {
+	for name, _ := range Args.Flags {
+		switch name {
+		case "seed":
+			c.IsSeed = Args.GetBool("seed")
+		case "seed-address":
+			c.SeedAddress = Args.GetString("seed-address")
+			// Add more cases for other flags as needed
+		}
 	}
 }
 
@@ -212,6 +246,8 @@ func (c *Config) Show() {
 	fmt.Printf("- Data Path: %s\n", c.DataPath)
 	fmt.Printf("- Max Block Size: %d bytes\n", c.MaxBlockSize)
 	fmt.Printf("- Min Transaction Fee: %.2f\n", c.MinTransactionFee)
+	fmt.Printf("- Is Seed Node: %v\n", c.IsSeed)
+	fmt.Printf("- Seed Address: %s\n", c.SeedAddress)
 }
 
 // Path returns the path to the executable file.
@@ -407,6 +443,15 @@ func getEnvAsBool(key string, fallback bool) bool {
 		return value
 	}
 	return fallback
+}
+
+// fileExists checks if a file exists and is not a directory
+func fileExists(filename string) bool {
+	info, err := os.Stat(filename)
+	if os.IsNotExist(err) {
+		return false
+	}
+	return !info.IsDir()
 }
 
 // PromptYesNo prompts the user with a given question and returns a bool value based on their response.

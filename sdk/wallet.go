@@ -9,6 +9,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/x509"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -146,10 +147,18 @@ func NewWallet(options *WalletOptions) (*Wallet, error) {
 	wallet.SetData("balance", float64(fundWalletAmount))
 	wallet.GetAddress()
 
-	if verbose {
-		fmt.Printf("[%s] Created new Wallet: %+v\n", time.Now().Format(logDateTimeFormat), PrettyPrint(wallet))
-	} else {
-		fmt.Printf("[%s] Created new Wallet: %s\n", time.Now().Format(logDateTimeFormat), wallet.GetAddress())
+	// if verbose {
+	// 	fmt.Printf("[%s] Created new Wallet: %+v\n", time.Now().Format(logDateTimeFormat), PrettyPrint(wallet))
+	// } else {
+	// 	fmt.Printf("[%s] Created new Wallet: %s\n", time.Now().Format(logDateTimeFormat), wallet.GetAddress())
+	// }
+
+	fmt.Printf("[%s] Created new Wallet: %s\n", time.Now().Format(logDateTimeFormat), wallet.GetAddress())
+
+	// Save the wallet after creation
+	err = wallet.Close(options.Passphrase)
+	if err != nil {
+		return nil, fmt.Errorf("failed to save wallet: %w", err)
 	}
 
 	return wallet, nil
@@ -622,6 +631,9 @@ func (w *Wallet) Unlock(passphrase string) error {
 // Close encrypts and saves the wallet to disk as a JSON file. If the wallet is already encrypted, this method will return an error.
 // This method first locks the wallet using the provided passphrase, then saves the encrypted wallet to disk using the localStorage.Set method.
 // If any errors occur during the locking or saving process, this method will return an error.
+// In wallet.go
+
+// Close encrypts and saves the wallet to disk as a JSON file.
 func (w *Wallet) Close(passphrase string) error {
 	if w.Encrypted {
 		return errors.New("cannot save an already encrypted wallet")
@@ -629,18 +641,26 @@ func (w *Wallet) Close(passphrase string) error {
 
 	err := w.Lock(passphrase)
 	if err != nil {
-		return fmt.Errorf("failed to save wallet: %v", err)
+		return fmt.Errorf("failed to lock wallet: %v", err)
 	}
 
 	walletData := struct {
-		*Wallet
-		Nonce uint64 `json:"nonce"`
+		ID               *PUID             `json:"id"`
+		Address          string            `json:"address"`
+		Encrypted        bool              `json:"encrypted"`
+		EncryptionParams *EncryptionParams `json:"encryption_params"`
+		Ciphertext       string            `json:"ciphertext"`
+		Nonce            uint64            `json:"nonce"`
 	}{
-		Wallet: w,
-		Nonce:  w.nonce,
+		ID:               w.ID,
+		Address:          w.Address,
+		Encrypted:        w.Encrypted,
+		EncryptionParams: w.EncryptionParams,
+		Ciphertext:       base64.StdEncoding.EncodeToString(w.Ciphertext),
+		Nonce:            w.nonce,
 	}
 
-	err = localStorage.Set("wallet", walletData)
+	err = localStorage.Set(w.Address, walletData)
 	if err != nil {
 		return fmt.Errorf("failed to save wallet: %v", err)
 	}
@@ -653,24 +673,35 @@ func (w *Wallet) Close(passphrase string) error {
 }
 
 // Open loads the wallet from disk that was saved as a JSON file.
-// It also unlocks the value and restores the wallet.vault object.
 func (w *Wallet) Open(passphrase string) error {
 	var walletData struct {
-		*Wallet
-		Nonce uint64 `json:"nonce"`
+		ID               *PUID             `json:"id"`
+		Address          string            `json:"address"`
+		Encrypted        bool              `json:"encrypted"`
+		EncryptionParams *EncryptionParams `json:"encryption_params"`
+		Ciphertext       string            `json:"ciphertext"`
+		Nonce            uint64            `json:"nonce"`
 	}
 
-	err := localStorage.Get("wallet", &walletData)
+	err := localStorage.Get(w.Address, &walletData)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to load wallet data: %v", err)
 	}
 
+	w.ID = walletData.ID
+	w.Address = walletData.Address
+	w.Encrypted = walletData.Encrypted
+	w.EncryptionParams = walletData.EncryptionParams
+	w.Ciphertext, err = base64.StdEncoding.DecodeString(walletData.Ciphertext)
+	if err != nil {
+		return fmt.Errorf("failed to decode ciphertext: %v", err)
+	}
 	w.nonce = walletData.Nonce
 
 	if len(passphrase) >= 12 {
 		err = w.Unlock(passphrase)
 		if err != nil {
-			return fmt.Errorf("failed to load wallet: %v", err)
+			return fmt.Errorf("failed to unlock wallet: %v", err)
 		}
 	}
 

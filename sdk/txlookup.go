@@ -182,6 +182,9 @@ func (txlm *TXLookupManager) Find(indexEntry *IndexEntry) (entry *IndexEntry, er
 
 // Set sets the index from BlockchainPersistData loaded from LocalStorage
 func (txlm *TXLookupManager) Set(idx *Index) error {
+	if idx == nil {
+		return nil // or return an error if you prefer
+	}
 	txlm.index.Set(idx)
 	txlm.initalized = true
 	return nil

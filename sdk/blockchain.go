@@ -98,9 +98,21 @@ func (bc *Blockchain) Load() error {
 		return err
 	}
 
-	bc.TXLookup.index.Set(data.TXLookup)
-	bc.CurrentBlockIndex = *data.CurrBlockIndex
-	bc.NextBlockIndex = *data.NextBlockIndex
+	if bc.TXLookup == nil {
+		bc.TXLookup = NewTXLookupManager()
+	}
+
+	if data.TXLookup != nil {
+		bc.TXLookup.Set(data.TXLookup)
+	}
+
+	if data.CurrBlockIndex != nil {
+		bc.CurrentBlockIndex = *data.CurrBlockIndex
+	}
+
+	if data.NextBlockIndex != nil {
+		bc.NextBlockIndex = *data.NextBlockIndex
+	}
 
 	return nil
 }
