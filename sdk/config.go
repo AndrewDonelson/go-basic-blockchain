@@ -1,8 +1,10 @@
 // Package sdk is a software development kit for building blockchain applications.
 // File sdk/config.go - The main Config file
+
 package sdk
 
 import (
+	"errors"
 	"flag"
 	"fmt"
 	"log"
@@ -15,290 +17,182 @@ import (
 )
 
 // Config is the configuration for the blockchain.
-// It contains various settings and parameters for the blockchain, such as the blockchain name,
-// symbol, block time, difficulty, transaction fee, miner reward percentage, developer reward
-// percentage, API and P2P hostnames, wallet funding amount, token count and price, and other
-// settings related to the blockchain's operation.
 type Config struct {
-	BlockchainName   string
-	BlockchainSymbol string
-	BlockTime        int
-	Difficulty       int
-	TransactionFee   float64
-	MinerRewardPCT   float64
-	MinerAddress     string
-	DevRewardPCT     float64
-	DevAddress       string
-	APIHostName      string
-	P2PHostName      string
-	EnableAPI        bool
-	FundWalletAmount float64
-	TokenCount       int64   // This is the total number of tokens that will be created intially
-	TokenPrice       float64 // This is the set price of each token
-	AllowNewTokens   bool    // Set this to true if you want to allow new tokens to be created besides the initial tokens
-	promptUpdate     bool    // This is used internally to check if user added/changed default value from prompt
-	testing          bool    // This is used internally to check if the code is running in test mode
-	DataPath         string  // This is the path where all data is stored
-	GMailEmail       string  // This is the email address used to send emails
-	GMailPassword    string  // This is the password for the email address used to send emails
-	Domain           string  // This is the domain name of the server. ie somehost.com or 123.123.123.123, etc
+	BlockchainName    string
+	BlockchainSymbol  string
+	BlockTime         int
+	Difficulty        int
+	TransactionFee    float64
+	MinerRewardPCT    float64
+	MinerAddress      string
+	DevRewardPCT      float64
+	DevAddress        string
+	APIHostName       string
+	P2PHostName       string
+	EnableAPI         bool
+	FundWalletAmount  float64
+	TokenCount        int64
+	TokenPrice        float64
+	AllowNewTokens    bool
+	DataPath          string
+	GMailEmail        string
+	GMailPassword     string
+	Domain            string
+	Version           string  // New field: Configuration version
+	MaxBlockSize      int     // New field: Maximum block size in bytes
+	MinTransactionFee float64 // New field: Minimum transaction fee
+	promptUpdate      bool
+	testing           bool
 }
 
 // NewConfig creates a new configuration object with default values.
-// It first creates a new Config struct and sets the default values from the constants.
-// It then loads any environment variables from a .env file, if it exists, and updates the configuration values accordingly.
-// Finally, it displays the configuration values that will be used.
 func NewConfig() *Config {
-	// step 1: create a new actual config
 	cfg := &Config{
 		DataPath: filepath.Join(".", "data"),
+		Version:  "1.0", // Set initial version
 	}
 
-	// step 2: set the default values from the constants
-	cfg.BlockchainName = BlockchainName
-	cfg.BlockchainSymbol = BlockchainSymbol
-	cfg.BlockTime = blockTimeInSec
-	cfg.Difficulty = proofOfWorkDifficulty
-	cfg.TransactionFee = transactionFee
-	cfg.MinerRewardPCT = minerRewardPCT
-	cfg.MinerAddress = minerAddress
-	cfg.DevRewardPCT = devRewardPCT
-	cfg.DevAddress = devAddress
-	cfg.APIHostName = apiHostname
-	cfg.P2PHostName = p2pHostname
-	cfg.EnableAPI = EnableAPI
-	cfg.FundWalletAmount = fundWalletAmount
-	cfg.TokenCount = tokenCount
-	cfg.TokenPrice = tokenPrice
-	cfg.AllowNewTokens = allowNewTokens
+	cfg.setDefaultValues()
+	cfg.loadFromEnv()
 
-	cfg.testing = (flag.Lookup("test.v") != nil)
-
-	if verbose {
-		if !cfg.testing {
-			//  step 3: Load all values in the .env file if it exists
-			envFile := os.Getenv("ENV_FILE")
-			if envFile == "" {
-				envFile = cfgFile // fallback to default
-			}
-
-			err := godotenv.Load(envFile)
-			if err != nil {
-				log.Printf("Error loading [%s] environment file: %v", envFile, err)
-			} else {
-				log.Printf("Loaded [%s] environment file", envFile)
-			}
-
-			// step 4: set the values from the environment variables
-			if os.Getenv("BLOCKCHAIN_NAME") != "" {
-				if os.Getenv("BLOCKCHAIN_NAME") == BlockchainName {
-					cfg.BlockchainName = cfg.promptValue("BLOCKCHAIN_NAME", BlockchainName, false, "string").(string)
-				} else {
-					fmt.Printf("Notice: Environment BLOCKCHAIN_NAME is set to %s\n", os.Getenv("BLOCKCHAIN_NAME"))
-					cfg.BlockchainName = os.Getenv("BLOCKCHAIN_NAME")
-				}
-			}
-
-			if os.Getenv("BLOCKCHAIN_SYMBOL") != "" {
-				if os.Getenv("BLOCKCHAIN_SYMBOL") == BlockchainSymbol {
-					cfg.BlockchainSymbol = cfg.promptValue("BLOCKCHAIN_SYMBOL", BlockchainSymbol, false, "string").(string)
-				} else {
-					fmt.Printf("Notice: Environment BLOCKCHAIN_SYMBOL is set to %s\n", os.Getenv("BLOCKCHAIN_SYMBOL"))
-					cfg.BlockchainSymbol = os.Getenv("BLOCKCHAIN_SYMBOL")
-				}
-			}
-
-			if os.Getenv("BLOCK_TIME") != "" {
-				if os.Getenv("BLOCK_TIME") == strconv.Itoa(blockTimeInSec) {
-					cfg.BlockTime = cfg.promptValue("BLOCK_TIME", fmt.Sprintf("%d", blockTimeInSec), false, "int").(int)
-				} else {
-					fmt.Printf("Notice: Environment BLOCK_TIME is set to %s\n", os.Getenv("BLOCK_TIME"))
-					cfg.BlockTime = cfg.getIntEnv("BLOCK_TIME", blockTimeInSec)
-				}
-			}
-
-			if os.Getenv("DIFFICULTY") != "" {
-				if os.Getenv("DIFFICULTY") == strconv.Itoa(proofOfWorkDifficulty) {
-					cfg.Difficulty = cfg.promptValue("DIFFICULTY", fmt.Sprintf("%d", proofOfWorkDifficulty), false, "int").(int)
-				} else {
-					fmt.Printf("Notice: Environment DIFFICULTY is set to %s\n", os.Getenv("DIFFICULTY"))
-					cfg.Difficulty = cfg.getIntEnv("DIFFICULTY", proofOfWorkDifficulty)
-				}
-			}
-
-			if os.Getenv("TRANSACTION_FEE") != "" {
-				if os.Getenv("TRANSACTION_FEE") == fmt.Sprintf("%.2f", transactionFee) {
-					cfg.TransactionFee = cfg.promptValue("TRANSACTION_FEE", fmt.Sprintf("%.2f", transactionFee), false, "float").(float64)
-				} else {
-					fmt.Printf("Notice: Environment TRANSACTION_FEE is set to %s\n", os.Getenv("TRANSACTION_FEE"))
-					cfg.TransactionFee = cfg.getFloatEnv("TRANSACTION_FEE", transactionFee)
-				}
-			}
-
-			// this is the node wallet (miner) address
-			if os.Getenv("MINER_ADDRESS") != "" {
-				if os.Getenv("MINER_ADDRESS") == minerAddress {
-					if cfg.PromptYesNo("Do you want have a miner address?") {
-						cfg.MinerAddress = cfg.promptValue("MINER_ADDRESS", minerAddress, true, "string").(string)
-					} else {
-						if cfg.PromptYesNo("Do you want to create a new wallet for the miner address?") {
-							walletName, walletPassPhrase, walletTags := cfg.PromptWalletInfo()
-							//minerWallet, err := NewWallet(walletName, walletPassPhrase, walletTags)
-							minerWallet, err := NewWallet(NewWalletOptions(ThisBlockchainOrganizationID, ThisBlockchainAppID, ThisBlockchainAdminUserID, ThisBlockchainMinerID, walletName, walletPassPhrase, walletTags))
-							if err != nil {
-								log.Fatal(err)
-							}
-							cfg.MinerAddress = minerWallet.GetAddress()
-						}
-					}
-
-					if cfg.MinerAddress == "" || cfg.MinerAddress == minerAddress {
-						log.Fatal("Error: MINER_ADDRESS is required")
-					}
-				} else {
-					fmt.Printf("Notice: Environment MINER_ADDRESS is set to %s\n", os.Getenv("MINER_ADDRESS"))
-					cfg.MinerAddress = os.Getenv("MINER_ADDRESS")
-				}
-			}
-
-			if os.Getenv("MINER_REWARD_PCT") != "" {
-				if os.Getenv("MINER_REWARD_PCT") == fmt.Sprintf("%.2f", minerRewardPCT) {
-					cfg.MinerRewardPCT = cfg.promptValue("MINER_REWARD_PCT", fmt.Sprintf("%.2f", minerRewardPCT), false, "float").(float64)
-				} else {
-					fmt.Printf("Notice: Environment MINER_REWARD_PCT is set to %s\n", os.Getenv("MINER_REWARD_PCT"))
-					cfg.MinerRewardPCT = cfg.getFloatEnv("MINER_REWARD_PCT", minerRewardPCT)
-				}
-			}
-
-			// This is the blockchain developer's wallet address (not the node wallet) - it is used to support (reward) the developer || project
-			// TODO: move this into the genesis block - not here
-			if os.Getenv("DEV_REWARD_PCT") != "" {
-				if os.Getenv("DEV_REWARD_PCT") == fmt.Sprintf("%.2f", devRewardPCT) {
-					cfg.DevRewardPCT = cfg.promptValue("DEV_REWARD_PCT", fmt.Sprintf("%.2f", devRewardPCT), false, "float").(float64)
-				} else {
-					fmt.Printf("Notice: Environment DEV_REWARD_PCT is set to %s\n", os.Getenv("DEV_REWARD_PCT"))
-					cfg.DevRewardPCT = cfg.getFloatEnv("DEV_REWARD_PCT", devRewardPCT)
-				}
-			}
-
-			if os.Getenv("DEV_ADDRESS") != "" {
-				if os.Getenv("DEV_ADDRESS") == devAddress {
-					cfg.DevAddress = cfg.promptValue("DEV_ADDRESS", devAddress, true, "string").(string)
-				} else {
-					fmt.Printf("Notice: Environment DEV_ADDRESS is set to %s\n", os.Getenv("DEV_ADDRESS"))
-					cfg.DevAddress = os.Getenv("DEV_ADDRESS")
-				}
-			}
-
-			if os.Getenv("P2P_HOSTNAME") != "" {
-				if os.Getenv("P2P_HOSTNAME") == p2pHostname {
-					cfg.P2PHostName = cfg.promptValue("P2P_HOSTNAME", p2pHostname, false, "string").(string)
-				} else {
-					fmt.Printf("Notice: Environment P2P_HOSTNAME is set to %s\n", os.Getenv("P2P_HOSTNAME"))
-					cfg.P2PHostName = os.Getenv("P2P_HOSTNAME")
-				}
-			}
-
-			if os.Getenv("API_HOSTNAME") != "" {
-				if os.Getenv("API_HOSTNAME") == apiHostname {
-					cfg.APIHostName = cfg.promptValue("API_HOSTNAME", apiHostname, false, "string").(string)
-				} else {
-					fmt.Printf("Notice: Environment API_HOSTNAME is set to %s\n", os.Getenv("API_HOSTNAME"))
-					cfg.APIHostName = os.Getenv("API_HOSTNAME")
-				}
-			}
-
-			if os.Getenv("ENABLE_API") != "" {
-				if os.Getenv("ENABLE_API") == strconv.FormatBool(EnableAPI) {
-					cfg.EnableAPI = cfg.promptValue("ENABLE_API", strconv.FormatBool(EnableAPI), false, "bool").(bool)
-				} else {
-					fmt.Printf("Notice: Environment ENABLE_API is set to %s\n", os.Getenv("ENABLE_API"))
-					cfg.EnableAPI = cfg.getBoolEnv("ENABLE_API", EnableAPI)
-				}
-			}
-
-			if os.Getenv("FUND_WALLET_AMOUNT") != "" {
-				if os.Getenv("FUND_WALLET_AMOUNT") == fmt.Sprintf("%.2f", fundWalletAmount) {
-					cfg.FundWalletAmount = cfg.promptValue("FUND_WALLET_AMOUNT", fmt.Sprintf("%.2f", fundWalletAmount), false, "float").(float64)
-				} else {
-					fmt.Printf("Notice: Environment FUND_WALLET_AMOUNT is set to %s\n", os.Getenv("FUND_WALLET_AMOUNT"))
-					cfg.FundWalletAmount = cfg.getFloatEnv("FUND_WALLET_AMOUNT", fundWalletAmount)
-				}
-			}
-
-			if os.Getenv("TOKEN_COUNT") != "" {
-				tCount, err := strconv.ParseInt(os.Getenv("TOKEN_COUNT"), 10, 64)
-				if err != nil {
-					log.Fatal(err)
-				}
-				if tCount == tokenCount {
-					newCount := cfg.promptValue("TOKEN_COUNT", fmt.Sprintf("%d", tokenCount), false, "int").(int64)
-					cfg.TokenCount = newCount
-				} else {
-					fmt.Printf("Notice: Environment TOKEN_COUNT is set to %d\n", tCount)
-					cfg.TokenCount = tCount
-				}
-			}
-
-			if os.Getenv("TOKEN_PRICE") != "" {
-				if os.Getenv("TOKEN_PRICE") == fmt.Sprintf("%.2f", tokenPrice) {
-					cfg.TokenPrice = cfg.promptValue("TOKEN_PRICE", fmt.Sprintf("%.2f", tokenPrice), false, "float").(float64)
-				} else {
-					fmt.Printf("Notice: Environment TOKEN_PRICE is set to %s\n", os.Getenv("TOKEN_PRICE"))
-					cfg.TokenPrice = cfg.getFloatEnv("TOKEN_PRICE", tokenPrice)
-				}
-			}
-
-			if os.Getenv("ALLOW_NEW_TOKENS") != "" {
-				if os.Getenv("ALLOW_NEW_TOKENS") == strconv.FormatBool(allowNewTokens) {
-					cfg.AllowNewTokens = cfg.promptValue("ALLOW_NEW_TOKENS", strconv.FormatBool(allowNewTokens), false, "bool").(bool)
-				} else {
-					fmt.Printf("Notice: Environment ALLOW_NEW_TOKENS is set to %s\n", os.Getenv("ALLOW_NEW_TOKENS"))
-					cfg.AllowNewTokens = cfg.getBoolEnv("ALLOW_NEW_TOKENS", allowNewTokens)
-				}
-			}
-
-			if os.Getenv("DATA_PATH") != "" {
-				if os.Getenv("DATA_PATH") == cfg.DataPath {
-					cfg.DevAddress = cfg.promptValue("DATA_PATH", cfg.DataPath, false, "string").(string)
-				} else {
-					fmt.Printf("Notice: Environment DATA_PATH is set to %s\n", os.Getenv("DATA_PATH"))
-					cfg.DataPath = os.Getenv("DATA_PATH")
-				}
-			}
-
-			if os.Getenv("GMAIL_EMAIL") != "" {
-				if os.Getenv("GMAIL_EMAIL") == gmailEmail {
-					cfg.GMailEmail = cfg.promptValue("GMAIL_EMAIL", gmailEmail, false, "string").(string)
-				} else {
-					fmt.Printf("Notice: Environment GMAIL_EMAIL is set to %s\n", os.Getenv("GMAIL_EMAIL"))
-					cfg.GMailEmail = os.Getenv("GMAIL_EMAIL")
-				}
-			}
-
-			if os.Getenv("GMAIL_PASSWORD") != "" {
-				if os.Getenv("GMAIL_PASSWORD") == gmailPassword {
-					cfg.GMailPassword = cfg.promptValue("GMAIL_PASSWORD", gmailPassword, false, "string").(string)
-				} else {
-					fmt.Printf("Notice: Environment GMAIL_PASSWORD is set to %s\n", os.Getenv("GMAIL_PASSWORD"))
-					cfg.GMailPassword = os.Getenv("GMAIL_PASSWORD")
-				}
-			}
-
-			// step 5: save / update .env file if changes were made
-			cfg.save()
-		}
+	if !cfg.testing {
+		cfg.promptForValues()
+		cfg.save()
 	}
-
-	// step 6: display config values that will be used
 
 	return cfg
-
 }
 
-// Show displays the configuration values that will be used.
+// setDefaultValues sets the default values for the configuration.
+func (c *Config) setDefaultValues() {
+	c.BlockchainName = BlockchainName
+	c.BlockchainSymbol = BlockchainSymbol
+	c.BlockTime = blockTimeInSec
+	c.Difficulty = proofOfWorkDifficulty
+	c.TransactionFee = transactionFee
+	c.MinerRewardPCT = minerRewardPCT
+	c.MinerAddress = minerAddress
+	c.DevRewardPCT = devRewardPCT
+	c.DevAddress = devAddress
+	c.APIHostName = apiHostname
+	c.P2PHostName = p2pHostname
+	c.EnableAPI = EnableAPI
+	c.FundWalletAmount = fundWalletAmount
+	c.TokenCount = tokenCount
+	c.TokenPrice = tokenPrice
+	c.AllowNewTokens = allowNewTokens
+	c.MaxBlockSize = MaxBlockSize
+	c.MinTransactionFee = minTransactionFee
+}
+
+// loadFromEnv loads configuration values from environment variables.
+func (c *Config) loadFromEnv() {
+	c.testing = (flag.Lookup("test.v") != nil)
+
+	if !c.testing {
+		envFile := os.Getenv("ENV_FILE")
+		if envFile == "" {
+			envFile = cfgFile
+		}
+
+		err := godotenv.Load(envFile)
+		if err != nil {
+			log.Printf("Error loading [%s] environment file: %v", envFile, err)
+		} else {
+			log.Printf("Loaded [%s] environment file", envFile)
+		}
+
+		c.BlockchainName = getEnv("BLOCKCHAIN_NAME", c.BlockchainName)
+		c.BlockchainSymbol = getEnv("BLOCKCHAIN_SYMBOL", c.BlockchainSymbol)
+		c.BlockTime = getEnvAsInt("BLOCK_TIME", c.BlockTime)
+		c.Difficulty = getEnvAsInt("DIFFICULTY", c.Difficulty)
+		c.TransactionFee = getEnvAsFloat("TRANSACTION_FEE", c.TransactionFee)
+		c.MinerRewardPCT = getEnvAsFloat("MINER_REWARD_PCT", c.MinerRewardPCT)
+		c.MinerAddress = getEnv("MINER_ADDRESS", c.MinerAddress)
+		c.DevRewardPCT = getEnvAsFloat("DEV_REWARD_PCT", c.DevRewardPCT)
+		c.DevAddress = getEnv("DEV_ADDRESS", c.DevAddress)
+		c.APIHostName = getEnv("API_HOSTNAME", c.APIHostName)
+		c.P2PHostName = getEnv("P2P_HOSTNAME", c.P2PHostName)
+		c.EnableAPI = getEnvAsBool("ENABLE_API", c.EnableAPI)
+		c.FundWalletAmount = getEnvAsFloat("FUND_WALLET_AMOUNT", c.FundWalletAmount)
+		c.TokenCount = getEnvAsInt64("TOKEN_COUNT", c.TokenCount)
+		c.TokenPrice = getEnvAsFloat("TOKEN_PRICE", c.TokenPrice)
+		c.AllowNewTokens = getEnvAsBool("ALLOW_NEW_TOKENS", c.AllowNewTokens)
+		c.DataPath = getEnv("DATA_PATH", c.DataPath)
+		c.GMailEmail = getEnv("GMAIL_EMAIL", c.GMailEmail)
+		c.GMailPassword = getEnv("GMAIL_PASSWORD", c.GMailPassword)
+		c.Domain = getEnv("DOMAIN", c.Domain)
+		c.MaxBlockSize = getEnvAsInt("MAX_BLOCK_SIZE", c.MaxBlockSize)
+		c.MinTransactionFee = getEnvAsFloat("MIN_TRANSACTION_FEE", c.MinTransactionFee)
+	}
+}
+
+// promptForValues prompts the user for configuration values.
+func (c *Config) promptForValues() {
+	c.BlockchainName = c.promptString("BLOCKCHAIN_NAME", c.BlockchainName)
+	c.BlockchainSymbol = c.promptString("BLOCKCHAIN_SYMBOL", c.BlockchainSymbol)
+	c.BlockTime = c.promptInt("BLOCK_TIME", c.BlockTime)
+	c.Difficulty = c.promptInt("DIFFICULTY", c.Difficulty)
+	c.TransactionFee = c.promptFloat("TRANSACTION_FEE", c.TransactionFee)
+	c.MinerRewardPCT = c.promptFloat("MINER_REWARD_PCT", c.MinerRewardPCT)
+	c.MinerAddress = c.promptString("MINER_ADDRESS", c.MinerAddress)
+	c.DevRewardPCT = c.promptFloat("DEV_REWARD_PCT", c.DevRewardPCT)
+	c.DevAddress = c.promptString("DEV_ADDRESS", c.DevAddress)
+	c.APIHostName = c.promptString("API_HOSTNAME", c.APIHostName)
+	c.P2PHostName = c.promptString("P2P_HOSTNAME", c.P2PHostName)
+	c.EnableAPI = c.promptBool("ENABLE_API", c.EnableAPI)
+	c.FundWalletAmount = c.promptFloat("FUND_WALLET_AMOUNT", c.FundWalletAmount)
+	c.TokenCount = c.promptInt64("TOKEN_COUNT", c.TokenCount)
+	c.TokenPrice = c.promptFloat("TOKEN_PRICE", c.TokenPrice)
+	c.AllowNewTokens = c.promptBool("ALLOW_NEW_TOKENS", c.AllowNewTokens)
+	c.MaxBlockSize = c.promptInt("MAX_BLOCK_SIZE", c.MaxBlockSize)
+	c.MinTransactionFee = c.promptFloat("MIN_TRANSACTION_FEE", c.MinTransactionFee)
+}
+
+// Validate checks if the configuration is valid.
+func (c *Config) Validate() error {
+	if c.BlockchainName == "" {
+		return errors.New("blockchain name cannot be empty")
+	}
+	if c.BlockchainSymbol == "" {
+		return errors.New("blockchain symbol cannot be empty")
+	}
+	if c.BlockTime <= 0 {
+		return errors.New("block time must be positive")
+	}
+	if c.Difficulty < 0 {
+		return errors.New("difficulty cannot be negative")
+	}
+	if c.TransactionFee < 0 {
+		return errors.New("transaction fee cannot be negative")
+	}
+	if c.MinerRewardPCT < 0 || c.MinerRewardPCT > 100 {
+		return errors.New("miner reward percentage must be between 0 and 100")
+	}
+	if c.DevRewardPCT < 0 || c.DevRewardPCT > 100 {
+		return errors.New("developer reward percentage must be between 0 and 100")
+	}
+	if c.FundWalletAmount < 0 {
+		return errors.New("fund wallet amount cannot be negative")
+	}
+	if c.TokenCount < 0 {
+		return errors.New("token count cannot be negative")
+	}
+	if c.TokenPrice < 0 {
+		return errors.New("token price cannot be negative")
+	}
+	if c.MaxBlockSize <= 0 {
+		return errors.New("max block size must be positive")
+	}
+	if c.MinTransactionFee < 0 {
+		return errors.New("minimum transaction fee cannot be negative")
+	}
+	return nil
+}
+
+// Show displays the configuration values.
 func (c *Config) Show() {
-	fmt.Println("Using these Configuration Values:")
+	fmt.Println("Current Configuration:")
 	fmt.Printf("- Blockchain Name: %s\n", c.BlockchainName)
 	fmt.Printf("- Blockchain Symbol: %s\n", c.BlockchainSymbol)
 	fmt.Printf("- Block Time: %d seconds\n", c.BlockTime)
@@ -309,30 +203,104 @@ func (c *Config) Show() {
 	fmt.Printf("- Developer Reward Percentage: %.2f%%\n", c.DevRewardPCT)
 	fmt.Printf("- Developer Address: %s\n", c.DevAddress)
 	fmt.Printf("- API Hostname: %s\n", c.APIHostName)
+	fmt.Printf("- P2P Hostname: %s\n", c.P2PHostName)
 	fmt.Printf("- Enable API: %v\n", c.EnableAPI)
 	fmt.Printf("- Fund Wallet Amount: %.2f\n", c.FundWalletAmount)
 	fmt.Printf("- Token Count: %d\n", c.TokenCount)
 	fmt.Printf("- Token Price: %.2f\n", c.TokenPrice)
 	fmt.Printf("- Allow New Tokens: %v\n", c.AllowNewTokens)
 	fmt.Printf("- Data Path: %s\n", c.DataPath)
+	fmt.Printf("- Max Block Size: %d bytes\n", c.MaxBlockSize)
+	fmt.Printf("- Min Transaction Fee: %.2f\n", c.MinTransactionFee)
 }
 
 // Path returns the path to the executable file.
-// This function returns the directory path of the current executable.
-// It is useful for determining the location of the application's resources or configuration files.
 func (c *Config) Path() string {
-
 	ex, err := os.Executable()
 	if err != nil {
 		panic(err)
 	}
-
 	return filepath.Dir(ex)
 }
 
-// promptValue prompts the user for a value and returns the value of the requested type.
-// If the value is required and the user does not provide one, the function will exit the program.
-// The function will update the promptUpdate flag if the user provides a value different from the default.
+// save writes the current configuration to the .env file.
+func (c *Config) save() error {
+	if c.promptUpdate {
+		f, err := os.Create(cfgFile)
+		if err != nil {
+			return fmt.Errorf("error creating .env file: %s", err)
+		}
+		defer f.Close()
+
+		c.writeEnvValue(f, "BLOCKCHAIN_NAME", c.BlockchainName)
+		c.writeEnvValue(f, "BLOCKCHAIN_SYMBOL", c.BlockchainSymbol)
+		c.writeEnvValue(f, "BLOCK_TIME", fmt.Sprintf("%d", c.BlockTime))
+		c.writeEnvValue(f, "DIFFICULTY", fmt.Sprintf("%d", c.Difficulty))
+		c.writeEnvValue(f, "TRANSACTION_FEE", fmt.Sprintf("%.2f", c.TransactionFee))
+		c.writeEnvValue(f, "MINER_REWARD_PCT", fmt.Sprintf("%.2f", c.MinerRewardPCT))
+		c.writeEnvValue(f, "MINER_ADDRESS", c.MinerAddress)
+		c.writeEnvValue(f, "DEV_REWARD_PCT", fmt.Sprintf("%.2f", c.DevRewardPCT))
+		c.writeEnvValue(f, "DEV_ADDRESS", c.DevAddress)
+		c.writeEnvValue(f, "API_HOSTNAME", c.APIHostName)
+		c.writeEnvValue(f, "P2P_HOSTNAME", c.P2PHostName)
+		c.writeEnvValue(f, "ENABLE_API", fmt.Sprintf("%v", c.EnableAPI))
+		c.writeEnvValue(f, "FUND_WALLET_AMOUNT", fmt.Sprintf("%.2f", c.FundWalletAmount))
+		c.writeEnvValue(f, "TOKEN_COUNT", fmt.Sprintf("%d", c.TokenCount))
+		c.writeEnvValue(f, "TOKEN_PRICE", fmt.Sprintf("%.2f", c.TokenPrice))
+		c.writeEnvValue(f, "ALLOW_NEW_TOKENS", fmt.Sprintf("%v", c.AllowNewTokens))
+		c.writeEnvValue(f, "MAX_BLOCK_SIZE", fmt.Sprintf("%d", c.MaxBlockSize))
+		c.writeEnvValue(f, "MIN_TRANSACTION_FEE", fmt.Sprintf("%.2f", c.MinTransactionFee))
+
+		fmt.Println("Updated values have been saved to .env file.")
+	} else {
+		fmt.Println("No values were modified.")
+	}
+
+	return nil
+}
+
+// Helper functions
+
+func (c *Config) promptString(key, defaultValue string) string {
+	value := c.promptValue(key, defaultValue, false, "string").(string)
+	if value != defaultValue {
+		c.promptUpdate = true
+	}
+	return value
+}
+
+func (c *Config) promptInt(key string, defaultValue int) int {
+	value := c.promptValue(key, fmt.Sprintf("%d", defaultValue), false, "int").(int)
+	if value != defaultValue {
+		c.promptUpdate = true
+	}
+	return value
+}
+
+func (c *Config) promptInt64(key string, defaultValue int64) int64 {
+	value := c.promptValue(key, fmt.Sprintf("%d", defaultValue), false, "int64").(int64)
+	if value != defaultValue {
+		c.promptUpdate = true
+	}
+	return value
+}
+
+func (c *Config) promptFloat(key string, defaultValue float64) float64 {
+	value := c.promptValue(key, fmt.Sprintf("%.2f", defaultValue), false, "float").(float64)
+	if value != defaultValue {
+		c.promptUpdate = true
+	}
+	return value
+}
+
+func (c *Config) promptBool(key string, defaultValue bool) bool {
+	value := c.promptValue(key, fmt.Sprintf("%v", defaultValue), false, "bool").(bool)
+	if value != defaultValue {
+		c.promptUpdate = true
+	}
+	return value
+}
+
 func (c *Config) promptValue(key, defaultValue string, required bool, returnType string) interface{} {
 	value := os.Getenv(key)
 
@@ -367,6 +335,13 @@ func (c *Config) promptValue(key, defaultValue string, required bool, returnType
 			os.Exit(1)
 		}
 		return intValue
+	case "int64":
+		int64Value, err := strconv.ParseInt(value, 10, 64)
+		if err != nil {
+			fmt.Println("Invalid value. Please enter a valid 64-bit integer.")
+			os.Exit(1)
+		}
+		return int64Value
 	case "float":
 		floatValue, err := strconv.ParseFloat(value, 64)
 		if err != nil {
@@ -386,9 +361,55 @@ func (c *Config) promptValue(key, defaultValue string, required bool, returnType
 	return value
 }
 
+func (c *Config) writeEnvValue(f *os.File, key, value string) {
+	_, err := fmt.Fprintf(f, "%s=%s\n", key, value)
+	if err != nil {
+		log.Fatal("Error writing to .env file")
+	}
+}
+
+// Helper functions for environment variable handling
+
+func getEnv(key, fallback string) string {
+	if value, ok := os.LookupEnv(key); ok {
+		return value
+	}
+	return fallback
+}
+
+func getEnvAsInt(key string, fallback int) int {
+	strValue := getEnv(key, "")
+	if value, err := strconv.Atoi(strValue); err == nil {
+		return value
+	}
+	return fallback
+}
+
+func getEnvAsInt64(key string, fallback int64) int64 {
+	strValue := getEnv(key, "")
+	if value, err := strconv.ParseInt(strValue, 10, 64); err == nil {
+		return value
+	}
+	return fallback
+}
+
+func getEnvAsFloat(key string, fallback float64) float64 {
+	strValue := getEnv(key, "")
+	if value, err := strconv.ParseFloat(strValue, 64); err == nil {
+		return value
+	}
+	return fallback
+}
+
+func getEnvAsBool(key string, fallback bool) bool {
+	strValue := getEnv(key, "")
+	if value, err := strconv.ParseBool(strValue); err == nil {
+		return value
+	}
+	return fallback
+}
+
 // PromptYesNo prompts the user with a given question and returns a bool value based on their response.
-// It repeatedly prompts the user until a valid yes/no response is entered. Valid responses are "yes", "y", "true", "t" for true,
-// and "no", "n", "false", "f" for false. If an invalid response is entered, the user is prompted to try again.
 func (c *Config) PromptYesNo(question string) bool {
 	affirmativeResponses := []string{"yes", "y", "true", "t"}
 	negativeResponses := []string{"no", "n", "false", "f"}
@@ -409,19 +430,15 @@ func (c *Config) PromptYesNo(question string) bool {
 	}
 }
 
-// PromptWalletInfo prompts the user to enter wallet information such as Name, passphrase, and comma-delimited
-// list of tags. It returns the wallet name, passphrase, and a slice of wallet tags.
+// PromptWalletInfo prompts the user to enter wallet information.
 func (c *Config) PromptWalletInfo() (walletName string, walletPass string, walletTags []string) {
 	walletName = c.promptValue("Wallet Name", "", false, "string").(string)
 	walletPass = c.promptValue("Passphrase", "", true, "string").(string)
 	walletTags = c.promptTags()
-
 	return
 }
 
 // promptTags prompts the user to enter a comma-delimited list of tags for the wallet.
-// It splits the input string on commas, trims any leading/trailing whitespace from each tag,
-// and returns the resulting slice of tags.
 func (c *Config) promptTags() []string {
 	tagsStr := c.promptValue("Tags (comma-separated)", "", false, "string").(string)
 	tags := strings.Split(tagsStr, ",")
@@ -429,96 +446,4 @@ func (c *Config) promptTags() []string {
 		tags[i] = strings.TrimSpace(tags[i])
 	}
 	return tags
-}
-
-// getIntEnv retrieves the value of the environment variable specified by the given key, and returns it as an integer.
-// If the environment variable is not set or its value cannot be parsed as an integer, the provided default value is returned instead.
-func (c *Config) getIntEnv(key string, defaultValue int) int {
-	valueStr := os.Getenv(key)
-	if valueStr == "" {
-		return defaultValue
-	}
-
-	value, err := strconv.Atoi(valueStr)
-	if err != nil {
-		log.Printf("Invalid value for environment variable %s: %s\n", key, valueStr)
-		return defaultValue
-	}
-
-	return value
-}
-
-// getFloatEnv retrieves the value of the environment variable specified by the given key, and returns it as a float64.
-// If the environment variable is not set or its value cannot be parsed as a float64, the provided default value is returned instead.
-func (c *Config) getFloatEnv(key string, defaultValue float64) float64 {
-	valueStr := os.Getenv(key)
-	if valueStr == "" {
-		return defaultValue
-	}
-
-	value, err := strconv.ParseFloat(valueStr, 64)
-	if err != nil {
-		log.Printf("Invalid value for environment variable %s: %s\n", key, valueStr)
-		return defaultValue
-	}
-
-	return value
-}
-
-// getBoolEnv retrieves the value of the environment variable specified by the given key, and returns it as a bool.
-// If the environment variable is not set or its value cannot be parsed as a bool, the provided default value is returned instead.
-func (c *Config) getBoolEnv(key string, defaultValue bool) bool {
-	valueStr := os.Getenv(key)
-	if valueStr == "" {
-		return defaultValue
-	}
-
-	value, err := strconv.ParseBool(valueStr)
-	if err != nil {
-		log.Printf("Invalid value for environment variable %s: %s\n", key, valueStr)
-		return defaultValue
-	}
-
-	return value
-}
-
-// writeEnvValue writes a key/value pair to the .env file. It takes the file handle, the key, and the value as arguments.
-// If there is an error writing to the file, it will log a fatal error.
-func (c *Config) writeEnvValue(f *os.File, key, value string) {
-	_, err := fmt.Fprintf(f, "%s=%s\n", key, value)
-	if err != nil {
-		log.Fatal("Error writing to .env file")
-	}
-}
-
-// save writes the current configuration to the .env file. If the promptUpdate flag is set, it creates a
-// new .env file and writes the current configuration values to it. If no values were modified, it prints
-// a message indicating that no changes were saved.
-func (c *Config) save() error {
-	if c.promptUpdate {
-		f, err := os.Create(cfgFile)
-		if err != nil {
-			return fmt.Errorf("error creating .env file: %s", err)
-		}
-		defer f.Close()
-
-		c.writeEnvValue(f, "BLOCKCHAIN_NAME", c.BlockchainName)
-		c.writeEnvValue(f, "BLOCKCHAIN_SYMBOL", c.BlockchainSymbol)
-		c.writeEnvValue(f, "BLOCK_TIME", fmt.Sprintf("%d", c.BlockTime))
-		c.writeEnvValue(f, "DIFFICULTY", fmt.Sprintf("%d", c.Difficulty))
-		c.writeEnvValue(f, "TRANSACTION_FEE", fmt.Sprintf("%.2f", c.TransactionFee))
-		c.writeEnvValue(f, "MINER_REWARD_PCT", fmt.Sprintf("%.2f", c.MinerRewardPCT))
-		c.writeEnvValue(f, "MINER_ADDRESS", c.MinerAddress)
-		c.writeEnvValue(f, "DEV_REWARD_PCT", fmt.Sprintf("%.2f", c.DevRewardPCT))
-		c.writeEnvValue(f, "DEV_ADDRESS", c.DevAddress)
-		c.writeEnvValue(f, "API_HOSTNAME", c.APIHostName)
-		c.writeEnvValue(f, "ENABLE_API", fmt.Sprintf("%v", c.EnableAPI))
-		c.writeEnvValue(f, "FUND_WALLET_AMOUNT", fmt.Sprintf("%.2f", c.FundWalletAmount))
-
-		fmt.Println("Updated values have been saved to .env file.")
-	} else {
-		fmt.Println("No values were modified.")
-	}
-
-	return nil
 }
