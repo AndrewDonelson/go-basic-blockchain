@@ -1,3 +1,5 @@
+// Package sdk is a software development kit for building blockchain applications.
+// File sdk/apiEndpointsAccount.go -
 package sdk
 
 import (
