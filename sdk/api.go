@@ -96,7 +96,7 @@ func NewAPI(bc *Blockchain) *API {
 		router: mux.NewRouter(),
 	}
 
-	fmt.Printf("Initializing API...\n")
+	log.Printf("Initializing API...\n")
 
 	// Register the API endpoints
 	api.registerRoutes()
@@ -155,7 +155,7 @@ func loggingMiddleware(next http.Handler) http.Handler {
 
 		// Log the response details
 		//api.logger.Printf("%s -> Response: %d %d bytes", cacheReqStr, ww.statusCode, ww.bytesWritten)
-		fmt.Printf("%s -> Response: %d %d bytes\n", cacheReqStr, ww.statusCode, ww.bytesWritten)
+		log.Printf("%s -> Response: %d %d bytes\n", cacheReqStr, ww.statusCode, ww.bytesWritten)
 	})
 }
 
@@ -200,7 +200,7 @@ func (api *API) Start() {
 	api.router.Use(apiKeyMiddleware)
 
 	// Start the HTTP server
-	fmt.Printf("API listening on %s\n", apiHostname)
+	log.Printf("API listening on %s\n", apiHostname)
 	api.running = true
 	log.Fatal(http.ListenAndServe(apiHostname, api.router))
 }

@@ -274,11 +274,11 @@ func (p *P2P) runNodeDiscovery() {
 	s := spinner.New(spinner.CharSets[9], 100*time.Millisecond)
 	log.Println("Starting node discovery...")
 	s.Start()
+	defer s.Stop()
 	for p.IsRunning() {
 		p.discoverNodes()
 		time.Sleep(30 * time.Second)
 	}
-	s.Stop()
 }
 
 func (p *P2P) listenForConnections() {

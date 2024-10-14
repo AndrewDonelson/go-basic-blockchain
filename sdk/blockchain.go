@@ -7,6 +7,7 @@ import (
 	"crypto/sha512"
 	"encoding/hex"
 	"fmt"
+	"log"
 	"math/big"
 	"path/filepath"
 	"strconv"
@@ -47,6 +48,7 @@ type Blockchain struct {
 
 // NewBlockchain creates a new instance of the Blockchain struct with the provided configuration.
 func NewBlockchain(cfg *Config) *Blockchain {
+	log.Println("NewBlockchain called")
 	bc := &Blockchain{
 		cfg:               cfg,
 		Blocks:            []*Block{},
@@ -60,7 +62,7 @@ func NewBlockchain(cfg *Config) *Blockchain {
 
 	err := bc.Load()
 	if err != nil {
-		fmt.Printf("Error loading blockchain...\n%v\n. Creating new blockchain.\n", err)
+		log.Println("No existing blockchain found", err)
 		bc.createBlockchain()
 	}
 
@@ -76,7 +78,7 @@ func (bc *Blockchain) DisplayStatus() {
 	staticTransactionQueueLen := len(bc.TransactionQueue)
 
 	if staticBlocksLen != len(bc.Blocks) || staticTransactionQueueLen != len(bc.TransactionQueue) {
-		fmt.Printf("[%s] Blockchain Activity: Blocks: %d, Transaction Queue: %d\n",
+		log.Printf("[%s] Blockchain Activity: Blocks: %d, Transaction Queue: %d\n",
 			time.Now().Format(logDateTimeFormat), len(bc.Blocks), len(bc.TransactionQueue))
 	}
 }
@@ -131,8 +133,18 @@ func (bc *Blockchain) Save() error {
 	return localStorage.Set("state", data)
 }
 
-// createBlockchain creates a new blockchain.
+// createBlockchain initializes a new blockchain with a genesis block and sets up
+// the necessary wallets and transactions. It performs the following steps:
+// 1. Initializes blockchain organization, application, admin user, developer asset, and miner asset IDs.
+// 2. Creates a developer wallet with a randomly generated password and assigns it to the blockchain configuration.
+// 3. Creates a miner wallet with a randomly generated password and assigns it to the blockchain configuration.
+// 4. Generates a coinbase transaction to set the initial balance of the developer wallet.
+// 5. Generates a bank transaction to fund the miner wallet with a specified amount.
+// 6. Generates the genesis block with the created transactions.
+//
+// Returns an error if any step in the process fails.
 func (bc *Blockchain) createBlockchain() error {
+	log.Println("Creating a new Blockchain...")
 	ThisBlockchainOrganizationID = NewBigInt(BlockhainOrganizationID)
 	ThisBlockchainAppID = NewBigInt(BlockchainAppID)
 	ThisBlockchainAdminUserID = NewBigInt(BlockchainAdminUserID)
@@ -154,7 +166,7 @@ func (bc *Blockchain) createBlockchain() error {
 	devWallet.Close(devWalletPW)
 	devWallet.Open(devWalletPW)
 	bc.cfg.DevAddress = devWallet.GetAddress()
-	fmt.Printf("A Blockchain project Dev wallet was created for you with address [%s] and password [%s] (you can change this later)\n", bc.cfg.DevAddress, devWalletPW)
+	log.Printf("A Blockchain project Dev wallet was created for you with address [%s] and password [%s] (you can change this later)\n", bc.cfg.DevAddress, devWalletPW)
 
 	minerWalletPW, err := GenerateRandomPassword()
 	if err != nil {
@@ -168,7 +180,7 @@ func (bc *Blockchain) createBlockchain() error {
 	minerWallet.Close(minerWalletPW)
 	minerWallet.Open(minerWalletPW)
 	bc.cfg.MinerAddress = minerWallet.GetAddress()
-	fmt.Printf("A Node miner wallet was created for you with address [%s] and password [%s] (you can change this later)\n", bc.cfg.MinerAddress, minerWalletPW)
+	log.Printf("A Node miner wallet was created for you with address [%s] and password [%s] (you can change this later)\n", bc.cfg.MinerAddress, minerWalletPW)
 
 	cbTX, err := NewCoinbaseTransaction(devWallet, devWallet, bc.cfg)
 	if err != nil {
@@ -184,7 +196,7 @@ func (bc *Blockchain) createBlockchain() error {
 	if err != nil {
 		return err
 	}
-	fmt.Printf("A Coinbase Transaction was created and set Dev wallet Balance to [%d] tokens)\n", cbTX.TokenCount)
+	log.Printf("A Coinbase Transaction was created and set Dev wallet Balance to [%d] tokens)\n", cbTX.TokenCount)
 
 	genesisTxs = append(genesisTxs, cbTX)
 
@@ -197,7 +209,7 @@ func (bc *Blockchain) createBlockchain() error {
 	if err != nil {
 		return err
 	}
-	fmt.Printf("A Bank Transaction was created sent [%0.4f] tokens to the miner wallet)\n", bankTX.Amount)
+	log.Printf("A Bank Transaction was created sent [%0.4f] tokens to the miner wallet)\n", bankTX.Amount)
 
 	genesisTxs = append(genesisTxs, bankTX)
 
@@ -209,7 +221,7 @@ func (bc *Blockchain) createBlockchain() error {
 // GenerateGenesisBlock generates the genesis block if there are no existing blocks.
 func (bc *Blockchain) GenerateGenesisBlock(txs []Transaction) {
 	if len(bc.Blocks) == 0 {
-		fmt.Printf("[%s] Generating Genesis Block...\n", time.Now().Format(logDateTimeFormat))
+		log.Println("Generating Genesis Block...")
 
 		genesisBlock := NewBlock([]Transaction{}, "")
 		genesisBlock.Index = *big.NewInt(0)
@@ -227,14 +239,14 @@ func (bc *Blockchain) GenerateGenesisBlock(txs []Transaction) {
 
 		err := bc.TXLookup.Add(genesisBlock)
 		if err != nil {
-			fmt.Printf("[%s] Error adding block to TXLookup: %v\n", time.Now().Format(logDateTimeFormat), err)
+			log.Printf("Error adding block to TXLookup: %v\n", err)
 		}
 
-		fmt.Printf("[%s] Genesis Block created with Hash [%s]\n", time.Now().Format(logDateTimeFormat), genesisBlock.Hash)
+		log.Printf("Genesis Block created with Hash [%s]\n", genesisBlock.Hash)
 
 		err = bc.Save()
 		if err != nil {
-			fmt.Printf("[%s] Error saving blockchain state: %v\n", time.Now().Format(logDateTimeFormat), err)
+			log.Printf("Error saving blockchain state: %v\n", err)
 		}
 	}
 }
@@ -265,16 +277,16 @@ func (bc *Blockchain) HasTransaction(id *PUID) bool {
 func (bc *Blockchain) LoadExistingBlocks() error {
 	files, _ := filepath.Glob(fmt.Sprintf("%s/*.json", blockFolder))
 	if len(files) == 0 {
-		fmt.Printf("[%s] No existing Blocks\n", time.Now().Format(logDateTimeFormat))
+		log.Printf("[%s] No existing Blocks\n", time.Now().Format(logDateTimeFormat))
 		bc.createBlockchain()
 		return nil
 	}
 
-	fmt.Printf("[%s] Loading Blockchain [%d]...\n", time.Now().Format(logDateTimeFormat), len(files))
+	log.Printf("[%s] Loading Blockchain [%d]...\n", time.Now().Format(logDateTimeFormat), len(files))
 
 	// TODO: Implement block loading logic here
 
-	fmt.Printf("[%s] Done\n", time.Now().Format(logDateTimeFormat))
+	log.Printf("[%s] Done\n", time.Now().Format(logDateTimeFormat))
 
 	return nil
 }
@@ -285,23 +297,26 @@ func (bc *Blockchain) AddTransaction(transaction Transaction) {
 	transaction.Hash()
 	bc.TransactionQueue = append(bc.TransactionQueue, transaction)
 	bc.mux.Unlock()
-	fmt.Printf("[%s] Added TX to queue: %v\n", time.Now().Format(logDateTimeFormat), transaction)
+	log.Printf("[%s] Added TX to queue: %v\n", time.Now().Format(logDateTimeFormat), transaction)
 }
 
 // Mine attempts to mine a new block for the blockchain.
 func (bc *Blockchain) Mine(block *Block, difficulty int) *Block {
 	prefix := strings.Repeat("0", difficulty)
-
+	log.Printf("Mining a new Block [#%d] with [%d] Txs...", block.Index, len(block.Transactions))
 	for i := 0; i < maxNonce; i++ {
 		block.Header.Nonce = uint32(i)
 		block.Hash = block.CalculateHash()
 
 		if strings.HasPrefix(block.Hash, prefix) {
-			block.save()
+			err := block.save()
+			if err != nil {
+				log.Printf("[%s] Error saving block: %v\n", time.Now().Format(logDateTimeFormat), err)
+			}
 			bc.Blocks = append(bc.Blocks, block)
 			bc.TransactionQueue = []Transaction{}
 
-			fmt.Printf("[%s] Mined a new Block with [%d] TXs & Hash [%s]\n", time.Now().Format(logDateTimeFormat), len(block.Transactions), block.Hash)
+			log.Printf("[%s] Mined a new Block with [%d] TXs & Hash [%s]\n", time.Now().Format(logDateTimeFormat), len(block.Transactions), block.Hash)
 			break
 		}
 	}
@@ -317,6 +332,8 @@ func (bc *Blockchain) VerifySignature(tx Transaction) error {
 
 // Run is a long-running function that manages the blockchain.
 func (bc *Blockchain) Run(difficulty int) {
+	var block *Block
+
 	statusTicker := time.NewTicker(time.Second)
 	blockTicker := time.NewTicker(time.Duration(bc.cfg.BlockTime) * time.Second)
 
@@ -340,20 +357,28 @@ func (bc *Blockchain) Run(difficulty int) {
 				previousHash = bc.Blocks[index-1].Hash
 			}
 
-			block := NewBlock(bc.TransactionQueue, previousHash)
+			if len(bc.TransactionQueue) == 0 {
+				// Create an empty block instead of skipping
+				block = NewBlock([]Transaction{}, previousHash)
+			} else {
+				// Existing logic for creating a block with transactions
+				block = NewBlock(bc.TransactionQueue, previousHash)
+			}
+
+			//block := NewBlock(bc.TransactionQueue, previousHash)
 			block.Index = *big.NewInt(int64(index))
 			bc.Mine(block, difficulty)
 
 			err := bc.TXLookup.Add(block)
 			if err != nil {
-				fmt.Printf("[%s] Error adding block to TXLookup: %v\n", time.Now().Format(logDateTimeFormat), err)
+				log.Printf("[%s] Error adding block to TXLookup: %v\n", time.Now().Format(logDateTimeFormat), err)
 			}
 
 			block.save()
 
 			err = bc.Save()
 			if err != nil {
-				fmt.Printf("[%s] Error saving blockchain state: %v\n", time.Now().Format(logDateTimeFormat), err)
+				log.Printf("[%s] Error saving blockchain state: %v\n", time.Now().Format(logDateTimeFormat), err)
 			}
 
 			bc.mux.Unlock()

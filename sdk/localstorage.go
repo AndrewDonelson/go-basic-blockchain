@@ -15,12 +15,23 @@ type LocalStorage struct {
 	mutex    sync.RWMutex
 }
 
+// localStorage is a singleton instance of the LocalStorage struct.
+// It is initialized only once using the sync.Once mechanism to ensure
+// thread-safe initialization.
 var (
 	localStorage *LocalStorage
 	once         sync.Once
 )
 
-// NewLocalStorage creates a new instance of the LocalStorage struct.
+// NewLocalStorage initializes a new LocalStorage instance with the specified data path.
+// If the provided data path is empty, it defaults to "./data". This function ensures that
+// the LocalStorage instance is set up only once using a sync.Once mechanism.
+//
+// Parameters:
+//   - dataPath: The path where the local storage data will be stored.
+//
+// Returns:
+//   - error: An error if the setup of the LocalStorage instance fails, otherwise nil.
 func NewLocalStorage(dataPath string) error {
 	var err error
 	once.Do(func() {
@@ -33,7 +44,11 @@ func NewLocalStorage(dataPath string) error {
 	return err
 }
 
-// GetLocalStorage returns the singleton instance of the LocalStorage struct.
+// GetLocalStorage retrieves the singleton instance of LocalStorage.
+// If the local storage has not been initialized, it returns an error.
+//
+// Returns:
+//   - (*LocalStorage, error): The instance of LocalStorage if initialized, otherwise an error.
 func GetLocalStorage() (*LocalStorage, error) {
 	if localStorage == nil {
 		return nil, fmt.Errorf("local storage not initialized")
@@ -41,7 +56,9 @@ func GetLocalStorage() (*LocalStorage, error) {
 	return localStorage, nil
 }
 
-// setup creates the necessary directories for the LocalStorage data persist manager.
+// setup initializes the local storage by creating necessary directories
+// such as "node", "blocks", and "wallets" within the specified data path.
+// It returns an error if any of the directory creation operations fail.
 func (ls *LocalStorage) setup() error {
 	directories := []string{"node", "blocks", "wallets"}
 	for _, dir := range directories {
@@ -54,6 +71,16 @@ func (ls *LocalStorage) setup() error {
 }
 
 // Get retrieves the value associated with the given key from the LocalStorage.
+
+// Get retrieves the value associated with the given key from the local storage.
+// It reads the data from the file corresponding to the key, and unmarshals it into the provided interface.
+//
+// Parameters:
+//   - key: The key associated with the value to retrieve.
+//   - v: A pointer to the variable where the unmarshaled data will be stored.
+//
+// Returns:
+//   - error: An error if the file cannot be read or the data cannot be unmarshaled, otherwise nil.
 func (ls *LocalStorage) Get(key string, v interface{}) error {
 	ls.mutex.RLock()
 	defer ls.mutex.RUnlock()
@@ -72,6 +99,18 @@ func (ls *LocalStorage) Get(key string, v interface{}) error {
 	return nil
 }
 
+// Set stores the given value in the local storage under the specified key.
+// It serializes the value to JSON format and writes it to a file.
+// The file is named based on the key and stored in the local storage directory.
+// If an error occurs during serialization or file writing, it returns an error.
+//
+// Parameters:
+//   - key: The key under which the value will be stored.
+//   - v: The value to be stored, which will be serialized to JSON.
+//
+// Returns:
+//   - error: An error if the value could not be serialized or the file could not be written.
+//
 // Set stores the provided value under the given key in the LocalStorage.
 func (ls *LocalStorage) Set(key string, v interface{}) error {
 	ls.mutex.Lock()
@@ -91,21 +130,11 @@ func (ls *LocalStorage) Set(key string, v interface{}) error {
 	return nil
 }
 
-// Delete removes the file associated with the given key.
-func (ls *LocalStorage) Delete(key string) error {
-	ls.mutex.Lock()
-	defer ls.mutex.Unlock()
-
-	filePath := ls.getFilePath(key)
-	err := os.Remove(filePath)
-	if err != nil && !os.IsNotExist(err) {
-		return fmt.Errorf("failed to delete file %s: %w", filePath, err)
-	}
-
-	return nil
-}
-
-// List returns a list of all keys in the storage.
+// List retrieves a list of all file paths relative to the dataPath directory.
+// It locks the mutex for reading to ensure thread safety while accessing the file system.
+// The function walks through the dataPath directory and collects all file paths that are not directories.
+// If an error occurs during the walk, it returns the error wrapped in a descriptive message.
+// Returns a slice of relative file paths or an error if the operation fails.
 func (ls *LocalStorage) List() ([]string, error) {
 	ls.mutex.RLock()
 	defer ls.mutex.RUnlock()

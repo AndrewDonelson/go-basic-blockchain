@@ -267,7 +267,7 @@ func createFolder(path string) {
 		if err != nil {
 			log.Fatalln(err)
 		}
-		fmt.Printf("[%s] directory '%s' created.\n", time.Now().Format(logDateTimeFormat), path)
+		log.Printf("[%s] directory '%s' created.\n", time.Now().Format(logDateTimeFormat), path)
 	}
 }
 

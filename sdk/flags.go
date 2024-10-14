@@ -6,6 +6,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"log"
 	"os"
 )
 
@@ -84,7 +85,7 @@ func (a *Arguments) Parse() error {
 
 // PrintUsage prints usage information for all registered arguments
 func (a *Arguments) PrintUsage() {
-	fmt.Println("Usage:")
+	log.Println("Usage:")
 	flag.PrintDefaults()
 }
 

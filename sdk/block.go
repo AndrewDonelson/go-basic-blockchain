@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"math"
 	"math/big"
 	"os"
@@ -114,7 +115,7 @@ func (b *Block) save() error {
 	if err != nil {
 		return err
 	}
-	fmt.Printf("[%s] Block [%s] saved to disk.\n", time.Now().Format(time.RFC3339), b.Index.String())
+	log.Printf("[%s] Block [%s] saved to disk.\n", time.Now().Format(time.RFC3339), b.Index.String())
 	return nil
 }
 

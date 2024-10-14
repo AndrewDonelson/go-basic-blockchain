@@ -226,28 +226,28 @@ func (c *Config) Validate() error {
 
 // Show displays the configuration values.
 func (c *Config) Show() {
-	fmt.Println("Current Configuration:")
-	fmt.Printf("- Blockchain Name: %s\n", c.BlockchainName)
-	fmt.Printf("- Blockchain Symbol: %s\n", c.BlockchainSymbol)
-	fmt.Printf("- Block Time: %d seconds\n", c.BlockTime)
-	fmt.Printf("- Difficulty: %d\n", c.Difficulty)
-	fmt.Printf("- Transaction Fee: %.2f\n", c.TransactionFee)
-	fmt.Printf("- Miner Reward Percentage: %.2f%%\n", c.MinerRewardPCT)
-	fmt.Printf("- Miner Address: %s\n", c.MinerAddress)
-	fmt.Printf("- Developer Reward Percentage: %.2f%%\n", c.DevRewardPCT)
-	fmt.Printf("- Developer Address: %s\n", c.DevAddress)
-	fmt.Printf("- API Hostname: %s\n", c.APIHostName)
-	fmt.Printf("- P2P Hostname: %s\n", c.P2PHostName)
-	fmt.Printf("- Enable API: %v\n", c.EnableAPI)
-	fmt.Printf("- Fund Wallet Amount: %.2f\n", c.FundWalletAmount)
-	fmt.Printf("- Token Count: %d\n", c.TokenCount)
-	fmt.Printf("- Token Price: %.2f\n", c.TokenPrice)
-	fmt.Printf("- Allow New Tokens: %v\n", c.AllowNewTokens)
-	fmt.Printf("- Data Path: %s\n", c.DataPath)
-	fmt.Printf("- Max Block Size: %d bytes\n", c.MaxBlockSize)
-	fmt.Printf("- Min Transaction Fee: %.2f\n", c.MinTransactionFee)
-	fmt.Printf("- Is Seed Node: %v\n", c.IsSeed)
-	fmt.Printf("- Seed Address: %s\n", c.SeedAddress)
+	log.Println("Current Configuration:")
+	log.Printf("- Blockchain Name: %s\n", c.BlockchainName)
+	log.Printf("- Blockchain Symbol: %s\n", c.BlockchainSymbol)
+	log.Printf("- Block Time: %d seconds\n", c.BlockTime)
+	log.Printf("- Difficulty: %d\n", c.Difficulty)
+	log.Printf("- Transaction Fee: %.2f\n", c.TransactionFee)
+	log.Printf("- Miner Reward Percentage: %.2f%%\n", c.MinerRewardPCT)
+	log.Printf("- Miner Address: %s\n", c.MinerAddress)
+	log.Printf("- Developer Reward Percentage: %.2f%%\n", c.DevRewardPCT)
+	log.Printf("- Developer Address: %s\n", c.DevAddress)
+	log.Printf("- API Hostname: %s\n", c.APIHostName)
+	log.Printf("- P2P Hostname: %s\n", c.P2PHostName)
+	log.Printf("- Enable API: %v\n", c.EnableAPI)
+	log.Printf("- Fund Wallet Amount: %.2f\n", c.FundWalletAmount)
+	log.Printf("- Token Count: %d\n", c.TokenCount)
+	log.Printf("- Token Price: %.2f\n", c.TokenPrice)
+	log.Printf("- Allow New Tokens: %v\n", c.AllowNewTokens)
+	log.Printf("- Data Path: %s\n", c.DataPath)
+	log.Printf("- Max Block Size: %d bytes\n", c.MaxBlockSize)
+	log.Printf("- Min Transaction Fee: %.2f\n", c.MinTransactionFee)
+	log.Printf("- Is Seed Node: %v\n", c.IsSeed)
+	log.Printf("- Seed Address: %s\n", c.SeedAddress)
 }
 
 // Path returns the path to the executable file.
@@ -287,9 +287,9 @@ func (c *Config) save() error {
 		c.writeEnvValue(f, "MAX_BLOCK_SIZE", fmt.Sprintf("%d", c.MaxBlockSize))
 		c.writeEnvValue(f, "MIN_TRANSACTION_FEE", fmt.Sprintf("%.2f", c.MinTransactionFee))
 
-		fmt.Println("Updated values have been saved to .env file.")
+		log.Println("Updated values have been saved to .env file.")
 	} else {
-		fmt.Println("No values were modified.")
+		log.Println("No values were modified.")
 	}
 
 	return nil
@@ -471,7 +471,7 @@ func (c *Config) PromptYesNo(question string) bool {
 				return false
 			}
 		}
-		fmt.Println("Invalid response. Please enter a valid yes/no value.")
+		log.Println("Invalid response. Please enter a valid yes/no value.")
 	}
 }
 

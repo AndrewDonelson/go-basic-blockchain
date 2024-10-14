@@ -14,6 +14,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"path/filepath"
 	"sync"
 	"time"
@@ -148,12 +149,12 @@ func NewWallet(options *WalletOptions) (*Wallet, error) {
 	wallet.GetAddress()
 
 	// if verbose {
-	// 	fmt.Printf("[%s] Created new Wallet: %+v\n", time.Now().Format(logDateTimeFormat), PrettyPrint(wallet))
+	// 	log.Printf("[%s] Created new Wallet: %+v\n", time.Now().Format(logDateTimeFormat), PrettyPrint(wallet))
 	// } else {
-	// 	fmt.Printf("[%s] Created new Wallet: %s\n", time.Now().Format(logDateTimeFormat), wallet.GetAddress())
+	// 	log.Printf("[%s] Created new Wallet: %s\n", time.Now().Format(logDateTimeFormat), wallet.GetAddress())
 	// }
 
-	fmt.Printf("[%s] Created new Wallet: %s\n", time.Now().Format(logDateTimeFormat), wallet.GetAddress())
+	log.Printf("[%s] Created new Wallet: %s\n", time.Now().Format(logDateTimeFormat), wallet.GetAddress())
 
 	// Save the wallet after creation
 	err = wallet.Close(options.Passphrase)
@@ -234,7 +235,7 @@ func (w *Wallet) GetWalletName() string {
 
 	name, err := w.GetData("name")
 	if err != nil {
-		fmt.Println(err)
+		log.Println(err)
 		return ""
 	}
 
@@ -252,13 +253,13 @@ func (w *Wallet) GetBalance() float64 {
 
 	balance, err := w.GetData("balance")
 	if err != nil {
-		fmt.Println(err)
+		log.Println(err)
 		return 0
 	}
 
 	convertedBalance, err := ConvertToFloat64(balance)
 	if err != nil {
-		fmt.Printf("Error converting balance: %v\n", err)
+		log.Printf("Error converting balance: %v\n", err)
 		return 0
 	}
 	return convertedBalance
@@ -274,7 +275,7 @@ func (w *Wallet) GetTags() []string {
 
 	tags, err := w.GetData("tags")
 	if err != nil {
-		fmt.Println(err)
+		log.Println(err)
 		return nil
 	}
 
@@ -294,7 +295,7 @@ func (w *Wallet) GetAddress() string {
 	// Generate an address by hashing the public key and encoding it in hexadecimal.
 	pubBytes, err := w.PublicBytes()
 	if err != nil {
-		fmt.Printf("[%s] Error getting public key bytes: %s\n", time.Now().Format(logDateTimeFormat), err)
+		log.Printf("[%s] Error getting public key bytes: %s\n", time.Now().Format(logDateTimeFormat), err)
 		return ""
 	}
 
@@ -449,7 +450,7 @@ func (w *Wallet) SendTransaction(to string, tx Transaction, bc *Blockchain) (*Tr
 		return nil, fmt.Errorf("insufficient funds")
 	}
 
-	fmt.Printf("[%s] Sending TX (%s): %+v\n", time.Now().Format(logDateTimeFormat), tx.GetProtocol(), tx)
+	log.Printf("[%s] Sending TX (%s): %+v\n", time.Now().Format(logDateTimeFormat), tx.GetProtocol(), tx)
 
 	// Send the transaction to the network.
 	err := tx.Send(bc)
@@ -566,7 +567,7 @@ func (w *Wallet) Lock(passphrase string) error {
 	}
 
 	if verbose {
-		fmt.Printf("[%s] Locking wallet [%s]\n", time.Now().Format(logDateTimeFormat), w.ID)
+		log.Printf("[%s] Locking wallet [%s]\n", time.Now().Format(logDateTimeFormat), w.ID)
 	}
 
 	// Convert the passphrase to bytes.
@@ -607,7 +608,7 @@ func (w *Wallet) Unlock(passphrase string) error {
 	}
 
 	if verbose {
-		fmt.Printf("[%s] Unlocking wallet [%s]\n", time.Now().Format(logDateTimeFormat), w.ID)
+		log.Printf("[%s] Unlocking wallet [%s]\n", time.Now().Format(logDateTimeFormat), w.ID)
 	}
 
 	// Convert the passphrase to bytes.
@@ -660,13 +661,14 @@ func (w *Wallet) Close(passphrase string) error {
 		Nonce:            w.nonce,
 	}
 
-	err = localStorage.Set(w.Address, walletData)
+	walletPath := filepath.Join(walletFolder, w.Address+".json")
+	err = localStorage.Set(walletPath, walletData)
 	if err != nil {
 		return fmt.Errorf("failed to save wallet: %v", err)
 	}
 
 	if verbose {
-		fmt.Printf("[%s] Wallet [%s] saved to disk\n", time.Now().Format(logDateTimeFormat), w.ID)
+		log.Printf("[%s] Wallet [%s] saved to disk\n", time.Now().Format(logDateTimeFormat), w.ID)
 	}
 
 	return nil
@@ -706,7 +708,7 @@ func (w *Wallet) Open(passphrase string) error {
 	}
 
 	if verbose {
-		fmt.Printf("[%s] Wallet [%s] loaded (locked: %v) from disk\n", time.Now().Format(logDateTimeFormat), w.ID, w.Encrypted)
+		log.Printf("[%s] Wallet [%s] loaded (locked: %v) from disk\n", time.Now().Format(logDateTimeFormat), w.ID, w.Encrypted)
 	}
 
 	return nil
@@ -728,18 +730,18 @@ func LocalWalletList() error {
 		wallet := &Wallet{Address: address}
 		err := wallet.Open("")
 		if err != nil {
-			fmt.Printf("Failed to load wallet from file %s: %v\n", file, err)
+			log.Printf("Failed to load wallet from file %s: %v\n", file, err)
 			continue
 		}
 
 		walletList = append(walletList, fmt.Sprintf("ID: %s, Name: %s, Address: %s, Tags: %v", wallet.ID, wallet.GetWalletName(), wallet.GetAddress(), wallet.GetTags()))
 	}
 
-	fmt.Printf("Wallets in %s: %d\n", walletFolder, len(walletList))
+	log.Printf("Wallets in %s: %d\n", walletFolder, len(walletList))
 	if len(walletList) == 0 {
-		fmt.Println("No wallets found")
+		log.Println("No wallets found")
 	} else {
-		fmt.Println(PrettyPrint(walletList))
+		log.Println(PrettyPrint(walletList))
 	}
 
 	return nil

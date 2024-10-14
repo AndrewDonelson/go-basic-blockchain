@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"path/filepath"
 	"sync"
 	"time"
 
@@ -85,18 +86,21 @@ func NewNode(opts *NodeOptions) error {
 	}
 	log.Println("Local storage initialized")
 
-	err = node.load()
-	if err != nil {
-		log.Printf("No existing node state found: %s\n", err)
+	nodePath := filepath.Join("./", "node.json")
+	if fileExists(nodePath) {
+		err := node.load()
+		if err != nil {
+			return fmt.Errorf("error loading existing node: %w", err)
+		}
+		log.Println("Loaded existing node configuration")
+	} else {
 		node.ID = uuid.New()
+		err := node.save()
+		if err != nil {
+			return fmt.Errorf("error saving new node: %w", err)
+		}
+		log.Println("Created and saved new node configuration")
 	}
-	log.Println("Node state loaded or new ID generated")
-
-	err = node.save()
-	if err != nil {
-		return fmt.Errorf("error saving node state: %w", err)
-	}
-	log.Println("Node state saved")
 
 	node.Blockchain = NewBlockchain(node.Config)
 	log.Println("Blockchain initialized")
@@ -208,7 +212,7 @@ func (n *Node) load() error {
 	n.ID = data.ID
 	n.Config = data.Config
 
-	fmt.Printf("Loaded node state: %s\n", n.ID)
+	log.Printf("Loaded node state: %s\n", n.ID)
 	return nil
 }
 
@@ -234,7 +238,7 @@ func (n *Node) ProcessP2PTransaction(tx P2PTransaction) error {
 		return errors.New("node wallet is nil")
 	}
 
-	fmt.Printf("Processing P2P transaction: %s (%s)\n", tx.ID, tx.Protocol)
+	log.Printf("Processing P2P transaction: %s (%s)\n", tx.ID, tx.Protocol)
 
 	switch tx.Action {
 	case "validate":
@@ -305,10 +309,10 @@ func (n *Node) validateTransaction(tx P2PTransaction) error {
 	}
 
 	if isValid {
-		fmt.Printf("Transaction %s is valid\n", tx.ID)
+		log.Printf("Transaction %s is valid\n", tx.ID)
 		n.Blockchain.AddTransaction(&tx.Tx)
 	} else {
-		fmt.Printf("Transaction %s is invalid\n", tx.ID)
+		log.Printf("Transaction %s is invalid\n", tx.ID)
 	}
 
 	return nil
@@ -328,7 +332,7 @@ func (n *Node) updateStatus(tx P2PTransaction) error {
 	if node, exists := n.P2P.nodes[status.NodeID]; exists {
 		node.LastSeen = time.Now()
 		node.Status = status.Status
-		fmt.Printf("Updated status of node %s: %s\n", status.NodeID, status.Status)
+		log.Printf("Updated status of node %s: %s\n", status.NodeID, status.Status)
 		return nil
 	}
 
@@ -351,7 +355,7 @@ func (n *Node) addNode(tx P2PTransaction) error {
 	}
 
 	n.P2P.nodes[newNode.ID] = &newNode
-	fmt.Printf("Added new node to the network: %s\n", newNode.ID)
+	log.Printf("Added new node to the network: %s\n", newNode.ID)
 	return nil
 }
 
@@ -368,7 +372,7 @@ func (n *Node) removeNode(tx P2PTransaction) error {
 
 	if _, exists := n.P2P.nodes[nodeID]; exists {
 		delete(n.P2P.nodes, nodeID)
-		fmt.Printf("Removed node from the network: %s\n", nodeID)
+		log.Printf("Removed node from the network: %s\n", nodeID)
 		return nil
 	}
 
@@ -391,7 +395,7 @@ func (n *Node) registerNode(tx P2PTransaction) error {
 	}
 
 	n.P2P.nodes[newNode.ID] = &newNode
-	fmt.Printf("Registered new node in the network: %s\n", newNode.ID)
+	log.Printf("Registered new node in the network: %s\n", newNode.ID)
 
 	n.P2P.Broadcast(P2PTransaction{
 		Tx:     tx.Tx,
