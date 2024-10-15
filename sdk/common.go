@@ -215,23 +215,23 @@ func GenerateRandomPassword() (string, error) {
 		password := make([]byte, passwordLength)
 
 		// Ensure at least 2 characters from each category
-		password[0] = uppercaseChars[secureRandomInt(len(uppercaseChars))]
-		password[1] = uppercaseChars[secureRandomInt(len(uppercaseChars))]
-		password[2] = lowercaseChars[secureRandomInt(len(lowercaseChars))]
-		password[3] = lowercaseChars[secureRandomInt(len(lowercaseChars))]
-		password[4] = digitChars[secureRandomInt(len(digitChars))]
-		password[5] = digitChars[secureRandomInt(len(digitChars))]
-		password[6] = specialChars[secureRandomInt(len(specialChars))]
-		password[7] = specialChars[secureRandomInt(len(specialChars))]
+		password[0] = uppercaseChars[SecureRandomInt(len(uppercaseChars))]
+		password[1] = uppercaseChars[SecureRandomInt(len(uppercaseChars))]
+		password[2] = lowercaseChars[SecureRandomInt(len(lowercaseChars))]
+		password[3] = lowercaseChars[SecureRandomInt(len(lowercaseChars))]
+		password[4] = digitChars[SecureRandomInt(len(digitChars))]
+		password[5] = digitChars[SecureRandomInt(len(digitChars))]
+		password[6] = specialChars[SecureRandomInt(len(specialChars))]
+		password[7] = specialChars[SecureRandomInt(len(specialChars))]
 
 		// Fill the rest with random characters
 		for i := 8; i < passwordLength; i++ {
-			password[i] = allChars[secureRandomInt(len(allChars))]
+			password[i] = allChars[SecureRandomInt(len(allChars))]
 		}
 
 		// Shuffle the password
 		for i := len(password) - 1; i > 0; i-- {
-			j := secureRandomInt(i + 1)
+			j := SecureRandomInt(i + 1)
 			password[i], password[j] = password[j], password[i]
 		}
 
@@ -244,7 +244,7 @@ func GenerateRandomPassword() (string, error) {
 	return "", errors.New("failed to generate a password meeting the strength criteria after 100 attempts")
 }
 
-func secureRandomInt(max int) int {
+func SecureRandomInt(max int) int {
 	n, err := rand.Int(rand.Reader, big.NewInt(int64(max)))
 	if err != nil {
 		panic(err) // In a production environment, handle this error more gracefully

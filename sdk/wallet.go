@@ -9,7 +9,6 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/x509"
-	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -17,7 +16,6 @@ import (
 	"log"
 	"path/filepath"
 	"sync"
-	"time"
 
 	"golang.org/x/crypto/scrypt"
 )
@@ -87,7 +85,6 @@ type Wallet struct {
 	EncryptionParams *EncryptionParams
 	Ciphertext       []byte
 	vault            *Vault
-	nonce            uint64
 	mutex            sync.Mutex
 }
 
@@ -134,7 +131,6 @@ func NewWallet(options *WalletOptions) (*Wallet, error) {
 		EncryptionParams: NewDefaultEncryptionParams(),
 		vault:            NewVault(),
 		Ciphertext:       []byte{},
-		nonce:            0,
 	}
 
 	// Generate a new private key.
@@ -148,13 +144,13 @@ func NewWallet(options *WalletOptions) (*Wallet, error) {
 	wallet.SetData("balance", float64(fundWalletAmount))
 	wallet.GetAddress()
 
-	// if verbose {
-	// 	log.Printf("[%s] Created new Wallet: %+v\n", time.Now().Format(logDateTimeFormat), PrettyPrint(wallet))
-	// } else {
-	// 	log.Printf("[%s] Created new Wallet: %s\n", time.Now().Format(logDateTimeFormat), wallet.GetAddress())
-	// }
+	if verbose {
+		log.Printf("Created new Wallet: %+v", PrettyPrint(wallet))
+	} else {
+		log.Printf("Created new Wallet: %s", wallet.GetAddress())
+	}
 
-	log.Printf("[%s] Created new Wallet: %s\n", time.Now().Format(logDateTimeFormat), wallet.GetAddress())
+	//log.Printf("Created new Wallet: %s", wallet.GetAddress())
 
 	// Save the wallet after creation
 	err = wallet.Close(options.Passphrase)
@@ -163,30 +159,6 @@ func NewWallet(options *WalletOptions) (*Wallet, error) {
 	}
 
 	return wallet, nil
-}
-
-// GetNextNonce returns the next available nonce for the wallet and increments the internal nonce counter.
-func (w *Wallet) GetNextNonce() uint64 {
-	w.mutex.Lock()
-	defer w.mutex.Unlock()
-	nonce := w.nonce
-	w.nonce++
-	return nonce
-}
-
-// SetNonce sets the nonce for the wallet to a specific value.
-// This should be used carefully, typically only when initializing a wallet from existing data.
-func (w *Wallet) SetNonce(nonce uint64) {
-	w.mutex.Lock()
-	defer w.mutex.Unlock()
-	w.nonce = nonce
-}
-
-// GetCurrentNonce returns the current nonce value without incrementing it.
-func (w *Wallet) GetCurrentNonce() uint64 {
-	w.mutex.Lock()
-	defer w.mutex.Unlock()
-	return w.nonce
 }
 
 // SetData sets the data (keypairs) associated with the wallet.
@@ -259,7 +231,7 @@ func (w *Wallet) GetBalance() float64 {
 
 	convertedBalance, err := ConvertToFloat64(balance)
 	if err != nil {
-		log.Printf("Error converting balance: %v\n", err)
+		log.Printf("Error converting balance: %v", err)
 		return 0
 	}
 	return convertedBalance
@@ -295,7 +267,7 @@ func (w *Wallet) GetAddress() string {
 	// Generate an address by hashing the public key and encoding it in hexadecimal.
 	pubBytes, err := w.PublicBytes()
 	if err != nil {
-		log.Printf("[%s] Error getting public key bytes: %s\n", time.Now().Format(logDateTimeFormat), err)
+		log.Printf("Error getting public key bytes: %s", err)
 		return ""
 	}
 
@@ -313,7 +285,6 @@ func (w *Wallet) vaultToBytes() ([]byte, error) {
 		Nonce uint64 `json:"nonce"`
 	}{
 		Vault: w.vault,
-		Nonce: w.nonce,
 	}
 	return json.Marshal(vaultData)
 }
@@ -323,14 +294,12 @@ func (w *Wallet) vaultToBytes() ([]byte, error) {
 func (w *Wallet) bytesToVault(bytes []byte) error {
 	var vaultData struct {
 		Vault *Vault `json:"vault"`
-		Nonce uint64 `json:"nonce"`
 	}
 	err := json.Unmarshal(bytes, &vaultData)
 	if err != nil {
 		return err
 	}
 	w.vault = vaultData.Vault
-	w.nonce = vaultData.Nonce
 	return nil
 }
 
@@ -450,7 +419,7 @@ func (w *Wallet) SendTransaction(to string, tx Transaction, bc *Blockchain) (*Tr
 		return nil, fmt.Errorf("insufficient funds")
 	}
 
-	log.Printf("[%s] Sending TX (%s): %+v\n", time.Now().Format(logDateTimeFormat), tx.GetProtocol(), tx)
+	log.Printf("Sending TX (%s): %+v", tx.GetProtocol(), tx)
 
 	// Send the transaction to the network.
 	err := tx.Send(bc)
@@ -567,19 +536,25 @@ func (w *Wallet) Lock(passphrase string) error {
 	}
 
 	if verbose {
-		log.Printf("[%s] Locking wallet [%s]\n", time.Now().Format(logDateTimeFormat), w.ID)
+		log.Printf("Locking wallet [%s]", w.ID)
 	}
 
 	// Convert the passphrase to bytes.
 	pwAsBytes := []byte(passphrase)
 
 	// Get the wallet's data as bytes.
+	if verbose {
+		log.Printf("Vault: %+v", PrettyPrint(w.vault))
+	}
 	dataAsbytes, err := w.vaultToBytes()
 	if err != nil {
 		return err
 	}
 
 	// Encrypt the wallet's data.
+	if verbose {
+		log.Printf("Encrypt Data as bytes: %s", dataAsbytes)
+	}
 	w.Ciphertext, err = w.encrypt(pwAsBytes, dataAsbytes)
 	if err != nil {
 		return err
@@ -587,6 +562,10 @@ func (w *Wallet) Lock(passphrase string) error {
 
 	w.vault = nil
 	w.Encrypted = true
+
+	if verbose {
+		log.Printf("Wallet [%s] locked", w.ID)
+	}
 
 	return nil
 }
@@ -608,7 +587,7 @@ func (w *Wallet) Unlock(passphrase string) error {
 	}
 
 	if verbose {
-		log.Printf("[%s] Unlocking wallet [%s]\n", time.Now().Format(logDateTimeFormat), w.ID)
+		log.Printf("Unlocking wallet [%s]", w.ID)
 	}
 
 	// Convert the passphrase to bytes.
@@ -632,9 +611,6 @@ func (w *Wallet) Unlock(passphrase string) error {
 // Close encrypts and saves the wallet to disk as a JSON file. If the wallet is already encrypted, this method will return an error.
 // This method first locks the wallet using the provided passphrase, then saves the encrypted wallet to disk using the localStorage.Set method.
 // If any errors occur during the locking or saving process, this method will return an error.
-// In wallet.go
-
-// Close encrypts and saves the wallet to disk as a JSON file.
 func (w *Wallet) Close(passphrase string) error {
 	if w.Encrypted {
 		return errors.New("cannot save an already encrypted wallet")
@@ -642,73 +618,38 @@ func (w *Wallet) Close(passphrase string) error {
 
 	err := w.Lock(passphrase)
 	if err != nil {
-		return fmt.Errorf("failed to lock wallet: %v", err)
+		return fmt.Errorf("failed to save wallet: %v", err)
 	}
 
-	walletData := struct {
-		ID               *PUID             `json:"id"`
-		Address          string            `json:"address"`
-		Encrypted        bool              `json:"encrypted"`
-		EncryptionParams *EncryptionParams `json:"encryption_params"`
-		Ciphertext       string            `json:"ciphertext"`
-		Nonce            uint64            `json:"nonce"`
-	}{
-		ID:               w.ID,
-		Address:          w.Address,
-		Encrypted:        w.Encrypted,
-		EncryptionParams: w.EncryptionParams,
-		Ciphertext:       base64.StdEncoding.EncodeToString(w.Ciphertext),
-		Nonce:            w.nonce,
-	}
-
-	walletPath := filepath.Join(walletFolder, w.Address+".json")
-	err = localStorage.Set(walletPath, walletData)
+	err = localStorage.Set("wallet", w)
 	if err != nil {
 		return fmt.Errorf("failed to save wallet: %v", err)
 	}
 
 	if verbose {
-		log.Printf("[%s] Wallet [%s] saved to disk\n", time.Now().Format(logDateTimeFormat), w.ID)
+		log.Printf("Wallet [%s] saved to disk", w.ID)
 	}
 
 	return nil
 }
 
 // Open loads the wallet from disk that was saved as a JSON file.
+// It also unlocks the value and restores the wallet.vault object.
 func (w *Wallet) Open(passphrase string) error {
-	var walletData struct {
-		ID               *PUID             `json:"id"`
-		Address          string            `json:"address"`
-		Encrypted        bool              `json:"encrypted"`
-		EncryptionParams *EncryptionParams `json:"encryption_params"`
-		Ciphertext       string            `json:"ciphertext"`
-		Nonce            uint64            `json:"nonce"`
-	}
-
-	err := localStorage.Get(w.Address, &walletData)
+	err := localStorage.Set("wallet", w)
 	if err != nil {
-		return fmt.Errorf("failed to load wallet data: %v", err)
+		return err
 	}
-
-	w.ID = walletData.ID
-	w.Address = walletData.Address
-	w.Encrypted = walletData.Encrypted
-	w.EncryptionParams = walletData.EncryptionParams
-	w.Ciphertext, err = base64.StdEncoding.DecodeString(walletData.Ciphertext)
-	if err != nil {
-		return fmt.Errorf("failed to decode ciphertext: %v", err)
-	}
-	w.nonce = walletData.Nonce
 
 	if len(passphrase) >= 12 {
 		err = w.Unlock(passphrase)
 		if err != nil {
-			return fmt.Errorf("failed to unlock wallet: %v", err)
+			return fmt.Errorf("failed to load wallet: %v", err)
 		}
 	}
 
 	if verbose {
-		log.Printf("[%s] Wallet [%s] loaded (locked: %v) from disk\n", time.Now().Format(logDateTimeFormat), w.ID, w.Encrypted)
+		log.Printf("Wallet [%s] loaded (locked: %v) from disk", w.ID, w.Encrypted)
 	}
 
 	return nil
@@ -730,14 +671,14 @@ func LocalWalletList() error {
 		wallet := &Wallet{Address: address}
 		err := wallet.Open("")
 		if err != nil {
-			log.Printf("Failed to load wallet from file %s: %v\n", file, err)
+			log.Printf("Failed to load wallet from file %s: %v", file, err)
 			continue
 		}
 
 		walletList = append(walletList, fmt.Sprintf("ID: %s, Name: %s, Address: %s, Tags: %v", wallet.ID, wallet.GetWalletName(), wallet.GetAddress(), wallet.GetTags()))
 	}
 
-	log.Printf("Wallets in %s: %d\n", walletFolder, len(walletList))
+	log.Printf("Wallets in %s: %d", walletFolder, len(walletList))
 	if len(walletList) == 0 {
 		log.Println("No wallets found")
 	} else {

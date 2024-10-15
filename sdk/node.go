@@ -218,15 +218,19 @@ func (n *Node) load() error {
 
 // Run runs the node.
 func (n *Node) Run() {
+	log.Println("Starting node...")
 	go n.P2P.Start()
-	go n.Blockchain.Run(1)
+	go n.Blockchain.Run(n.Config.Difficulty)
 
 	if n.Config.EnableAPI {
 		go n.API.Start()
 	}
 
 	// Keep the main goroutine alive
-	select {}
+	for {
+		time.Sleep(time.Second)
+		log.Printf(".")
+	}
 }
 
 // ProcessP2PTransaction processes a P2PTransaction received from the P2P network.

@@ -158,6 +158,9 @@ func (b *Block) CalculateMerkleRoot() []byte {
 		transactions = append(transactions, []byte(tx.Hash()))
 	}
 	tree := NewMerkleTree(transactions)
+	if tree.Root == nil {
+		return []byte{} // Return empty byte slice for empty tree
+	}
 	return tree.Root.Data
 }
 
@@ -275,6 +278,12 @@ type MerkleTree struct {
 func NewMerkleTree(data [][]byte) *MerkleTree {
 	var nodes []*MerkleNode
 
+	if len(data) == 0 {
+		// Create a single node with empty data for an empty tree
+		node := NewMerkleNode(nil, nil, []byte{})
+		return &MerkleTree{Root: node}
+	}
+
 	if len(data)%2 != 0 {
 		data = append(data, data[len(data)-1])
 	}
@@ -284,11 +293,11 @@ func NewMerkleTree(data [][]byte) *MerkleTree {
 		nodes = append(nodes, node)
 	}
 
-	for i := 0; i < len(data)/2; i++ {
+	for len(nodes) > 1 {
 		var newLevel []*MerkleNode
 
-		for j := 0; j < len(nodes); j += 2 {
-			node := NewMerkleNode(nodes[j], nodes[j+1], nil)
+		for i := 0; i < len(nodes); i += 2 {
+			node := NewMerkleNode(nodes[i], nodes[i+1], nil)
 			newLevel = append(newLevel, node)
 		}
 

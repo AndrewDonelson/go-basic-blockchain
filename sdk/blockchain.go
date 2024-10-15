@@ -63,9 +63,19 @@ func NewBlockchain(cfg *Config) *Blockchain {
 	err := bc.Load()
 	if err != nil {
 		log.Println("No existing blockchain found", err)
-		bc.createBlockchain()
+		err = bc.createBlockchain()
+		if err != nil {
+			log.Printf("Error creating blockchain: %v", err)
+			return nil
+		}
 	}
 
+	if len(bc.Blocks) == 0 {
+		log.Println("No blocks found, creating genesis block")
+		bc.GenerateGenesisBlock([]Transaction{})
+	}
+
+	log.Printf("Blockchain initialized with %d blocks", len(bc.Blocks))
 	return bc
 }
 
@@ -160,11 +170,19 @@ func (bc *Blockchain) createBlockchain() error {
 
 	devWallet, err := NewWallet(NewWalletOptions(ThisBlockchainOrganizationID, ThisBlockchainAppID, ThisBlockchainAdminUserID, ThisBlockchainDevAssetID, "Dev", devWalletPW, []string{"blockchain", "master"}))
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to create dev wallet: %v", err)
 	}
 
-	devWallet.Close(devWalletPW)
-	devWallet.Open(devWalletPW)
+	err = devWallet.Close(devWalletPW)
+	if err != nil {
+		return fmt.Errorf("failed to close dev wallet: %v", err)
+	}
+
+	err = devWallet.Open(devWalletPW)
+	if err != nil {
+		return fmt.Errorf("failed to open dev wallet: %v", err)
+	}
+
 	bc.cfg.DevAddress = devWallet.GetAddress()
 	log.Printf("A Blockchain project Dev wallet was created for you with address [%s] and password [%s] (you can change this later)\n", bc.cfg.DevAddress, devWalletPW)
 
@@ -175,10 +193,19 @@ func (bc *Blockchain) createBlockchain() error {
 
 	minerWallet, err := NewWallet(NewWalletOptions(ThisBlockchainOrganizationID, ThisBlockchainAppID, ThisBlockchainAdminUserID, ThisBlockchainMinerID, "Miner", minerWalletPW, []string{"blockchain", "node", "miner"}))
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to create miner wallet: %v", err)
 	}
+
 	minerWallet.Close(minerWalletPW)
+	if err != nil {
+		return fmt.Errorf("failed to close miner wallet: %v", err)
+	}
+
 	minerWallet.Open(minerWalletPW)
+	if err != nil {
+		return fmt.Errorf("failed to open miner wallet: %v", err)
+	}
+
 	bc.cfg.MinerAddress = minerWallet.GetAddress()
 	log.Printf("A Node miner wallet was created for you with address [%s] and password [%s] (you can change this later)\n", bc.cfg.MinerAddress, minerWalletPW)
 
@@ -223,21 +250,20 @@ func (bc *Blockchain) GenerateGenesisBlock(txs []Transaction) {
 	if len(bc.Blocks) == 0 {
 		log.Println("Generating Genesis Block...")
 
-		genesisBlock := NewBlock([]Transaction{}, "")
+		genesisBlock := NewBlock(txs, "")
 		genesisBlock.Index = *big.NewInt(0)
-
-		if len(txs) > 0 {
-			genesisBlock.Transactions = txs
-			bc.TransactionQueue = nil
-		}
-
 		genesisBlock.Hash = bc.generateHash(genesisBlock)
 
 		bc.Mine(genesisBlock, 1)
 
+		err := genesisBlock.save()
+		if err != nil {
+			log.Printf("Error saving genesis block: %v\n", err)
+		}
+
 		bc.Blocks = append(bc.Blocks, genesisBlock)
 
-		err := bc.TXLookup.Add(genesisBlock)
+		err = bc.TXLookup.Add(genesisBlock)
 		if err != nil {
 			log.Printf("Error adding block to TXLookup: %v\n", err)
 		}
@@ -303,7 +329,7 @@ func (bc *Blockchain) AddTransaction(transaction Transaction) {
 // Mine attempts to mine a new block for the blockchain.
 func (bc *Blockchain) Mine(block *Block, difficulty int) *Block {
 	prefix := strings.Repeat("0", difficulty)
-	log.Printf("Mining a new Block [#%d] with [%d] Txs...", block.Index, len(block.Transactions))
+	log.Printf("Mining a new Block [#%s] with [%d] Txs...", block.Index.String(), len(block.Transactions))
 	for i := 0; i < maxNonce; i++ {
 		block.Header.Nonce = uint32(i)
 		block.Hash = block.CalculateHash()
@@ -316,7 +342,11 @@ func (bc *Blockchain) Mine(block *Block, difficulty int) *Block {
 			bc.Blocks = append(bc.Blocks, block)
 			bc.TransactionQueue = []Transaction{}
 
-			log.Printf("[%s] Mined a new Block with [%d] TXs & Hash [%s]\n", time.Now().Format(logDateTimeFormat), len(block.Transactions), block.Hash)
+			log.Printf("[%s] Mined a new Block [#%s] with [%d] TXs & Hash [%s]\n",
+				time.Now().Format(logDateTimeFormat),
+				block.Index.String(),
+				len(block.Transactions),
+				block.Hash)
 			break
 		}
 	}
@@ -332,8 +362,7 @@ func (bc *Blockchain) VerifySignature(tx Transaction) error {
 
 // Run is a long-running function that manages the blockchain.
 func (bc *Blockchain) Run(difficulty int) {
-	var block *Block
-
+	log.Println("Blockchain.Run started")
 	statusTicker := time.NewTicker(time.Second)
 	blockTicker := time.NewTicker(time.Duration(bc.cfg.BlockTime) * time.Second)
 
@@ -345,45 +374,43 @@ func (bc *Blockchain) Run(difficulty int) {
 
 	go func() {
 		for range blockTicker.C {
-			bc.mux.Lock()
-			if len(bc.TransactionQueue) == 0 {
-				bc.mux.Unlock()
-				continue
-			}
-
-			index := len(bc.Blocks)
-			previousHash := ""
-			if index > 0 {
-				previousHash = bc.Blocks[index-1].Hash
-			}
-
-			if len(bc.TransactionQueue) == 0 {
-				// Create an empty block instead of skipping
-				block = NewBlock([]Transaction{}, previousHash)
-			} else {
-				// Existing logic for creating a block with transactions
-				block = NewBlock(bc.TransactionQueue, previousHash)
-			}
-
-			//block := NewBlock(bc.TransactionQueue, previousHash)
-			block.Index = *big.NewInt(int64(index))
-			bc.Mine(block, difficulty)
-
-			err := bc.TXLookup.Add(block)
-			if err != nil {
-				log.Printf("[%s] Error adding block to TXLookup: %v\n", time.Now().Format(logDateTimeFormat), err)
-			}
-
-			block.save()
-
-			err = bc.Save()
-			if err != nil {
-				log.Printf("[%s] Error saving blockchain state: %v\n", time.Now().Format(logDateTimeFormat), err)
-			}
-
-			bc.mux.Unlock()
+			bc.createNewBlock(difficulty)
 		}
 	}()
+}
+
+func (bc *Blockchain) createNewBlock(difficulty int) {
+	bc.mux.Lock()
+	defer bc.mux.Unlock()
+
+	previousHash := ""
+	if len(bc.Blocks) > 0 {
+		previousHash = bc.Blocks[len(bc.Blocks)-1].Hash
+	}
+
+	newBlock := NewBlock(bc.TransactionQueue, previousHash)
+	newBlock.Index = *big.NewInt(int64(len(bc.Blocks)))
+	bc.Mine(newBlock, difficulty)
+
+	err := bc.TXLookup.Add(newBlock)
+	if err != nil {
+		log.Printf("[%s] Error adding block to TXLookup: %v\n", time.Now().Format(logDateTimeFormat), err)
+	}
+
+	err = newBlock.save()
+	if err != nil {
+		log.Printf("[%s] Error saving block: %v\n", time.Now().Format(logDateTimeFormat), err)
+	}
+
+	bc.Blocks = append(bc.Blocks, newBlock)
+	bc.TransactionQueue = []Transaction{} // Clear the queue
+
+	err = bc.Save()
+	if err != nil {
+		log.Printf("[%s] Error saving blockchain state: %v\n", time.Now().Format(logDateTimeFormat), err)
+	}
+
+	log.Printf("New block created: [#%s] Hash: %s", newBlock.Index.String(), newBlock.Hash)
 }
 
 // generateHash generates a SHA-512 hash for the given block.

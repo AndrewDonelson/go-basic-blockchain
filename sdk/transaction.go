@@ -109,7 +109,7 @@ func NewTransaction(protocol string, from *Wallet, to *Wallet) (*Tx, error) {
 		To:       to,
 		Fee:      transactionFee,
 		Status:   StatusPending,
-		Nonce:    from.GetNextNonce(),
+		Nonce:    uint64(SecureRandomInt(8)),
 	}
 
 	return tx, nil

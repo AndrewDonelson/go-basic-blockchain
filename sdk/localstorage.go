@@ -1,127 +1,192 @@
+// Package sdk is a software development kit for building blockchain applications.
+// File sdk/localstorage.go - Local Storage for all data persist manager
 package sdk
 
 import (
-	"encoding/json"
+	//"encoding/json"
+
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
-	"sync"
+
+	jsoniter "github.com/json-iterator/go"
 )
 
-// LocalStorage represents a local storage mechanism with a specified data path.
-// It includes a read-write mutex to ensure thread-safe access to the stored data.
+// LocalStorageOptions represents the options for the LocalStorage data persist manager.
+// DataPath specifies the path where all data is stored.
+// NodePrivateKey specifies the private key of the node, which can be used to encrypt data.
+// NumCacheItems specifies the number of items to cache in memory, which applies to all types (blocks, transactions, etc).
+type LocalStorageOptions struct {
+	DataPath       string // path where all data is stored
+	NodePrivateKey string // private key of the node (if you want to encrypt data)
+	NumCacheItems  int    // number of items to cache in memory. this applies to all type (blocks, transactions, etc)
+}
+
+// LocalStorage represents the data persist manager using the Go standard library's file system.
+// The dataPath field specifies the path where all data is stored.
 type LocalStorage struct {
 	dataPath string
-	mutex    sync.RWMutex
 }
 
-// localStorage is a singleton instance of the LocalStorage struct.
-// It is initialized only once using the sync.Once mechanism to ensure
-// thread-safe initialization.
-var (
-	localStorage *LocalStorage
-	once         sync.Once
-)
+// localStorage is a global variable that holds an instance of the LocalStorage struct.
+// It provides access to the data persist manager using the Go standard library's file system.
+var localStorage *LocalStorage
 
-// NewLocalStorage initializes a new LocalStorage instance with the specified data path.
-// If the provided data path is empty, it defaults to "./data". This function ensures that
-// the LocalStorage instance is set up only once using a sync.Once mechanism.
+// NewLocalStorage creates a new instance of the LocalStorage struct, which is the data persist manager
+// using the Go standard library's file system. If dataPath is an empty string, it will use the default
+// data path "./data". The function also performs any initial setup or data loading if needed.
 //
-// Parameters:
-//   - dataPath: The path where the local storage data will be stored.
-//
-// Returns:
-//   - error: An error if the setup of the LocalStorage instance fails, otherwise nil.
+// If local storage has already been initialized, this function will return an error.
 func NewLocalStorage(dataPath string) error {
-	var err error
-	once.Do(func() {
-		if dataPath == "" {
-			dataPath = "./data"
-		}
-		localStorage = &LocalStorage{dataPath: dataPath}
-		err = localStorage.setup()
-	})
-	return err
+	if localStorage != nil {
+		// Return the existing instance
+		return fmt.Errorf("local storage already initialized")
+	}
+
+	// Create the LocalStorage instance
+	localStorage = &LocalStorage{}
+	if dataPath == "" {
+		// Use the default data path
+		localStorage.dataPath = "./data" // Modify the data path based on your requirements
+	} else {
+		// Use the given data path
+		localStorage.dataPath = dataPath
+	}
+
+	// Perform any initial setup or data loading if needed
+	localStorage.setup()
+
+	fmt.Println("local storage initialized @", localStorage.dataPath)
+	return nil
 }
 
-// GetLocalStorage retrieves the singleton instance of LocalStorage.
-// If the local storage has not been initialized, it returns an error.
-//
-// Returns:
-//   - (*LocalStorage, error): The instance of LocalStorage if initialized, otherwise an error.
+// / GetLocalStorage returns the singleton instance of the LocalStorage struct, which provides access to the
+// / data persist manager using the Go standard library's file system. If local storage has not been
+// / initialized, this function will return an error.
 func GetLocalStorage() (*LocalStorage, error) {
 	if localStorage == nil {
 		return nil, fmt.Errorf("local storage not initialized")
 	}
+
 	return localStorage, nil
 }
 
-// setup initializes the local storage by creating necessary directories
-// such as "node", "blocks", and "wallets" within the specified data path.
-// It returns an error if any of the directory creation operations fail.
-func (ls *LocalStorage) setup() error {
-	directories := []string{"node", "blocks", "wallets"}
-	for _, dir := range directories {
-		err := os.MkdirAll(filepath.Join(ls.dataPath, dir), 0755)
-		if err != nil {
-			return fmt.Errorf("failed to create directory %s: %w", dir, err)
-		}
+// LocalStorageAvailable returns a boolean indicating whether the LocalStorage instance has been initialized.
+// This function can be used to check if the local storage data persist manager is available for use.
+func LocalStorageAvailable() bool {
+	return localStorage != nil
+}
+
+// setup creates the necessary directories for the LocalStorage data persist manager.
+// It creates the following directories if they don't already exist:
+// - data directory (specified by ls.dataPath)
+// - node directory (under the data directory)
+// - blocks directory (under the data directory)
+// - wallets directory (under the data directory)
+// This function is called during the initialization of the LocalStorage instance.
+func (ls *LocalStorage) setup() {
+	// Create the data directory if it doesn't exist
+	err := os.MkdirAll(ls.dataPath, 0755)
+	if err != nil {
+		log.Fatal(err)
 	}
-	return nil
+
+	// Create the node directory if it doesn't exist
+	// err = os.MkdirAll(filepath.Join(ls.dataPath, "node"), 0755)
+	// if err != nil {
+	// 	log.Fatal(err)
+	// }
+
+	// Create the blocks directory if it doesn't exist
+	err = os.MkdirAll(filepath.Join(ls.dataPath, "blocks"), 0755)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	// Create the wallets directory if it doesn't exist
+	err = os.MkdirAll(filepath.Join(ls.dataPath, "wallets"), 0755)
+	if err != nil {
+		log.Fatal(err)
+	}
+}
+
+// file returns the file path for the given type of data that needs to be persisted.
+// It handles different types of data, such as NodePersistData, BlockchainPersistData, Block, and Wallet,
+// and generates the appropriate file path based on the type.
+// If the type is not supported, it returns an error.
+func (ls *LocalStorage) file(t interface{}) (filePath string, err error) {
+
+	log.Printf("LocalStorage.file: Interface Detected: %T", t)
+	switch tt := t.(type) {
+	case *NodePersistData:
+		filePath = filepath.Join(ls.dataPath, "node.json")
+	case *BlockchainPersistData:
+		filePath = filepath.Join(ls.dataPath, "blockchain.json")
+	case *Block:
+		// where t is a Block
+		filePath = filepath.Join(ls.dataPath, "blocks", fmt.Sprintf("%s.json", (t.(*Block).Index).String()))
+	case *Wallet:
+		filePath = filepath.Join(ls.dataPath, "wallets", tt.Address+".json")
+	default:
+		err = fmt.Errorf("unsupported type [%T]", tt)
+	}
+
+	return filePath, err
 }
 
 // Get retrieves the value associated with the given key from the LocalStorage.
-
-// Get retrieves the value associated with the given key from the local storage.
-// It reads the data from the file corresponding to the key, and unmarshals it into the provided interface.
-//
-// Parameters:
-//   - key: The key associated with the value to retrieve.
-//   - v: A pointer to the variable where the unmarshaled data will be stored.
-//
-// Returns:
-//   - error: An error if the file cannot be read or the data cannot be unmarshaled, otherwise nil.
+// It decodes the JSON data from the file corresponding to the type of the provided value.
+// If the file does not exist or the JSON data cannot be decoded, an error is returned.
 func (ls *LocalStorage) Get(key string, v interface{}) error {
-	ls.mutex.RLock()
-	defer ls.mutex.RUnlock()
-
-	filePath := ls.getFilePath(key)
-	data, err := os.ReadFile(filePath)
+	filePath, err := ls.file(v)
 	if err != nil {
-		return fmt.Errorf("failed to read file %s: %w", filePath, err)
+		return err
 	}
 
-	err = json.Unmarshal(data, v)
+	// Open the file
+	file, err := os.Open(filePath)
 	if err != nil {
-		return fmt.Errorf("failed to unmarshal data: %w", err)
+		return err
+	}
+	defer file.Close()
+
+	// Decode the JSON data from the file
+	//err = json.NewDecoder(file).Decode(v)
+	err = jsoniter.NewDecoder(file).Decode(v)
+	if err != nil {
+		return err
 	}
 
 	return nil
 }
 
-// Set stores the given value in the local storage under the specified key.
-// It serializes the value to JSON format and writes it to a file.
-// The file is named based on the key and stored in the local storage directory.
-// If an error occurs during serialization or file writing, it returns an error.
-//
-// Parameters:
-//   - key: The key under which the value will be stored.
-//   - v: The value to be stored, which will be serialized to JSON.
-//
-// Returns:
-//   - error: An error if the value could not be serialized or the file could not be written.
-//
 // Set stores the provided value under the given key in the LocalStorage.
+// It creates or truncates the file corresponding to the type of the provided value,
+// and encodes the value as JSON data in the file.
+// If an error occurs while creating the file or encoding the data, an error is returned.
 func (ls *LocalStorage) Set(key string, v interface{}) error {
-	ls.mutex.Lock()
-	defer ls.mutex.Unlock()
+	if verbose {
+		log.Println("LocalStorage.Set: Start")
+	}
 
-	data, err := json.Marshal(v)
+	filePath, err := ls.file(v)
+	if err != nil {
+		return err
+	}
+
+	if verbose {
+		log.Printf("LocalStorage.Set: Preparing %s to %v\n", filePath, PrettyPrint(v))
+	}
+
+	data, err := jsoniter.MarshalIndent(v, "", "  ")
 	if err != nil {
 		return fmt.Errorf("failed to marshal data: %w", err)
 	}
 
-	filePath := ls.getFilePath(key)
+	if verbose {
+		log.Printf("LocalStorage.Set: Writing %s to %s\n", filePath, data)
+	}
 	err = os.WriteFile(filePath, data, 0644)
 	if err != nil {
 		return fmt.Errorf("failed to write file %s: %w", filePath, err)
@@ -130,35 +195,60 @@ func (ls *LocalStorage) Set(key string, v interface{}) error {
 	return nil
 }
 
-// List retrieves a list of all file paths relative to the dataPath directory.
-// It locks the mutex for reading to ensure thread safety while accessing the file system.
-// The function walks through the dataPath directory and collects all file paths that are not directories.
-// If an error occurs during the walk, it returns the error wrapped in a descriptive message.
-// Returns a slice of relative file paths or an error if the operation fails.
-func (ls *LocalStorage) List() ([]string, error) {
-	ls.mutex.RLock()
-	defer ls.mutex.RUnlock()
+// Find searches for data in the LocalStorage based on the given criteria.
+// It supports two types of criteria: BlockQueryCriteria and TransactionQueryCriteria.
+// For BlockQueryCriteria, it will query and return the matching Blocks.
+// For TransactionQueryCriteria, it will query and return the matching Transactions.
+// If the criteria type is unsupported, an error is returned.
+func (ls *LocalStorage) Find(criteria interface{}) ([]interface{}, error) {
+	// Implement the logic to find data based on the given criteria using file system operations
 
-	var keys []string
-	err := filepath.Walk(ls.dataPath, func(path string, info os.FileInfo, err error) error {
-		if err != nil {
-			return err
-		}
-		if !info.IsDir() {
-			relPath, _ := filepath.Rel(ls.dataPath, path)
-			keys = append(keys, relPath)
-		}
-		return nil
-	})
+	// Dummy implementation
+	switch criteria := criteria.(type) {
+	case *BlockQueryCriteria:
+		fmt.Printf("BlockQueryCriteria: %+v\n", criteria)
+		// Query Blocks based on criteria
+		blocks := []*Block{}
+		// Implement logic to query Blocks based on criteria
 
-	if err != nil {
-		return nil, fmt.Errorf("failed to list files: %w", err)
+		// Return the found Blocks
+		return []interface{}{blocks}, nil
+	case *TransactionQueryCriteria:
+		fmt.Printf("TransactionQueryCriteria: %+v\n", criteria)
+		// Query Transactions based on criteria
+		transactions := []*Transaction{}
+		// Implement logic to query Transactions based on criteria
+
+		// Return the found Transactions
+		return []interface{}{transactions}, nil
+	default:
+		return nil, fmt.Errorf("unsupported criteria type")
 	}
-
-	return keys, nil
 }
 
-// getFilePath returns the file path for the given key.
-func (ls *LocalStorage) getFilePath(key string) string {
-	return filepath.Join(ls.dataPath, key+".json")
+// NodeData represents a node in the system, with an ID and a Name.
+type NodeData struct {
+	ID   string
+	Name string
+	// Additional fields as needed
+}
+
+// BlockchainData represents the data persisted for a blockchain.
+// It contains an ID and a Version field, along with any additional fields as needed.
+type BlockchainData struct {
+	ID      string
+	Version string
+	// Additional fields as needed
+}
+
+// BlockQueryCriteria represents the criteria for querying blocks.
+type BlockQueryCriteria struct {
+	Number int
+	// Additional criteria fields as needed
+}
+
+// TransactionQueryCriteria represents the criteria for querying transactions.
+type TransactionQueryCriteria struct {
+	Amount float64
+	// Additional criteria fields as needed
 }
