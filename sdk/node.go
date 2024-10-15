@@ -102,7 +102,11 @@ func NewNode(opts *NodeOptions) error {
 		log.Println("Created and saved new node configuration")
 	}
 
+	// Initialize Blockchain
 	node.Blockchain = NewBlockchain(node.Config)
+	if node.Blockchain == nil {
+		return fmt.Errorf("failed to initialize blockchain")
+	}
 	log.Println("Blockchain initialized")
 
 	node.API = NewAPI(node.Blockchain)
@@ -112,27 +116,27 @@ func NewNode(opts *NodeOptions) error {
 	log.Println("P2P initialized")
 
 	// Initialize wallet
-	password, err := GenerateRandomPassword()
-	if err != nil {
-		return fmt.Errorf("error generating random password: %w", err)
-	}
-	log.Println("Random password generated")
+	// password, err := GenerateRandomPassword()
+	// if err != nil {
+	// 	return fmt.Errorf("error generating random password: %w", err)
+	// }
+	// log.Println("Random password generated")
 
-	walletOptions := &WalletOptions{
-		OrganizationID: NewBigInt(1),
-		AppID:          NewBigInt(1),
-		UserID:         NewBigInt(1),
-		AssetID:        NewBigInt(1),
-		Name:           "NodeWallet",
-		Passphrase:     password,
-		Tags:           []string{"node", "wallet"},
-	}
-	wallet, err := NewWallet(walletOptions)
-	if err != nil {
-		return fmt.Errorf("error creating node wallet: %w", err)
-	}
-	node.Wallet = wallet
-	log.Println("Node wallet created")
+	// walletOptions := &WalletOptions{
+	// 	OrganizationID: NewBigInt(1),
+	// 	AppID:          NewBigInt(1),
+	// 	UserID:         NewBigInt(1),
+	// 	AssetID:        NewBigInt(1),
+	// 	Name:           "NodeWallet",
+	// 	Passphrase:     password,
+	// 	Tags:           []string{"node", "wallet"},
+	// }
+	// wallet, err := NewWallet(walletOptions)
+	// if err != nil {
+	// 	return fmt.Errorf("error creating node wallet: %w", err)
+	// }
+	// node.Wallet = wallet
+	// log.Println("Node wallet created")
 
 	if opts.IsSeed {
 		log.Println("Initializing as seed node")
@@ -220,6 +224,11 @@ func (n *Node) load() error {
 func (n *Node) Run() {
 	log.Println("Starting node...")
 	go n.P2P.Start()
+
+	if n.Blockchain == nil {
+		log.Println("Error: Blockchain is not initialized")
+		return
+	}
 	go n.Blockchain.Run(n.Config.Difficulty)
 
 	if n.Config.EnableAPI {

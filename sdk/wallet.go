@@ -113,6 +113,7 @@ func NewDefaultEncryptionParams() *EncryptionParams {
 // The wallet is initialized with a new private key and default encryption parameters.
 // The wallet must be closed to save it to disk.
 func NewWallet(options *WalletOptions) (*Wallet, error) {
+	var err error
 
 	if options == nil {
 		return nil, errors.New("options cannot be nil")
@@ -124,24 +125,25 @@ func NewWallet(options *WalletOptions) (*Wallet, error) {
 	}
 
 	// Create a new wallet with a unique ID, name, and set of tags.
+	log.Printf("Creating new Wallet: %s", options.Name)
 	wallet := &Wallet{
 		ID:               NewPUID(options.OrganizationID, options.AppID, options.UserID, NewBigInt(0)),
 		Address:          "",
 		Encrypted:        false,
 		EncryptionParams: NewDefaultEncryptionParams(),
-		vault:            NewVault(),
+		vault:            NewVaultWithData(options.Name, options.Tags, float64(fundWalletAmount)),
 		Ciphertext:       []byte{},
 	}
 
 	// Generate a new private key.
-	err := wallet.vault.NewKeyPair()
-	if err != nil {
-		return nil, err
-	}
+	// err := wallet.vault.NewKeyPair()
+	// if err != nil {
+	// 	return nil, err
+	// }
 
-	wallet.SetData("name", options.Name)
-	wallet.SetData("tags", options.Tags)
-	wallet.SetData("balance", float64(fundWalletAmount))
+	// wallet.SetData("name", options.Name)
+	// wallet.SetData("tags", options.Tags)
+	// wallet.SetData("balance", float64(fundWalletAmount))
 	wallet.GetAddress()
 
 	if verbose {
@@ -280,27 +282,14 @@ func (w *Wallet) GetAddress() string {
 // vaultToBytes is an internal (private) method that converts the wallet's vault data (keypairs) to bytes.
 // This is used by the wallet to encrypt the data (keypairs) associated with the wallet.
 func (w *Wallet) vaultToBytes() ([]byte, error) {
-	vaultData := struct {
-		Vault *Vault `json:"vault"`
-		Nonce uint64 `json:"nonce"`
-	}{
-		Vault: w.vault,
-	}
-	return json.Marshal(vaultData)
+	return json.Marshal(w.vault)
 }
 
 // bytesToData is an internal (private) method that converts the bytes representation of the data (keypairs) associated with the wallet to the data (keypairs) associated with the wallet.
 // this is used by the wallet to decrypt the data (keypairs) associated with the wallet.
+
 func (w *Wallet) bytesToVault(bytes []byte) error {
-	var vaultData struct {
-		Vault *Vault `json:"vault"`
-	}
-	err := json.Unmarshal(bytes, &vaultData)
-	if err != nil {
-		return err
-	}
-	w.vault = vaultData.Vault
-	return nil
+	return json.Unmarshal(bytes, &w.vault)
 }
 
 // / PrivateKey returns the private key from the vault associated with the wallet.
@@ -582,28 +571,26 @@ func (w *Wallet) Lock(passphrase string) error {
 func (w *Wallet) Unlock(passphrase string) error {
 
 	// Check if the wallet is already decrypted.
-	if !w.Encrypted {
-		return errors.New("wallet is already decrypted")
+	if w.Encrypted {
+		if verbose {
+			log.Printf("Unlocking wallet [%s]", w.ID)
+		}
+
+		// Convert the passphrase to bytes.
+		pwAsBytes := []byte(passphrase)
+
+		// Decrypt the wallet's data.
+		dataAsBytes, err := w.decrypt(pwAsBytes, w.Ciphertext)
+		if err != nil {
+			return err
+		}
+
+		w.bytesToVault(dataAsBytes)
+
+		// Set the wallet's data.
+		w.Ciphertext = []byte{}
+		w.Encrypted = false
 	}
-
-	if verbose {
-		log.Printf("Unlocking wallet [%s]", w.ID)
-	}
-
-	// Convert the passphrase to bytes.
-	pwAsBytes := []byte(passphrase)
-
-	// Decrypt the wallet's data.
-	dataAsBytes, err := w.decrypt(pwAsBytes, w.Ciphertext)
-	if err != nil {
-		return err
-	}
-
-	w.bytesToVault(dataAsBytes)
-
-	// Set the wallet's data.
-	w.Ciphertext = []byte{}
-	w.Encrypted = false
 
 	return nil
 }
@@ -612,18 +599,17 @@ func (w *Wallet) Unlock(passphrase string) error {
 // This method first locks the wallet using the provided passphrase, then saves the encrypted wallet to disk using the localStorage.Set method.
 // If any errors occur during the locking or saving process, this method will return an error.
 func (w *Wallet) Close(passphrase string) error {
-	if w.Encrypted {
-		return errors.New("cannot save an already encrypted wallet")
-	}
+	if !w.Encrypted {
+		err := w.Lock(passphrase)
+		if err != nil {
+			return fmt.Errorf("failed to save wallet: %v", err)
+		}
 
-	err := w.Lock(passphrase)
-	if err != nil {
-		return fmt.Errorf("failed to save wallet: %v", err)
-	}
+		err = localStorage.Set("wallet", w)
+		if err != nil {
+			return fmt.Errorf("failed to save wallet: %v", err)
+		}
 
-	err = localStorage.Set("wallet", w)
-	if err != nil {
-		return fmt.Errorf("failed to save wallet: %v", err)
 	}
 
 	if verbose {

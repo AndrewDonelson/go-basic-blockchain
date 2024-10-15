@@ -8,6 +8,7 @@ import (
 	"crypto/rand"
 	"crypto/x509"
 	"encoding/pem"
+	"log"
 )
 
 // PEM is a struct that holds the PEM encoded private and public keys for a cryptographic key pair.
@@ -81,17 +82,51 @@ type Vault struct {
 
 // NewVault creates a new Vault struct
 func NewVault() *Vault {
-	return &Vault{
+	log.Printf("Creating new Vault\n")
+	newVault := &Vault{
 		Data: make(map[string]interface{}),
 		Key:  nil,
 		Pem:  nil,
 	}
+
+	// Generate a new private key.
+	log.Printf("Generating new keypair\n")
+	err := newVault.NewKeyPair()
+	if err != nil {
+		return nil
+	}
+
+	return newVault
+}
+
+func NewVaultWithData(name string, tags []string, balance float64) *Vault {
+	newVault := NewVault()
+	newVault.SetData("name", name)
+	newVault.SetData("tags", tags)
+	newVault.SetData("balance", balance)
+	return newVault
 }
 
 // SetData sets the data (keypairs) associated with the wallet.
 // This wallet allows the user to store arbitrary data (keypairs) in the wallet.
 // The data included built-in data such as the wallet name, tags, and balance.
 func (v *Vault) SetData(key string, value interface{}) error {
+	if v == nil {
+		log.Fatalln("Vault is nil")
+		return nil
+	}
+
+	if v.Data == nil {
+		if verbose {
+			log.Fatalln("Vault Data is nil")
+		}
+		return nil
+	}
+
+	if verbose {
+		log.Printf("Setting data: %s to %v\n", key, value)
+	}
+
 	v.Data[key] = value
 	return nil
 }
