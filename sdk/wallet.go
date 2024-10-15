@@ -146,13 +146,13 @@ func NewWallet(options *WalletOptions) (*Wallet, error) {
 	// wallet.SetData("balance", float64(fundWalletAmount))
 	wallet.GetAddress()
 
-	if verbose {
-		log.Printf("Created new Wallet: %+v", PrettyPrint(wallet))
-	} else {
-		log.Printf("Created new Wallet: %s", wallet.GetAddress())
-	}
+	// if verbose {
+	// 	log.Printf("Created new Wallet: %+v", PrettyPrint(wallet))
+	// } else {
+	// 	log.Printf("Created new Wallet: %s", wallet.GetAddress())
+	// }
 
-	//log.Printf("Created new Wallet: %s", wallet.GetAddress())
+	log.Printf("Created new Wallet: %s", wallet.GetAddress())
 
 	// Save the wallet after creation
 	err = wallet.Close(options.Passphrase)
@@ -532,18 +532,12 @@ func (w *Wallet) Lock(passphrase string) error {
 	pwAsBytes := []byte(passphrase)
 
 	// Get the wallet's data as bytes.
-	if verbose {
-		log.Printf("Vault: %+v", PrettyPrint(w.vault))
-	}
 	dataAsbytes, err := w.vaultToBytes()
 	if err != nil {
 		return err
 	}
 
 	// Encrypt the wallet's data.
-	if verbose {
-		log.Printf("Encrypt Data as bytes: %s", dataAsbytes)
-	}
 	w.Ciphertext, err = w.encrypt(pwAsBytes, dataAsbytes)
 	if err != nil {
 		return err

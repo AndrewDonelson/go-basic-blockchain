@@ -54,21 +54,29 @@ func NewConfig() *Config {
 		Version:  "1.0", // Set initial version
 	}
 
-	cfg.setDefaultValues()
-	cfg.loadFromEnv()
-	cfg.loadFromFile()
-	cfg.applyCommandLineFlags()
+	cfg.setDefaultValues() // Set default values (lowest priority)
 
-	if !cfg.testing && !fileExists(cfgFile) {
-		cfg.promptForValues()
-		cfg.save()
-	}
+	//if !cfg.testing && !fileExists(cfgFile) {
+	// if !fileExists(cfgFile) {
+	// 	cfg.promptForValues()
+	// 	cfg.save()
+	// }
+
+	// Load values from environment variables (higher priority)
+	cfg.loadFromEnv()
+
+	// Apply command line flags (highest priority)
+	cfg.applyCommandLineFlags()
 
 	return cfg
 }
 
 // setDefaultValues sets the default values for the configuration.
 func (c *Config) setDefaultValues() {
+	if verbose {
+		log.Println("Setting default values")
+	}
+
 	c.BlockchainName = BlockchainName
 	c.BlockchainSymbol = BlockchainSymbol
 	c.BlockTime = blockTimeInSec
@@ -102,6 +110,8 @@ func (c *Config) loadFromEnv() {
 		err := godotenv.Load(envFile)
 		if err != nil {
 			log.Printf("Error loading [%s] environment file: %v", envFile, err)
+			c.promptForValues()
+			c.save()
 		} else {
 			log.Printf("Loaded [%s] environment file", envFile)
 		}

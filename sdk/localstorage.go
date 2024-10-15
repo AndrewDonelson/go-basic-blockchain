@@ -166,17 +166,9 @@ func (ls *LocalStorage) Get(key string, v interface{}) error {
 // and encodes the value as JSON data in the file.
 // If an error occurs while creating the file or encoding the data, an error is returned.
 func (ls *LocalStorage) Set(key string, v interface{}) error {
-	if verbose {
-		log.Println("LocalStorage.Set: Start")
-	}
-
 	filePath, err := ls.file(v)
 	if err != nil {
 		return err
-	}
-
-	if verbose {
-		log.Printf("LocalStorage.Set: Preparing %s to %v\n", filePath, PrettyPrint(v))
 	}
 
 	data, err := jsoniter.MarshalIndent(v, "", "  ")
@@ -184,9 +176,6 @@ func (ls *LocalStorage) Set(key string, v interface{}) error {
 		return fmt.Errorf("failed to marshal data: %w", err)
 	}
 
-	if verbose {
-		log.Printf("LocalStorage.Set: Writing %s to %s\n", filePath, data)
-	}
 	err = os.WriteFile(filePath, data, 0644)
 	if err != nil {
 		return fmt.Errorf("failed to write file %s: %w", filePath, err)
