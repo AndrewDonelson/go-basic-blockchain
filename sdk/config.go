@@ -98,24 +98,47 @@ func (c *Config) setDefaultValues() {
 }
 
 // loadFromEnv loads configuration values from environment variables.
+// loadFromEnv loads configuration values from environment variables.
 func (c *Config) loadFromEnv() {
 	c.testing = (os.Getenv("TESTING") == "true")
 
 	if !c.testing {
+		// Check for custom environment file path
 		envFile := os.Getenv("ENV_FILE")
+
+		// If no custom path is set, use default paths
 		if envFile == "" {
-			envFile = cfgFile
+			// Try multiple potential paths
+			defaultPaths := []string{
+				".local.env",                 // Current directory
+				"../../.local.env",           // Relative to typical project structure
+				"../.local.env",              // One directory up
+				"./bin/.local.env",           // In the bin directory
+				"/etc/blockchain/.local.env", // System-wide configuration
+			}
+
+			for _, path := range defaultPaths {
+				if fileExists(path) {
+					envFile = path
+					break
+				}
+			}
 		}
 
-		err := godotenv.Load(envFile)
-		if err != nil {
-			log.Printf("Error loading [%s] environment file: %v", envFile, err)
-			c.promptForValues()
-			c.save()
-		} else {
-			log.Printf("Loaded [%s] environment file", envFile)
+		// If an environment file is found, load it
+		if envFile != "" {
+			err := godotenv.Load(envFile)
+			if err != nil {
+				log.Printf("Error loading environment file [%s]: %v", envFile, err)
+				// Optionally prompt for values or use defaults
+				c.promptForValues()
+				c.save()
+			} else {
+				log.Printf("Loaded environment file: %s", envFile)
+			}
 		}
 
+		// Proceed with loading environment variables
 		c.BlockchainName = getEnv("BLOCKCHAIN_NAME", c.BlockchainName)
 		c.BlockchainSymbol = getEnv("BLOCKCHAIN_SYMBOL", c.BlockchainSymbol)
 		c.BlockTime = getEnvAsInt("BLOCK_TIME", c.BlockTime)

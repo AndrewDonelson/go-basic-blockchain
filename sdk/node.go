@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"os"
 	"path/filepath"
 	"sync"
 	"time"
@@ -220,6 +221,14 @@ func (n *Node) load() error {
 	return nil
 }
 
+// LogEvent is a custom logger function that prints a message with a newline
+// after clearing the current line where the spinner is displayed
+func LogEvent(format string, args ...interface{}) {
+	// Clear the current line containing the spinner
+	fmt.Print("\r                                                    \r")
+	log.Printf(format, args...)
+}
+
 // Run runs the node.
 func (n *Node) Run() {
 	log.Println("Starting node...")
@@ -235,10 +244,65 @@ func (n *Node) Run() {
 		go n.API.Start()
 	}
 
+	// Set up a channel to capture log output
+	logCh := make(chan bool, 10)
+
+	// Blockchain-themed spinner animation
+	spinnerFrames := []string{
+		"[⬛⬜⬜⬜⬛] >>",
+		"[⬛⬜⬜⬛⬜] >>",
+		"[⬛⬜⬛⬜⬜] >>",
+		"[⬛⬛⬜⬜⬜] >>",
+		"[⬜⬛⬜⬜⬛] >>",
+		"[⬜⬜⬛⬜⬛] >>",
+		"[⬜⬜⬜⬛⬛] >>",
+	}
+	frameIndex := 0
+
+	// Create a ticker for updating the spinner
+	spinnerTick := time.NewTicker(150 * time.Millisecond)
+	defer spinnerTick.Stop()
+
+	// Create a ticker for updating blockchain stats
+	statsTick := time.NewTicker(2 * time.Second)
+	defer statsTick.Stop()
+
+	// Check if we're running in a terminal that supports ANSI escape sequences
+	// This is a simple check and might not work in all environments
+	_, isTerminal := os.LookupEnv("TERM")
+
 	// Keep the main goroutine alive
 	for {
-		time.Sleep(time.Second)
-		log.Printf(".")
+		select {
+		case <-spinnerTick.C:
+			if isTerminal {
+				// Update the spinner animation
+				frameIndex = (frameIndex + 1) % len(spinnerFrames)
+				blockCount := 0
+				txCount := 0
+
+				if n.Blockchain != nil {
+					blockCount = n.Blockchain.GetBlockCount()
+					txCount = len(n.Blockchain.TransactionQueue)
+				}
+
+				// Display the spinner with blockchain stats
+				fmt.Printf("\r%s Node: %s | Blocks: %d | TXs: %d",
+					spinnerFrames[frameIndex],
+					n.ID[:8],
+					blockCount,
+					txCount)
+			}
+		case <-statsTick.C:
+			// Periodically update blockchain status
+			// This helps ensure we don't miss important state changes
+			if n.Blockchain != nil {
+				n.Blockchain.DisplayStatus()
+			}
+		case <-logCh:
+			// This would be triggered by a significant event
+			// The actual logging happens in event handlers
+		}
 	}
 }
 
@@ -251,7 +315,7 @@ func (n *Node) ProcessP2PTransaction(tx P2PTransaction) error {
 		return errors.New("node wallet is nil")
 	}
 
-	log.Printf("Processing P2P transaction: %s (%s)\n", tx.ID, tx.Protocol)
+	LogEvent("Processing P2P transaction: %s (%s)", tx.ID, tx.Protocol)
 
 	switch tx.Action {
 	case "validate":
@@ -271,28 +335,28 @@ func (n *Node) ProcessP2PTransaction(tx P2PTransaction) error {
 
 // Register registers the node with the P2P network.
 func (n *Node) Register() error {
-	log.Println("Starting node registration")
+	LogEvent("Starting node registration")
 	if n.Wallet == nil {
 		return errors.New("node wallet is nil")
 	}
 
-	log.Println("Registering node with P2P network")
+	LogEvent("Registering node with P2P network")
 	n.P2P.RegisterNode(n)
-	log.Println("Node registered with P2P network")
+	LogEvent("Node registered with P2P network")
 
-	log.Println("Marshaling node data to JSON")
+	LogEvent("Marshaling node data to JSON")
 	jsonNodeData, err := json.Marshal(n)
 	if err != nil {
 		return fmt.Errorf("error marshaling node data: %w", err)
 	}
-	log.Println("Node data marshaled to JSON")
+	LogEvent("Node data marshaled to JSON")
 
-	log.Println("Creating new transaction")
+	LogEvent("Creating new transaction")
 	tx, err := NewTransaction("chain", n.Wallet, n.Wallet)
 	if err != nil {
 		return fmt.Errorf("error creating transaction: %w", err)
 	}
-	log.Println("New transaction created")
+	LogEvent("New transaction created")
 
 	p2pTx := P2PTransaction{
 		Tx:     *tx,
@@ -301,16 +365,16 @@ func (n *Node) Register() error {
 		Data:   jsonNodeData,
 	}
 
-	log.Println("Adding transaction to P2P network")
+	LogEvent("Adding transaction to P2P network")
 	n.P2P.AddTransaction(p2pTx)
-	log.Println("Transaction added to P2P network")
+	LogEvent("Transaction added to P2P network")
 
-	log.Println("Broadcasting transaction to P2P network")
+	LogEvent("Broadcasting transaction to P2P network")
 	err = n.P2P.Broadcast(p2pTx)
 	if err != nil {
 		return fmt.Errorf("error broadcasting transaction: %w", err)
 	}
-	log.Println("Transaction broadcast completed")
+	LogEvent("Transaction broadcast completed")
 
 	return nil
 }
@@ -322,10 +386,10 @@ func (n *Node) validateTransaction(tx P2PTransaction) error {
 	}
 
 	if isValid {
-		log.Printf("Transaction %s is valid\n", tx.ID)
+		LogEvent("Transaction %s is valid", tx.ID)
 		n.Blockchain.AddTransaction(&tx.Tx)
 	} else {
-		log.Printf("Transaction %s is invalid\n", tx.ID)
+		LogEvent("Transaction %s is invalid", tx.ID)
 	}
 
 	return nil
@@ -345,7 +409,7 @@ func (n *Node) updateStatus(tx P2PTransaction) error {
 	if node, exists := n.P2P.nodes[status.NodeID]; exists {
 		node.LastSeen = time.Now()
 		node.Status = status.Status
-		log.Printf("Updated status of node %s: %s\n", status.NodeID, status.Status)
+		LogEvent("Updated status of node %s: %s", status.NodeID, status.Status)
 		return nil
 	}
 
@@ -368,7 +432,7 @@ func (n *Node) addNode(tx P2PTransaction) error {
 	}
 
 	n.P2P.nodes[newNode.ID] = &newNode
-	log.Printf("Added new node to the network: %s\n", newNode.ID)
+	LogEvent("Added new node to the network: %s", newNode.ID)
 	return nil
 }
 
@@ -385,7 +449,7 @@ func (n *Node) removeNode(tx P2PTransaction) error {
 
 	if _, exists := n.P2P.nodes[nodeID]; exists {
 		delete(n.P2P.nodes, nodeID)
-		log.Printf("Removed node from the network: %s\n", nodeID)
+		LogEvent("Removed node from the network: %s", nodeID)
 		return nil
 	}
 
@@ -408,7 +472,7 @@ func (n *Node) registerNode(tx P2PTransaction) error {
 	}
 
 	n.P2P.nodes[newNode.ID] = &newNode
-	log.Printf("Registered new node in the network: %s\n", newNode.ID)
+	LogEvent("Registered new node in the network: %s", newNode.ID)
 
 	n.P2P.Broadcast(P2PTransaction{
 		Tx:     tx.Tx,

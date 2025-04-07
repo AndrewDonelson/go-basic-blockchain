@@ -31,6 +31,7 @@ bin/
 # no blockchain data folders
 _data/
 data/
+vendor/
 data_test/
 chaind_data/
 cmd/chaind/chaind

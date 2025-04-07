@@ -8,26 +8,43 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"strings"
 )
 
 var (
 	// ErrNoArgs is returned when the program is started with no arguments
 	ErrNoArgs = errors.New("no arguments")
 
+	// ErrUnknownArg is returned when an unknown argument is specified
+	ErrUnknownArg = errors.New("unknown argument")
+
+	// ErrUnknownSubCmd is returned when an unknown sub-command is specified
+	ErrUnknownSubCmd = errors.New("unknown sub-command")
+
 	// Args is the global Arguments instance
 	Args *Arguments
 )
 
-// Arguments handles parsing arguments and displaying usage information
-type Arguments struct {
-	Flags map[string]*Flag
+// SubCommand contains information for sub-commands of an argument
+type SubCommand struct {
+	Name        string      // name of the sub-command
+	Description string      // description of the sub-command
+	Value       interface{} // value of the sub-command
+	DefaultVal  interface{} // default value of the sub-command
 }
 
 // Flag contains information for every argument
 type Flag struct {
-	Name        string      // name of the argument
-	Description string      // description of the argument
-	Value       interface{} // value of the argument
+	Name        string                 // name of the argument
+	Description string                 // description of the argument
+	Value       interface{}            // value of the argument
+	DefaultVal  interface{}            // default value of the argument
+	SubCommands map[string]*SubCommand // sub-commands for this argument
+}
+
+// Arguments handles parsing arguments and displaying usage information
+type Arguments struct {
+	Flags map[string]*Flag
 }
 
 func init() {
@@ -36,6 +53,9 @@ func init() {
 	// Register new command-line flags for seed node functionality
 	Args.Register("seed", "Run as a seed node", true)
 	Args.Register("seed-address", "Address of the seed node to connect to", "")
+
+	// Add new flag for environment file path
+	Args.Register("env", "Path to the .env file", "")
 }
 
 // NewArguments creates a new Arguments instance
@@ -45,12 +65,13 @@ func NewArguments() *Arguments {
 	}
 }
 
-// Register registers a new flag
-func (a *Arguments) Register(name string, desc string, defaultVal interface{}) {
+// Register registers a new flag with an optional default value
+func (a *Arguments) Register(name string, desc string, defaultVal interface{}) error {
 	flag := &Flag{
 		Name:        name,
 		Description: desc,
-		Value:       defaultVal,
+		DefaultVal:  defaultVal,
+		SubCommands: make(map[string]*SubCommand),
 	}
 	a.Flags[name] = flag
 
@@ -65,9 +86,46 @@ func (a *Arguments) Register(name string, desc string, defaultVal interface{}) {
 		flag.Value = flag.Int64(name, v, desc)
 	case float64:
 		flag.Value = flag.Float64(name, v, desc)
+	default:
+		return fmt.Errorf("unsupported type for default value")
 	}
+
+	return nil
 }
 
+// RegisterSubCommand registers a sub-command for an existing flag
+func (a *Arguments) RegisterSubCommand(flagName string, name string, desc string, value interface{}, defaultVal interface{}) error {
+	flag, ok := a.Flags[flagName]
+	if !ok {
+		return fmt.Errorf("flag %s does not exist", flagName)
+	}
+
+	subCommand := &SubCommand{
+		Name:        name,
+		Description: desc,
+		DefaultVal:  defaultVal,
+	}
+	flag.SubCommands[name] = subCommand
+
+	switch v := defaultVal.(type) {
+	case bool:
+		subCommand.Value = flag.Bool(name, v, desc)
+	case string:
+		subCommand.Value = flag.String(name, v, desc)
+	case int:
+		subCommand.Value = flag.Int(name, v, desc)
+	case int64:
+		subCommand.Value = flag.Int64(name, v, desc)
+	case float64:
+		subCommand.Value = flag.Float64(name, v, desc)
+	default:
+		return fmt.Errorf("unsupported type for default value")
+	}
+
+	return nil
+}
+
+// Parse parses the command-line arguments
 func (a *Arguments) Parse() error {
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, "Usage of %s:\n", os.Args[0])
@@ -78,6 +136,46 @@ func (a *Arguments) Parse() error {
 
 	if flag.NFlag() == 0 {
 		return ErrNoArgs
+	}
+
+	// Check for unknown arguments
+	seen := make(map[string]bool)
+	flag.Visit(func(f *flag.Flag) {
+		seen[f.Name] = true
+	})
+
+	// Check if any of the flags are unknown
+	for name := range seen {
+		if _, ok := a.Flags[name]; !ok {
+			return fmt.Errorf("%w: %q", ErrUnknownArg, "--"+name)
+		}
+	}
+
+	// Check for sub-commands
+	args := flag.Args()
+	if len(args) > 0 {
+		// Try to find a flag that has this sub-command
+		for _, arg := range args {
+			if !strings.HasPrefix(arg, "--") {
+				continue
+			}
+
+			found := false
+			for flagName, flag := range a.Flags {
+				if seen[flagName] {
+					if _, ok := flag.SubCommands[arg]; ok {
+						found = true
+						break
+					}
+				}
+			}
+
+			if !found {
+				for flagName := range seen {
+					return fmt.Errorf("%w %q for Argument %q", ErrUnknownSubCmd, arg, "--"+flagName)
+				}
+			}
+		}
 	}
 
 	return nil
