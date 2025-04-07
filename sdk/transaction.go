@@ -115,6 +115,36 @@ func NewTransaction(protocol string, from *Wallet, to *Wallet) (*Tx, error) {
 	return tx, nil
 }
 
+// MarshalJSON implements custom JSON marshaling for Transaction
+func (t *Tx) MarshalJSON() ([]byte, error) {
+	type Alias Tx
+	return json.Marshal(&struct {
+		*Alias
+		From string `json:"from"`
+		To   string `json:"to"`
+	}{
+		Alias: (*Alias)(t),
+		From:  t.From.GetAddress(),
+		To:    t.To.GetAddress(),
+	})
+}
+
+// UnmarshalJSON implements custom JSON unmarshaling for Transaction
+func (t *Tx) UnmarshalJSON(data []byte) error {
+	type Alias Tx
+	aux := &struct {
+		*Alias
+		From string `json:"from"`
+		To   string `json:"to"`
+	}{
+		Alias: (*Alias)(t),
+	}
+	if err := json.Unmarshal(data, &aux); err != nil {
+		return err
+	}
+	return nil
+}
+
 // isValidProtocol validates a provided protocol against the available protocols.
 func isValidProtocol(protocol string) error {
 	protocol = strings.ToUpper(protocol)

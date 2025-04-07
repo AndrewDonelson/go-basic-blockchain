@@ -49,6 +49,12 @@ type Blockchain struct {
 // NewBlockchain creates a new instance of the Blockchain struct with the provided configuration.
 func NewBlockchain(cfg *Config) *Blockchain {
 	log.Println("NewBlockchain called")
+
+	// If no config is provided, create a default one
+	if cfg == nil {
+		cfg = NewConfig()
+	}
+
 	bc := &Blockchain{
 		cfg:               cfg,
 		Blocks:            []*Block{},
@@ -58,6 +64,28 @@ func NewBlockchain(cfg *Config) *Blockchain {
 		NextBlockIndex:    1,
 		AvgTxsPerBlock:    0,
 		State:             &State{},
+	}
+
+	// Ensure local storage is initialized
+	if !LocalStorageAvailable() {
+		err := NewLocalStorage(cfg.DataPath)
+		if err != nil {
+			log.Printf("Error initializing local storage: %v", err)
+			return nil
+		}
+	}
+
+	// Ensure the node is initialized
+	if GetNode() == nil {
+		log.Println("Creating default node for blockchain")
+		nodeOpts := DefaultNodeOptions()
+		nodeOpts.Config = cfg
+
+		err := NewNode(nodeOpts)
+		if err != nil {
+			log.Printf("Error creating default node: %v", err)
+			return nil
+		}
 	}
 
 	err := bc.Load()
