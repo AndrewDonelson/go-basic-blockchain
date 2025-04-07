@@ -13,11 +13,18 @@ func main() {
 	err := sdk.Args.Parse()
 	if err == sdk.ErrNoArgs {
 		fmt.Println("No arguments provided. Using default configuration.")
-		// You might want to print some brief usage information here
 		fmt.Println("Use -h or --help for usage information.")
 	} else if err != nil {
 		fmt.Printf("Error parsing arguments: %v\n", err)
 		os.Exit(1)
+	}
+
+	// Get the custom environment file path if provided
+	envFile := sdk.Args.GetString("env")
+	if envFile != "" {
+		// Set the environment file path
+		os.Setenv("ENV_FILE", envFile)
+		log.Printf("Using custom environment file: %s\n", envFile)
 	}
 
 	// Create node options using the parsed flags

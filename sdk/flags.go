@@ -53,6 +53,9 @@ func init() {
 	// Register new command-line flags for seed node functionality
 	Args.Register("seed", "Run as a seed node", true)
 	Args.Register("seed-address", "Address of the seed node to connect to", "")
+
+	// Add new flag for environment file path
+	Args.Register("env", "Path to the .env file", "")
 }
 
 // NewArguments creates a new Arguments instance
