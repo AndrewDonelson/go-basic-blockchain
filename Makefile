@@ -194,6 +194,21 @@ else
 	$Q mkdir -p $@
 endif
 
+# Documentation generation targets
+.PHONY: docs docs-serve
+
+# Generate documentation
+docs: ; $(info $(M) generating documentation...) @ ## Generate project documentation
+	$Q $(MKDIR) $(CURDIR)/docs
+	integration$Q godoc -url . -html > $(CURDIR)/docs/index.html
+	$Q find ./sdk -name "*.go" -not -path "*/test*" | xargs godoc -url | sed 's|/pkg/|./|g' > $(CURDIR)/docs/sdk.html
+	$Q echo "Generating documentation overview..."
+	$Q $(GO) run scripts/generate_docs.go
+
+# Serve documentation locally
+docs-serve: docs ; $(info $(M) serving documentation...) @ ## Serve documentation locally
+	$Q godoc -http=:6060
+
 # Cross-compilation targets
 .PHONY: build-all
 build-all: ## Build for all platforms and architectures
