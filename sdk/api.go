@@ -205,8 +205,14 @@ func (api *API) Start() {
 	log.Fatal(http.ListenAndServe(apiHostname, api.router))
 }
 
+// GetConfig returns the configuration used to create the API instance.
 func (api *API) GetConfig() *Config {
 	return api.bc.GetConfig()
+}
+
+// GetRouter returns the router for testing purposes
+func (api *API) GetRouter() *mux.Router {
+	return api.router
 }
 
 // registerRoutes registers the API routes.

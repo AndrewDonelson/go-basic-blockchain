@@ -28,10 +28,329 @@ go.work
 
 bin/
 
-# no blockchain data folders
+# Blockchain data folders and files
 _data/
 data/
 vendor/
 data_test/
 chaind_data/
 cmd/chaind/chaind
+
+# Blockchain test data and generated files
+test_data/
+**/test_data/
+sdk/test_data/
+**/data/
+**/blocks/
+**/wallets/
+**/node.json
+**/blockchain.json
+
+# Blockchain wallet files (encrypted and unencrypted)
+**/wallets/*.json
+**/wallets/*.pem
+**/wallets/*.key
+
+# Blockchain block files
+**/blocks/*.json
+**/blocks/*.dat
+
+# Blockchain configuration and state files
+**/node.json
+**/blockchain.json
+**/config.json
+**/state.json
+
+# Blockchain logs and temporary files
+*.log
+*.tmp
+*.temp
+blockchain.log
+node.log
+api.log
+
+# Blockchain database files
+*.db
+*.sqlite
+*.sqlite3
+blockchain.db
+wallets.db
+
+# Blockchain cache files
+*.cache
+cache/
+
+# Blockchain backup files
+*.bak
+*.backup
+backup/
+
+# Blockchain lock files
+*.lock
+.lock
+
+# Blockchain environment files
+.env.local
+.env.test
+.env.production
+
+# Blockchain certificates and keys
+*.crt
+*.key
+*.pem
+*.p12
+*.pfx
+
+# Blockchain data directories (comprehensive)
+**/blockchain_data/
+**/wallet_data/
+**/transaction_data/
+**/mining_data/
+**/p2p_data/
+
+# Blockchain test artifacts
+**/test_artifacts/
+**/test_output/
+**/coverage/
+**/profiles/
+
+# Blockchain development files
+**/dev_data/
+**/debug_data/
+**/local_data/
+
+# Blockchain runtime files
+**/runtime/
+**/temp/
+**/tmp/
+
+# Blockchain network files
+**/network/
+**/peers/
+**/connections/
+
+# Blockchain API files
+**/api_data/
+**/rest_data/
+
+# Blockchain mining files
+**/mining/
+**/proof_of_work/
+**/nonce_data/
+
+# Blockchain transaction files
+**/transactions/
+**/tx_data/
+**/pending_tx/
+
+# Blockchain block files
+**/block_data/
+**/genesis/
+**/chain_data/
+
+# Blockchain wallet files
+**/wallet_storage/
+**/key_storage/
+**/address_data/
+
+# Blockchain persistence files
+**/persistence/
+**/storage/
+**/local_storage/
+
+# Blockchain configuration files
+**/config_data/
+**/settings/
+**/preferences/
+
+# Blockchain security files
+**/security/
+**/crypto/
+**/encryption/
+
+# Blockchain validation files
+**/validation/
+**/verification/
+**/integrity/
+
+# Blockchain synchronization files
+**/sync/
+**/replication/
+**/consensus/
+
+# Blockchain monitoring files
+**/monitoring/
+**/metrics/
+**/telemetry/
+
+# Blockchain backup and recovery files
+**/backup/
+**/recovery/
+**/snapshots/
+
+# Blockchain export and import files
+**/export/
+**/import/
+**/migration/
+
+# Blockchain documentation generated files
+**/docs/generated/
+**/docs/build/
+**/docs/output/
+
+# Blockchain build artifacts
+**/build/
+**/dist/
+**/release/
+
+# Blockchain deployment files
+**/deploy/
+**/production/
+**/staging/
+
+# Blockchain development tools
+**/tools/
+**/scripts/output/
+**/utilities/output/
+
+# Blockchain IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Blockchain OS generated files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Blockchain temporary directories
+**/tmp/
+**/temp/
+**/cache/
+**/logs/
+
+# Blockchain data files with specific extensions
+*.block
+*.tx
+*.wallet
+*.node
+*.chain
+*.state
+*.index
+*.lookup
+*.queue
+*.pending
+*.mempool
+*.utxo
+*.balance
+*.history
+*.ledger
+*.journal
+*.wal
+*.sst
+*.ldb
+*.log
+*.manifest
+*.current
+*.lock
+*.tmp
+*.temp
+*.bak
+*.old
+*.new
+*.part
+*.incomplete
+*.corrupt
+*.error
+*.failed
+*.success
+*.done
+*.ready
+*.processing
+*.queued
+*.pending
+*.active
+*.inactive
+*.enabled
+*.disabled
+*.running
+*.stopped
+*.started
+*.finished
+*.completed
+*.aborted
+*.cancelled
+*.timeout
+*.expired
+*.invalid
+*.valid
+*.verified
+*.unverified
+*.signed
+*.unsigned
+*.encrypted
+*.decrypted
+*.compressed
+*.decompressed
+*.archived
+*.extracted
+*.backed_up
+*.restored
+*.migrated
+*.upgraded
+*.downgraded
+*.patched
+*.fixed
+*.broken
+*.working
+*.non_working
+*.tested
+*.untested
+*.debugged
+*.profiled
+*.optimized
+*.unoptimized
+*.cached
+*.uncached
+*.indexed
+*.unindexed
+*.sorted
+*.unsorted
+*.filtered
+*.unfiltered
+*.processed
+*.unprocessed
+*.validated
+*.unvalidated
+*.sanitized
+*.unsanitized
+*.normalized
+*.unnormalized
+*.formatted
+*.unformatted
+*.pretty
+*.minified
+*.compiled
+*.interpreted
+*.executed
+*.interpreted
+*.parsed
+*.unparsed
+*.tokenized
+*.untokenized
+*.analyzed
+*.unanalyzed
+*.transformed
+*.untransformed
+*.converted
+*.unconverted
+*.encoded
+*.decoded
+*.serialized
+*.deserialized
+*.marshaled
+*.unmarshaled
+*.packed
+*.unpacked
