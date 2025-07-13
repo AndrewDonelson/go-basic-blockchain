@@ -9,11 +9,23 @@ import (
 )
 
 func TestPersistTransaction(t *testing.T) {
-	from, err := NewWallet(NewWalletOptions(ThisBlockchainOrganizationID, ThisBlockchainAppID, ThisBlockchainAdminUserID, ThisBlockchainDevAssetID, "walletEven", testPassPhrase, []string{"tag2", "tag4"}))
-	assert.NoError(t, err)
+	walletEven, err := NewWallet(NewWalletOptions(ThisBlockchainOrganizationID, ThisBlockchainAppID, ThisBlockchainAdminUserID, ThisBlockchainDevAssetID, "walletEven", testPassPhrase, []string{"tag2", "tag4"}))
+	if err != nil {
+		t.Fatalf("Failed to create wallet: %v", err)
+	}
+	err = walletEven.Open(testPassPhrase)
+	if err != nil {
+		t.Fatalf("Failed to open wallet: %v", err)
+	}
 
-	to, err := NewWallet(NewWalletOptions(ThisBlockchainOrganizationID, ThisBlockchainAppID, ThisBlockchainAdminUserID, ThisBlockchainDevAssetID, "walletOdd", testPassPhrase, []string{"tag1", "tag3"}))
-	assert.NoError(t, err)
+	walletOdd, err := NewWallet(NewWalletOptions(ThisBlockchainOrganizationID, ThisBlockchainAppID, ThisBlockchainAdminUserID, ThisBlockchainDevAssetID, "walletOdd", testPassPhrase, []string{"tag1", "tag3"}))
+	if err != nil {
+		t.Fatalf("Failed to create wallet: %v", err)
+	}
+	err = walletOdd.Open(testPassPhrase)
+	if err != nil {
+		t.Fatalf("Failed to open wallet: %v", err)
+	}
 
 	fee := transactionFee
 	data := map[string]string{
@@ -21,13 +33,13 @@ func TestPersistTransaction(t *testing.T) {
 		"key2": "value2",
 	}
 
-	persist, err := NewPersistTransaction(from, to, fee, data)
+	persist, err := NewPersistTransaction(walletEven, walletOdd, fee, data)
 	assert.NoError(t, err)
 	assert.NotNil(t, persist)
 
 	assert.Equal(t, PersistProtocolID, persist.Protocol)
-	assert.Equal(t, from, persist.From)
-	assert.Equal(t, to, persist.To)
+	assert.Equal(t, walletEven, persist.From)
+	assert.Equal(t, walletOdd, persist.To)
 	assert.Equal(t, fee, persist.Fee)
 	//assert.Equal(t, "pending", persist.Status)
 	assert.Equal(t, data, persist.Data)
@@ -41,7 +53,7 @@ func TestPersistTransaction(t *testing.T) {
 	bc := NewBlockchain(NewConfig())
 
 	// sign the transaction
-	persist.Signature, err = persist.Sign([]byte(from.PrivatePEM()))
+	persist.Signature, err = persist.Sign([]byte(walletEven.PrivatePEM()))
 	assert.NoError(t, err)
 
 	err = persist.Send(bc)
