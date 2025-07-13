@@ -36,7 +36,11 @@ func TestMain(m *testing.M) {
 func TestBlockchain(t *testing.T) {
 	var err error
 
-	bc := NewBlockchain(NewConfig())
+	// Use isolated config to avoid conflicts
+	config := NewConfig()
+	config.DataPath = "./test_data_blockchain"
+
+	bc := NewBlockchain(config)
 	bc.Run(1)
 
 	// Create wallets and add transactions
@@ -76,7 +80,7 @@ func TestBlockchain(t *testing.T) {
 				continue
 			}
 			bankTx.Signature = signature
-			
+
 			bc.AddTransaction(bankTx)
 			successfulTransactions++
 
@@ -96,7 +100,7 @@ func TestBlockchain(t *testing.T) {
 				continue
 			}
 			msgTx.Signature = msgSignature
-			
+
 			bc.AddTransaction(msgTx)
 			successfulTransactions++
 		}

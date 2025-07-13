@@ -157,7 +157,10 @@ func TestWallet(t *testing.T) {
 	assert.False(t, wallet1.Encrypted)
 
 	// Test sending a transaction
-	bc := NewBlockchain(NewConfig())
+	// Use isolated config to avoid conflicts
+	config := NewConfig()
+	config.DataPath = "./test_data_wallet"
+	bc := NewBlockchain(config)
 	tx, err := NewBankTransaction(wallet1, wallet2, 1.0)
 	assert.NoError(t, err)
 

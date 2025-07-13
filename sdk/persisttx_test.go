@@ -49,8 +49,10 @@ func TestPersistTransaction(t *testing.T) {
 	assert.Equal(t, "Persist transaction processed successfully", result)
 	assert.Equal(t, TransactionStatus("processed"), persist.Status)
 
-	// Create a new test chain
-	bc := NewBlockchain(NewConfig())
+	// Create a new test chain with isolated data path
+	config := NewConfig()
+	config.DataPath = "./test_data_persist"
+	bc := NewBlockchain(config)
 
 	// sign the transaction
 	persist.Signature, err = persist.Sign([]byte(walletEven.PrivatePEM()))
