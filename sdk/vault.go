@@ -8,6 +8,7 @@ import (
 	"crypto/rand"
 	"crypto/x509"
 	"encoding/pem"
+	"fmt"
 	"log"
 )
 
@@ -76,8 +77,25 @@ func (p *PEM) AsBytes(s string) []byte {
 // Vault is a struct that holds the data (keypairs) associated with the wallet as well as the private key and PEM encoded keys
 type Vault struct {
 	Data map[string]interface{} // Data (keypairs) associated with the wallet
-	Key  *ecdsa.PrivateKey
+	Key  *ecdsa.PrivateKey      `json:"-"`
 	Pem  *PEM
+}
+
+// RestoreKeyFromPEM reconstructs the ecdsa.PrivateKey from the PEM string after loading from disk
+func (v *Vault) RestoreKeyFromPEM() error {
+	if v.Pem == nil || v.Pem.PrivateKey == "" {
+		return fmt.Errorf("PEM or private key PEM is empty")
+	}
+	block, _ := pem.Decode([]byte(v.Pem.PrivateKey))
+	if block == nil {
+		return fmt.Errorf("failed to decode PEM block")
+	}
+	key, err := x509.ParseECPrivateKey(block.Bytes)
+	if err != nil {
+		return fmt.Errorf("failed to parse EC private key: %v", err)
+	}
+	v.Key = key
+	return nil
 }
 
 // NewVault creates a new Vault struct
@@ -140,12 +158,25 @@ func (v *Vault) GetData(key string) (interface{}, error) {
 
 // NewKeyPair creates a new keypair for the wallet
 func (v *Vault) NewKeyPair() (err error) {
-	v.Key, err = ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err != nil {
-		return err
+	// Try different elliptic curves in order of preference
+	curves := []elliptic.Curve{
+		elliptic.P256(),
+		elliptic.P384(),
+		elliptic.P521(),
 	}
-	v.Pem = NewPEM(v.Key)
-	return nil
+	curveNames := []string{"P-256", "P-384", "P-521"}
+	for i, curve := range curves {
+		key, err := ecdsa.GenerateKey(curve, rand.Reader)
+		if err == nil {
+			log.Printf("Successfully generated key with curve %s", curveNames[i])
+			v.Key = key
+			v.Pem = NewPEM(key)
+			return nil
+		}
+		log.Printf("Failed to generate key with curve %s: %v", curveNames[i], err)
+	}
+	// If all curves fail, do not set v.Key or v.Pem
+	return fmt.Errorf("failed to generate keypair with any supported curve: %v", err)
 }
 
 // PrivatePEM returns the private key

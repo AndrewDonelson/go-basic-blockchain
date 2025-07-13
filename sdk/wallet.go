@@ -246,14 +246,27 @@ func (w *Wallet) GetTags() []string {
 	if w.Encrypted {
 		return nil
 	}
-
 	tags, err := w.GetData("tags")
 	if err != nil {
 		log.Println(err)
 		return nil
 	}
-
-	return tags.([]string)
+	// Handle both []string and []interface{} (from JSON)
+	switch v := tags.(type) {
+	case []string:
+		return v
+	case []interface{}:
+		strs := make([]string, len(v))
+		for i, val := range v {
+			str, ok := val.(string)
+			if ok {
+				strs[i] = str
+			}
+		}
+		return strs
+	default:
+		return nil
+	}
 }
 
 // GetAddress generates and returns the wallet address.
@@ -289,7 +302,12 @@ func (w *Wallet) vaultToBytes() ([]byte, error) {
 // this is used by the wallet to decrypt the data (keypairs) associated with the wallet.
 
 func (w *Wallet) bytesToVault(bytes []byte) error {
-	return json.Unmarshal(bytes, &w.vault)
+	err := json.Unmarshal(bytes, &w.vault)
+	if err != nil {
+		return err
+	}
+	// Restore the key from PEM after loading
+	return w.vault.RestoreKeyFromPEM()
 }
 
 // / PrivateKey returns the private key from the vault associated with the wallet.
@@ -361,12 +379,22 @@ func (w *Wallet) PublicBytes() ([]byte, error) {
 		return nil, errors.New("cannot get public key from an encrypted wallet")
 	}
 
-	if w.vault.Key.Public() == nil {
+	pub := w.vault.Key.Public()
+	if pub == nil {
 		return nil, errors.New("public key is nil")
 	}
 
-	bytes, err := x509.MarshalPKIXPublicKey(w.vault.Key.Public())
+	// Diagnostic: log the type
+	log.Printf("Public key type: %T", pub)
+	if ecdsaPub, ok := pub.(*ecdsa.PublicKey); ok {
+		log.Printf("Public key curve: %T", ecdsaPub.Curve)
+	} else {
+		return nil, errors.New("public key is not of type *ecdsa.PublicKey")
+	}
+
+	bytes, err := x509.MarshalPKIXPublicKey(pub)
 	if err != nil {
+		log.Printf("x509.MarshalPKIXPublicKey error: %v", err)
 		return nil, err
 	}
 
