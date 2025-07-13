@@ -6,6 +6,7 @@ package sdk
 import (
 	"crypto/sha512"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"log"
 	"math/big"
@@ -14,6 +15,11 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/AndrewDonelson/go-basic-blockchain/internal/helios/algorithm"
+	"github.com/AndrewDonelson/go-basic-blockchain/internal/helios/difficulty"
+	"github.com/AndrewDonelson/go-basic-blockchain/internal/helios/sidechain"
+	"github.com/AndrewDonelson/go-basic-blockchain/internal/helios/validation"
 )
 
 // State represents the current state of the blockchain.
@@ -44,6 +50,13 @@ type Blockchain struct {
 	NextBlockIndex    int              // Next block index
 	AvgTxsPerBlock    float64          // Average number of transactions per block
 	State             *State           // Current state of the blockchain
+
+	// Helios integration
+	heliosAlgorithm    *algorithm.HeliosAlgorithm     // Helios proof-of-work algorithm
+	heliosValidator    *validation.ProofValidator     // Helios proof validator
+	difficultyAdjuster *difficulty.DifficultyAdjuster // Helios difficulty adjustment
+	sidechainRouter    *sidechain.ProtocolRouter      // Sidechain protocol router
+	useHeliosMining    bool                           // Flag to enable/disable Helios mining
 }
 
 // NewBlockchain creates a new instance of the Blockchain struct with the provided configuration.
@@ -64,7 +77,25 @@ func NewBlockchain(cfg *Config) *Blockchain {
 		NextBlockIndex:    1,
 		AvgTxsPerBlock:    0,
 		State:             &State{},
+		useHeliosMining:   true, // Enable Helios mining by default
 	}
+
+	// Initialize Helios components
+	heliosConfig := algorithm.DefaultHeliosConfig()
+	bc.heliosAlgorithm = algorithm.NewHeliosAlgorithm(heliosConfig)
+	bc.heliosValidator = validation.NewProofValidator(bc.heliosAlgorithm)
+
+	difficultyConfig := difficulty.DefaultDifficultyAdjustmentConfig()
+	bc.difficultyAdjuster = difficulty.NewDifficultyAdjuster(difficultyConfig)
+
+	bc.sidechainRouter = sidechain.NewProtocolRouter()
+
+	// Set up sidechain router callbacks
+	bc.sidechainRouter.SetCallbacks(
+		bc.onTransactionValidated,
+		bc.onTransactionFailed,
+		bc.onRollupCreated,
+	)
 
 	// Ensure local storage is initialized
 	if !LocalStorageAvailable() {
@@ -345,17 +376,79 @@ func (bc *Blockchain) LoadExistingBlocks() error {
 	return nil
 }
 
-// AddTransaction adds a new transaction to the transaction queue.
+// AddTransaction adds a transaction to the blockchain's transaction queue.
 func (bc *Blockchain) AddTransaction(transaction Transaction) {
 	bc.mux.Lock()
-	transaction.Hash()
-	bc.TransactionQueue = append(bc.TransactionQueue, transaction)
-	bc.mux.Unlock()
-	log.Printf("[%s] Added TX to queue: %v\n", time.Now().Format(logDateTimeFormat), transaction)
+	defer bc.mux.Unlock()
+
+	// Route transaction through sidechain router if it's a supported protocol
+	protocol := transaction.GetProtocol()
+	if protocol == BankProtocolID || protocol == MessageProtocolID {
+		// Convert transaction to sidechain format
+		txData, err := json.Marshal(transaction)
+		if err != nil {
+			log.Printf("Failed to marshal transaction for sidechain: %v", err)
+			// Fall back to direct addition
+			bc.TransactionQueue = append(bc.TransactionQueue, transaction)
+			return
+		}
+
+		// Route through sidechain router
+		_, err = bc.sidechainRouter.RouteTransaction(
+			protocol,
+			txData,
+			transaction.GetSenderWallet().GetAddress(),
+			transaction.GetRecipientWallet().GetAddress(),
+		)
+		if err != nil {
+			log.Printf("Failed to route transaction through sidechain: %v", err)
+			// Fall back to direct addition
+			bc.TransactionQueue = append(bc.TransactionQueue, transaction)
+			return
+		}
+
+		log.Printf("Transaction routed through sidechain: %s (protocol: %s)",
+			transaction.GetID(), protocol)
+	} else {
+		// For other protocols, add directly to queue
+		bc.TransactionQueue = append(bc.TransactionQueue, transaction)
+	}
 }
 
 // Mine attempts to mine a new block for the blockchain.
 func (bc *Blockchain) Mine(block *Block, difficulty int) *Block {
+	if bc.useHeliosMining {
+		return bc.mineWithHelios(block, difficulty)
+	}
+	return bc.mineWithSimplePoW(block, difficulty)
+}
+
+// mineWithHelios mines a block using the Helios three-stage algorithm
+func (bc *Blockchain) mineWithHelios(block *Block, difficulty int) *Block {
+	log.Printf("Mining block [#%s] with Helios algorithm...", block.Index.String())
+
+	// Convert difficulty to big.Int target
+	targetDifficulty := new(big.Int).Lsh(big.NewInt(1), uint(256-difficulty))
+
+	// Create block header for mining
+	blockHeader := block.createBlockHeaderForMining()
+
+	// Mine using Helios algorithm
+	proof, err := bc.heliosAlgorithm.Mine(blockHeader, targetDifficulty)
+	if err != nil {
+		log.Printf("Helios mining failed: %v", err)
+		return block
+	}
+
+	// Update block with Helios proof
+	block.updateWithHeliosProof(proof)
+
+	log.Printf("Helios mining successful: nonce=%d, hash=%s", proof.Nonce, proof.FinalHash)
+	return block
+}
+
+// mineWithSimplePoW mines a block using the original simple proof-of-work
+func (bc *Blockchain) mineWithSimplePoW(block *Block, difficulty int) *Block {
 	prefix := strings.Repeat("0", difficulty)
 	log.Printf("Mining a new Block [#%s] with [%d] Txs...", block.Index.String(), len(block.Transactions))
 	for i := 0; i < maxNonce; i++ {
@@ -662,10 +755,26 @@ func (bc *Blockchain) GetMempoolSize() int {
 	return len(bc.TransactionQueue)
 }
 
-// GetBlockCount returns the total number of blocks in the blockchain.
+// GetBlockCount returns the number of blocks in the blockchain.
 func (bc *Blockchain) GetBlockCount() int {
 	bc.mux.Lock()
 	defer bc.mux.Unlock()
-
 	return len(bc.Blocks)
+}
+
+// Sidechain router callback methods
+func (bc *Blockchain) onTransactionValidated(tx *sidechain.ProtocolTransaction) error {
+	log.Printf("Transaction validated: %s (protocol: %s)", tx.ID, tx.Protocol)
+	return nil
+}
+
+func (bc *Blockchain) onTransactionFailed(tx *sidechain.ProtocolTransaction, errorMsg string) error {
+	log.Printf("Transaction failed: %s (protocol: %s) - %s", tx.ID, tx.Protocol, errorMsg)
+	return nil
+}
+
+func (bc *Blockchain) onRollupCreated(rollup *sidechain.RollupBlock) error {
+	log.Printf("Rollup block created: %s (protocol: %s) with %d transactions",
+		rollup.ID, rollup.Protocol, len(rollup.Transactions))
+	return nil
 }

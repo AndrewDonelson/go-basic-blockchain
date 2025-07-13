@@ -16,6 +16,8 @@ import (
 	"math/big"
 	"os"
 	"time"
+
+	"github.com/AndrewDonelson/go-basic-blockchain/internal/helios/algorithm"
 )
 
 const (
@@ -198,11 +200,35 @@ func DeserializeBlock(d []byte) (*Block, error) {
 
 // CalculateTotalFees calculates the total transaction fees in the block.
 func (b *Block) CalculateTotalFees() float64 {
-	var totalFees float64
+	totalFees := 0.0
 	for _, tx := range b.Transactions {
 		totalFees += tx.GetFee()
 	}
 	return totalFees
+}
+
+// createBlockHeaderForMining creates a block header for Helios mining
+func (b *Block) createBlockHeaderForMining() []byte {
+	// Create a serialized representation of the block header for mining
+	headerData := fmt.Sprintf("%d:%s:%s:%d:%d",
+		b.Header.Version,
+		b.Header.PreviousHash,
+		hex.EncodeToString(b.Header.MerkleRoot),
+		b.Header.Timestamp.Unix(),
+		b.Header.Difficulty)
+
+	return []byte(headerData)
+}
+
+// updateWithHeliosProof updates the block with Helios proof data
+func (b *Block) updateWithHeliosProof(proof *algorithm.HeliosProof) {
+	// Update block with Helios proof information
+	b.Header.Nonce = uint32(proof.Nonce)
+	b.Header.Timestamp = proof.Timestamp
+	b.Hash = proof.FinalHash
+
+	// Store Helios proof data in block (you might want to add a field for this)
+	// For now, we'll just update the hash
 }
 
 // CanAddTransaction checks if adding a new transaction would exceed the maximum block size.

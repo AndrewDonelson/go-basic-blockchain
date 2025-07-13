@@ -41,6 +41,7 @@ type Transaction interface {
 	GetHash() string
 	GetSignature() string
 	GetSenderWallet() *Wallet
+	GetRecipientWallet() *Wallet
 	GetFee() float64 // New method to get the transaction fee
 	GetStatus() TransactionStatus
 	SetStatus(status TransactionStatus)
@@ -179,6 +180,11 @@ func (t *Tx) GetProtocol() string {
 // GetSenderWallet retrieves the sender's wallet from the blockchain based on the sender's address.
 func (t *Tx) GetSenderWallet() *Wallet {
 	return t.From
+}
+
+// GetRecipientWallet retrieves the recipient's wallet from the blockchain based on the recipient's address.
+func (t *Tx) GetRecipientWallet() *Wallet {
+	return t.To
 }
 
 // GetID returns the ID of the transaction.
