@@ -2,18 +2,18 @@ package sdk
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"net/http"
-	"os"
+	"sync"
 	"testing"
 	"time"
-	"context"
-	"sync"
-	"github.com/gorilla/mux"
+
+	"github.com/google/uuid"
 )
 
 const (
-	baseURL = "http://localhost:8100"
+	baseURL = "http://localhost:8200"
 	apiKey  = "69a082ff3996745bd4b48bcc92d5bb40ff97115896183f1cb53a3409f818b15f"
 )
 
@@ -24,6 +24,7 @@ type testServer struct {
 }
 
 var (
+	testNode           *Node
 	testServerInstance *testServer
 	serverMutex        sync.Mutex
 )
@@ -54,84 +55,65 @@ func startTestServer(t *testing.T) {
 	defer serverMutex.Unlock()
 
 	if testServerInstance != nil {
-		return // Server already running
+		return // Already started
 	}
 
-	// Initialize test node if not already done
-	initializeTestNode(t)
+	// Create isolated test node instead of using global node
+	testNode = &Node{}
+	testNode.Lock()
+	defer testNode.Unlock()
 
-	// Get the node and its API
-	node := GetNode()
-	if node == nil {
-		t.Fatal("Failed to get node instance")
-	}
+	// Initialize config
+	testNode.Config = NewConfig()
+	testNode.Config.DataPath = "./test_data"
+	testNode.Config.EnableAPI = true
+	testNode.Config.APIHostName = ":8200"
+	testNode.Config.P2PHostName = ":8201"
 
-	if node.API == nil {
-		t.Fatal("Node API is nil")
-	}
-
-	// Ensure the API is properly initialized with middleware
-	api := node.API
-	
-	// Create a new router with middleware for testing
-	router := mux.NewRouter()
-	
-	// Add logging middleware
-	router.Use(loggingMiddleware)
-	
-	// Add API key middleware
-	apiKeyMiddleware, err := ApiKeyMiddleware(defaulAPIKeytConfig, api.log)
+	// Initialize local storage
+	err := NewLocalStorage(testNode.Config.DataPath)
 	if err != nil {
-		t.Fatalf("Error initializing API key middleware: %v", err)
-	}
-	router.Use(apiKeyMiddleware)
-	
-	// Register all the same routes as the original API
-	router.HandleFunc("/", api.handleHome).Methods("GET")
-	router.HandleFunc("/version", api.handleVersion).Methods("GET")
-	router.HandleFunc("/info", api.handleInfo).Methods("GET")
-	router.HandleFunc("/health", api.handleHealth).Methods("GET")
-	router.HandleFunc("/account/register", api.handleAccountRegister).Methods("GET")
-	router.HandleFunc("/account/login", api.handleAccountLogin).Methods("GET")
-	router.HandleFunc("/account/verify", api.handleAccountVerify).Methods("GET")
-	router.HandleFunc("/blockchain", api.handleBlockchain).Methods("GET")
-	router.HandleFunc("/blockchain/blocks", api.handleBrowseBlocks).Methods("GET")
-	router.HandleFunc("/blockchain/blocks/{index}", api.handleViewBlock).Methods("GET")
-	router.HandleFunc("/blockchain/blocks/{index}/transactions", api.handleBrowseTransactionsInBlock).Methods("GET")
-	router.HandleFunc("/blockchain/blocks/{index}/transactions/{id}", api.handleViewTransactionInBlock).Methods("GET")
-	router.HandleFunc("/blockchain/blocks/{index}/transactions/{protocol}", api.handleBrowseTransactionsByProtocolInBlock).Methods("GET")
-	router.HandleFunc("/blockchain/wallets", api.handleBrowseWallets).Methods("GET")
-	router.HandleFunc("/blockchain/wallets/new", api.handleCreateWallet).Methods("GET")
-	router.HandleFunc("/blockchain/wallets/{id}", api.handleViewWallet).Methods("GET")
-	router.HandleFunc("/blockchain/wallets/{id}", api.handleUpdateWallet).Methods("POST")
-	router.HandleFunc("/blockchain/wallets/{id}/balance", api.handleViewWalletBalance).Methods("GET")
-	router.HandleFunc("/blockchain/wallets/{id}/transactions", api.handleBrowseTransactionsForWallet).Methods("GET")
-	router.HandleFunc("/blockchain/wallets/{id}/transactions/{id}", api.handleViewTransactionForWallet).Methods("GET")
-	router.HandleFunc("/blockchain/wallets/{id}/transactions/{protocol}", api.handleBrowseTransactionsByProtocolForWallet).Methods("GET")
-	router.HandleFunc("/blockchain/transactions", api.handleBrowseTransactions).Methods("GET")
-	router.HandleFunc("/blockchain/transactions/{id}", api.handleViewTransaction).Methods("GET")
-	router.HandleFunc("/blockchain/transactions/{protocol}", api.handleBrowseTransactionsByProtocol).Methods("GET")
-
-	// Create a new server instance for testing
-	server := &http.Server{
-		Addr:    ":8100",
-		Handler: router,
+		t.Fatalf("Failed to initialize local storage: %v", err)
 	}
 
-	testServerInstance = &testServer{
-		server: server,
+	// Initialize blockchain
+	testNode.Blockchain = NewBlockchain(testNode.Config)
+	if testNode.Blockchain == nil {
+		t.Fatalf("Failed to initialize blockchain")
 	}
+
+	// Initialize API
+	testNode.API = NewAPI(testNode.Blockchain)
+
+	// Initialize P2P
+	testNode.P2P = NewP2P()
+
+	// Set as seed node
+	testNode.P2P.SetAsSeedNode()
+
+	// Mark as initialized
+	testNode.initialized = true
+	testNode.ID = uuid.New().String()
+
+	t.Log("Initializing test node...")
+	testNode.Config.Show()
 
 	// Start the server in a goroutine
+	testServerInstance = &testServer{}
+	testServerInstance.server = &http.Server{
+		Addr:    ":8200",
+		Handler: testNode.API.router,
+	}
+
 	testServerInstance.wg.Add(1)
 	go func() {
 		defer testServerInstance.wg.Done()
-		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		if err := testServerInstance.server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			t.Logf("Server error: %v", err)
 		}
 	}()
 
-	// Wait a moment for the server to start
+	// Give the server time to start
 	time.Sleep(100 * time.Millisecond)
 }
 
@@ -143,7 +125,7 @@ func stopTestServer() {
 	if testServerInstance != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		
+
 		testServerInstance.server.Shutdown(ctx)
 		testServerInstance.wg.Wait()
 		testServerInstance = nil
@@ -152,31 +134,10 @@ func stopTestServer() {
 
 // Helper function to initialize test node if not already initialized
 func initializeTestNode(t *testing.T) {
-	if GetNode() == nil {
-		t.Log("Initializing test node...")
-
-		// Prepare node options
-		nodeOpts := DefaultNodeOptions()
-		nodeOpts.IsSeed = true
-		nodeOpts.DataPath = "./test_data"
-
-		// Ensure data path exists
-		err := os.MkdirAll(nodeOpts.DataPath, 0755)
-		if err != nil {
-			t.Fatalf("Failed to create test data path: %v", err)
-		}
-
-		// Create a new configuration if not exists
-		if nodeOpts.Config == nil {
-			nodeOpts.Config = NewConfig()
-		}
-		nodeOpts.Config.DataPath = nodeOpts.DataPath
-
-		// Create the node
-		err = NewNode(nodeOpts)
-		if err != nil {
-			t.Fatalf("Failed to create test node: %v", err)
-		}
+	// This function is now redundant since startTestServer handles everything
+	// But we'll keep it for compatibility
+	if testNode == nil {
+		startTestServer(t)
 	}
 }
 
@@ -354,10 +315,13 @@ func TestBankTransaction(t *testing.T) {
 	// Ensure node is initialized
 	initializeTestNode(t)
 
-	// Get the node
-	node := GetNode()
-	if node == nil {
-		t.Fatal("Failed to get node instance")
+	// Use the test node instead of global node
+	if testNode == nil {
+		t.Fatal("Failed to get test node instance")
+	}
+
+	if testNode.Blockchain == nil {
+		t.Fatal("Test node blockchain is nil after initialization")
 	}
 
 	// Generate strong passwords
@@ -447,7 +411,7 @@ func TestBankTransaction(t *testing.T) {
 	bankTx.Signature = signature
 
 	// Send the transaction to the blockchain
-	err = bankTx.Send(node.Blockchain)
+	err = bankTx.Send(testNode.Blockchain)
 	if err != nil {
 		t.Fatalf("Failed to send transaction: %v", err)
 	}
@@ -456,7 +420,7 @@ func TestBankTransaction(t *testing.T) {
 	time.Sleep(2 * time.Second)
 
 	// Verify the transaction was added to the transaction queue
-	pendingTxs := node.Blockchain.GetPendingTransactions()
+	pendingTxs := testNode.Blockchain.GetPendingTransactions()
 	found := false
 	for _, tx := range pendingTxs {
 		if tx.GetID() == bankTx.GetID() {

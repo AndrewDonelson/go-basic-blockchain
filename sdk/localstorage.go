@@ -34,14 +34,18 @@ type LocalStorage struct {
 var localStorage *LocalStorage
 
 // NewLocalStorage creates a new instance of the LocalStorage struct, which is the data persist manager
-// using the Go standard library's file system. If dataPath is an empty string, it will use the default
-// data path "./data". The function also performs any initial setup or data loading if needed.
-//
-// If local storage has already been initialized, this function will return an error.
+// using the Go standard library's file system. It takes a dataPath parameter to specify where the data
+// should be stored. If local storage has already been initialized, this function will update the data path
+// if it's different from the current one.
 func NewLocalStorage(dataPath string) error {
 	if localStorage != nil {
-		// Return the existing instance
-		return fmt.Errorf("local storage already initialized")
+		// If already initialized, check if we need to update the data path
+		if localStorage.dataPath != dataPath && dataPath != "" {
+			localStorage.dataPath = dataPath
+			localStorage.setup() // Re-setup with new path
+			fmt.Println("local storage reinitialized @", localStorage.dataPath)
+		}
+		return nil
 	}
 
 	// Create the LocalStorage instance

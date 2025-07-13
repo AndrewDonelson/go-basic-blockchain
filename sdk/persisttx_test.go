@@ -47,7 +47,7 @@ func TestPersistTransaction(t *testing.T) {
 	// Process the transaction
 	result := persist.Process()
 	assert.Equal(t, "Persist transaction processed successfully", result)
-	assert.Equal(t, "processed", persist.Status)
+	assert.Equal(t, TransactionStatus("processed"), persist.Status)
 
 	// Create a new test chain
 	bc := NewBlockchain(NewConfig())
