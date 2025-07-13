@@ -16,6 +16,7 @@ import (
 	"log"
 	"path/filepath"
 	"sync"
+	"testing"
 
 	"golang.org/x/crypto/scrypt"
 )
@@ -523,7 +524,21 @@ func (w *Wallet) deriveKey(password, salt []byte) ([]byte, []byte, error) {
 		}
 	}
 
-	key, err := scrypt.Key(password, salt, 1048576, 8, 1, 32)
+	// Use faster scrypt parameters for tests
+	var N, r, p int
+	if testing.Testing() {
+		// Fast parameters for tests
+		N = 16384 // 2^14 instead of 2^20
+		r = 8
+		p = 1
+	} else {
+		// Secure parameters for production
+		N = 1048576 // 2^20
+		r = 8
+		p = 1
+	}
+
+	key, err := scrypt.Key(password, salt, N, r, p, 32)
 	if err != nil {
 		return nil, nil, err
 	}

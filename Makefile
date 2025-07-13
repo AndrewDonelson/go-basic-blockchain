@@ -106,23 +106,23 @@ endif
 
 .PHONY: test
 test: fmt ; $(info $(M) running tests...) @ ## Run tests
-	$Q $(GO) test -v -race -cover $(TESTPKGS)
+	$Q $(GO) test -v -race -cover -timeout 60s $(TESTPKGS)
 
 .PHONY: test-short
 test-short: ; $(info $(M) running short tests...) @ ## Run tests in short mode
-	$Q $(GO) test -v -short $(TESTPKGS)
+	$Q $(GO) test -v -short -timeout 60s $(TESTPKGS)
 
 .PHONY: test-unit
 test-unit: ; $(info $(M) running unit tests...) @ ## Run only unit tests
-	$Q $(GO) test -v -run 'Unit' $(TESTPKGS)
+	$Q $(GO) test -v -run 'Unit' -timeout 60s $(TESTPKGS)
 
 .PHONY: test-integration
 test-integration: ; $(info $(M) running integration tests...) @ ## Run only integration tests
-	$Q $(GO) test -v -run 'Integration' $(TESTPKGS)
+	$Q $(GO) test -v -run 'Integration' -timeout 60s $(TESTPKGS)
 
 .PHONY: bench
 bench: ; $(info $(M) running benchmarks...) @ ## Run benchmarks
-	$Q $(GO) test -run=^$$ -bench=. -benchmem $(TESTPKGS)
+	$Q $(GO) test -run=^$$ -bench=. -benchmem -timeout 60s $(TESTPKGS)
 
 .PHONY: test-coverage
 test-coverage: ; $(info $(M) running coverage tests...) @ ## Run coverage tests
@@ -132,7 +132,7 @@ test-coverage: ; $(info $(M) running coverage tests...) @ ## Run coverage tests
 					grep '^$(MODULE)/' | \
 					tr '\n' ',' | sed 's/,$$//') \
 		-covermode=atomic \
-		-coverprofile="$(COVERAGE_PROFILE)" $(TESTPKGS)
+		-coverprofile="$(COVERAGE_PROFILE)" -timeout 60s $(TESTPKGS)
 	$Q $(GO) tool cover -html=$(COVERAGE_PROFILE) -o $(COVERAGE_HTML)
 	$Q $(GO) tool cover -func=$(COVERAGE_PROFILE)
 
