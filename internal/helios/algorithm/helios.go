@@ -167,7 +167,7 @@ func (h *HeliosAlgorithm) Mine(blockHeader []byte, targetDifficulty *big.Int) (*
 		nonce++
 
 		// Optional: Add timeout to prevent infinite mining
-		if time.Since(startTime) > 4*time.Second {
+		if time.Since(startTime) > 18*time.Second {
 			return nil, fmt.Errorf("mining timeout reached")
 		}
 	}
