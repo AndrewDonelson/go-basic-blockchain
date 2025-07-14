@@ -50,20 +50,21 @@ type HeliosConfig struct {
 }
 
 // DefaultHeliosConfig returns the default configuration for Helios
+// Optimized for 20-second block time
 func DefaultHeliosConfig() *HeliosConfig {
 	return &HeliosConfig{
 		MemoryWeight:         40,
 		TimeLockWeight:       30,
 		CryptoWeight:         30,
-		MemoryBaseSize:       64 * 1024 * 1024, // 64MB
+		MemoryBaseSize:       1 * 1024 * 1024, // 1MB (reduced from 64MB)
 		MemoryScaleFactor:    1.0,
-		MemoryIterations:     3,
-		TimeLockBaseDuration: 50 * time.Millisecond,
+		MemoryIterations:     1,                    // Reduced from 3
+		TimeLockBaseDuration: 2 * time.Millisecond, // Reduced from 50ms
 		TimeLockScaleFactor:  1.0,
-		TimeLockIterations:   1000,
+		TimeLockIterations:   50, // Reduced from 1000
 		CryptoKeySize:        32,
 		CryptoBlockSize:      16,
-		CryptoIterations:     10000,
+		CryptoIterations:     100, // Reduced from 10000
 		EnableEnergyTracking: false,
 	}
 }
@@ -166,7 +167,7 @@ func (h *HeliosAlgorithm) Mine(blockHeader []byte, targetDifficulty *big.Int) (*
 		nonce++
 
 		// Optional: Add timeout to prevent infinite mining
-		if time.Since(startTime) > 30*time.Second {
+		if time.Since(startTime) > 4*time.Second {
 			return nil, fmt.Errorf("mining timeout reached")
 		}
 	}

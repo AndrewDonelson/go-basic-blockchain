@@ -8,10 +8,10 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"path/filepath"
 	"sync"
 	"time"
 
+	"github.com/AndrewDonelson/go-basic-blockchain/internal/progress"
 	"github.com/pborman/uuid"
 )
 
@@ -50,15 +50,16 @@ type NodeStatus struct {
 // Node is a node in the blockchain network.
 type Node struct {
 	sync.Mutex
-	initialized bool
-	LastSeen    time.Time
-	Status      string
-	ID          string
-	Config      *Config
-	Blockchain  *Blockchain
-	API         *API
-	P2P         *P2P
-	Wallet      *Wallet
+	initialized       bool
+	LastSeen          time.Time
+	Status            string
+	ID                string
+	Config            *Config
+	Blockchain        *Blockchain
+	API               *API
+	P2P               *P2P
+	Wallet            *Wallet
+	ProgressIndicator *progress.ProgressIndicator
 }
 
 // node is the node instance
@@ -68,117 +69,80 @@ func GetNode() *Node {
 	return node
 }
 
+// NewNode creates a new node with the given options.
 func NewNode(opts *NodeOptions) error {
-	log.Println("Starting NewNode function")
-	node = &Node{}
-	node.Lock()
-	defer node.Unlock()
-
-	if opts != nil {
-		node.Config = opts.Config
-	} else {
-		node.Config = NewConfig()
+	if node != nil {
+		return errors.New("node already exists")
 	}
-	log.Println("Config initialized")
 
-	err := NewLocalStorage(node.Config.DataPath)
+	node = &Node{
+		ID:                uuid.New(),
+		Config:            opts.Config,
+		Status:            "initializing",
+		ProgressIndicator: progress.NewProgressIndicator(),
+	}
+
+	// Initialize blockchain
+	blockchain := NewBlockchain(opts.Config)
+	if blockchain == nil {
+		return errors.New("failed to create blockchain")
+	}
+	node.Blockchain = blockchain
+
+	// Initialize API
+	if opts.Config.EnableAPI {
+		api := NewAPI(blockchain)
+		if api == nil {
+			return errors.New("failed to create API")
+		}
+		node.API = api
+	}
+
+	// Initialize P2P
+	p2p := NewP2P()
+	if p2p == nil {
+		return errors.New("failed to create P2P")
+	}
+	node.P2P = p2p
+
+	// Initialize wallet with a strong password
+	strongPassword, err := GenerateRandomPassword()
 	if err != nil {
-		return fmt.Errorf("error initializing local storage: %w", err)
-	}
-	log.Println("Local storage initialized")
-
-	nodePath := filepath.Join("./", "node.json")
-	if fileExists(nodePath) {
-		err := node.load()
-		if err != nil {
-			return fmt.Errorf("error loading existing node: %w", err)
-		}
-		log.Println("Loaded existing node configuration")
-	} else {
-		node.ID = uuid.New()
-		err := node.save()
-		if err != nil {
-			return fmt.Errorf("error saving new node: %w", err)
-		}
-		log.Println("Created and saved new node configuration")
+		return fmt.Errorf("failed to generate strong password: %v", err)
 	}
 
-	// Initialize Blockchain
-	node.Blockchain = NewBlockchain(node.Config)
-	if node.Blockchain == nil {
-		return fmt.Errorf("failed to initialize blockchain")
+	walletOptions := NewWalletOptions(
+		NewBigInt(1),               // organizationID
+		NewBigInt(1),               // appID
+		NewBigInt(1),               // userID
+		NewBigInt(1),               // assetID
+		"NodeWallet",               // name
+		strongPassword,             // passphrase
+		[]string{"node", "wallet"}, // tags
+	)
+	wallet, err := NewWallet(walletOptions)
+	if err != nil {
+		return fmt.Errorf("failed to create wallet: %v", err)
 	}
-	log.Println("Blockchain initialized")
+	node.Wallet = wallet
 
-	node.API = NewAPI(node.Blockchain)
-	log.Println("API initialized")
-
-	node.P2P = NewP2P()
-	log.Println("P2P initialized")
-
-	// Initialize wallet
-	// password, err := GenerateRandomPassword()
-	// if err != nil {
-	// 	return fmt.Errorf("error generating random password: %w", err)
-	// }
-	// log.Println("Random password generated")
-
-	// walletOptions := &WalletOptions{
-	// 	OrganizationID: NewBigInt(1),
-	// 	AppID:          NewBigInt(1),
-	// 	UserID:         NewBigInt(1),
-	// 	AssetID:        NewBigInt(1),
-	// 	Name:           "NodeWallet",
-	// 	Passphrase:     password,
-	// 	Tags:           []string{"node", "wallet"},
-	// }
-	// wallet, err := NewWallet(walletOptions)
-	// if err != nil {
-	// 	return fmt.Errorf("error creating node wallet: %w", err)
-	// }
-	// node.Wallet = wallet
-	// log.Println("Node wallet created")
-
-	if opts.IsSeed {
-		log.Println("Initializing as seed node")
-		node.P2P.SetAsSeedNode()
-		log.Println("Node set as seed node")
-	} else if opts.SeedAddress != "" {
-		log.Println("Attempting to connect to seed node")
-		err := node.P2P.ConnectToSeedNode(opts.SeedAddress)
-		if err != nil {
-			return fmt.Errorf("failed to connect to seed node: %w", err)
-		}
-		log.Println("Connected to seed node")
-
-		log.Println("Registering node with P2P network")
-		err = node.Register()
-		if err != nil {
-			return fmt.Errorf("error registering node: %w", err)
-		}
-		log.Println("Node registered with P2P network")
-	} else {
-		log.Println("Warning: Node is neither a seed node nor connected to a seed node")
+	// Load existing data
+	err = node.load()
+	if err != nil {
+		log.Printf("No existing node state found, creating new node")
 	}
 
-	node.Config.Show()
 	node.initialized = true
+	node.Status = "ready"
 
-	err = node.save()
-	if err != nil {
-		return fmt.Errorf("error saving node state: %w", err)
-	}
-	log.Println("Node state saved")
-
-	log.Println("Node initialization complete")
-
+	log.Printf("Node initialized: %s", node.ID)
 	return nil
 }
 
 func DefaultNodeOptions() *NodeOptions {
 	return &NodeOptions{
 		EnvName:  "chaind",
-		DataPath: "./chaind_data",
+		DataPath: "./data",
 		Config:   NewConfig(),
 	}
 }
@@ -232,16 +196,29 @@ func LogEvent(format string, args ...interface{}) {
 // Run runs the node.
 func (n *Node) Run() {
 	log.Println("Starting node...")
+
+	// Start progress indicator
+	if n.ProgressIndicator != nil {
+		n.ProgressIndicator.Start()
+		n.ProgressIndicator.ShowInfo("Node starting up...")
+	}
+
+	// Start P2P network
 	go n.P2P.Start()
+	log.Println("P2P network starting on :8101")
 
 	if n.Blockchain == nil {
 		log.Println("Error: Blockchain is not initialized")
+		n.ProgressIndicator.ShowError("Blockchain not initialized")
 		return
 	}
+
+	n.ProgressIndicator.ShowSuccess("Blockchain initialized successfully")
 	go n.Blockchain.Run(n.Config.Difficulty)
 
 	if n.Config.EnableAPI {
 		go n.API.Start()
+		n.ProgressIndicator.ShowInfo("API server started")
 	}
 
 	// Set up a channel to capture log output
@@ -267,6 +244,10 @@ func (n *Node) Run() {
 	statsTick := time.NewTicker(2 * time.Second)
 	defer statsTick.Stop()
 
+	// Create a ticker for network status updates
+	networkTick := time.NewTicker(5 * time.Second)
+	defer networkTick.Stop()
+
 	// Check if we're running in a terminal that supports ANSI escape sequences
 	// This is a simple check and might not work in all environments
 	_, isTerminal := os.LookupEnv("TERM")
@@ -286,8 +267,8 @@ func (n *Node) Run() {
 					txCount = len(n.Blockchain.TransactionQueue)
 				}
 
-				// Display the spinner with blockchain stats
-				fmt.Printf("\r%s Node: %s | Blocks: %d | TXs: %d",
+				// Display the spinner with blockchain stats using fixed-width formatting
+				fmt.Printf("\r%s Node: %-8s | Blocks: %-4d | TXs: %-3d",
 					spinnerFrames[frameIndex],
 					n.ID[:8],
 					blockCount,
@@ -298,6 +279,13 @@ func (n *Node) Run() {
 			// This helps ensure we don't miss important state changes
 			if n.Blockchain != nil {
 				n.Blockchain.DisplayStatus()
+			}
+		case <-networkTick.C:
+			// Update network status
+			if n.P2P != nil {
+				peerCount := len(n.P2P.nodes)
+				isSynced := true // TODO: Implement actual sync status
+				n.ProgressIndicator.ShowNetworkStatus(peerCount, isSynced)
 			}
 		case <-logCh:
 			// This would be triggered by a significant event
@@ -317,9 +305,20 @@ func (n *Node) ProcessP2PTransaction(tx P2PTransaction) error {
 
 	LogEvent("Processing P2P transaction: %s (%s)", tx.ID, tx.Protocol)
 
+	// Show transaction progress
+	if n.ProgressIndicator != nil {
+		n.ProgressIndicator.ShowTransactionProgress(tx.ID.String(), "validating")
+	}
+
 	switch tx.Action {
 	case "validate":
-		return n.validateTransaction(tx)
+		err := n.validateTransaction(tx)
+		if err != nil {
+			n.ProgressIndicator.ShowError(fmt.Sprintf("Transaction validation failed: %v", err))
+		} else {
+			n.ProgressIndicator.ShowTransactionProgress(tx.ID.String(), "confirmed")
+		}
+		return err
 	case "status":
 		return n.updateStatus(tx)
 	case "add":

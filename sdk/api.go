@@ -200,7 +200,7 @@ func (api *API) Start() {
 	api.router.Use(apiKeyMiddleware)
 
 	// Start the HTTP server
-	log.Printf("API listening on %s\n", apiHostname)
+	log.Printf("API server starting on %s", apiHostname)
 	api.running = true
 	log.Fatal(http.ListenAndServe(apiHostname, api.router))
 }

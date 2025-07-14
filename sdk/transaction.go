@@ -88,7 +88,7 @@ func NewTransaction(protocol string, from *Wallet, to *Wallet) (*Tx, error) {
 		return nil, fmt.Errorf("wallets can't be nil")
 	}
 
-	log.Printf("[%s] Creating %s-TX - FROM: %s, TO: %s\n", time.Now().Format(time.RFC3339), protocol, from.GetAddress(), to.GetAddress())
+	log.Printf("Creating %s transaction: %s → %s", protocol, from.GetAddress()[:8], to.GetAddress()[:8])
 
 	toWalletPUID := to.ID
 	if toWalletPUID == nil {

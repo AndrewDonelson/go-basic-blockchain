@@ -117,7 +117,7 @@ func (b *Block) save() error {
 	if err != nil {
 		return err
 	}
-	log.Printf("[%s] Block [%s] saved to disk.\n", time.Now().Format(time.RFC3339), b.Index.String())
+	log.Printf("Block [%s] saved to disk.\n", b.Index.String())
 	return nil
 }
 

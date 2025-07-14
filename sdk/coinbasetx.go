@@ -3,6 +3,7 @@
 package sdk
 
 import (
+	"encoding/json"
 	"fmt"
 )
 
@@ -24,6 +25,62 @@ type Coinbase struct {
 	TokenCount       int64
 	TokenPrice       float64
 	AllowNewTokens   bool
+}
+
+// MarshalJSON implements custom JSON marshaling for Coinbase transaction
+func (c *Coinbase) MarshalJSON() ([]byte, error) {
+	// First marshal the base Tx
+	baseTx, err := json.Marshal(&c.Tx)
+	if err != nil {
+		return nil, err
+	}
+
+	// Create a map to hold the base transaction data
+	var baseMap map[string]interface{}
+	err = json.Unmarshal(baseTx, &baseMap)
+	if err != nil {
+		return nil, err
+	}
+
+	// Add the coinbase-specific data
+	baseMap["blockchainName"] = c.BlockchainName
+	baseMap["blockchainSymbol"] = c.BlockchainSymbol
+	baseMap["blockTime"] = c.BlockTime
+	baseMap["difficulty"] = c.Difficulty
+	baseMap["transactionFee"] = c.TransactionFee
+	baseMap["minerRewardPCT"] = c.MinerRewardPCT
+	baseMap["minerAddress"] = c.MinerAddress
+	baseMap["devRewardPCT"] = c.DevRewardPCT
+	baseMap["devAddress"] = c.DevAddress
+	baseMap["fundWalletAmount"] = c.FundWalletAmount
+	baseMap["tokenCount"] = c.TokenCount
+	baseMap["tokenPrice"] = c.TokenPrice
+	baseMap["allowNewTokens"] = c.AllowNewTokens
+
+	// Serialize the protocol data to the Data field
+	protocolData := map[string]interface{}{
+		"blockchainName":   c.BlockchainName,
+		"blockchainSymbol": c.BlockchainSymbol,
+		"blockTime":        c.BlockTime,
+		"difficulty":       c.Difficulty,
+		"transactionFee":   c.TransactionFee,
+		"minerRewardPCT":   c.MinerRewardPCT,
+		"minerAddress":     c.MinerAddress,
+		"devRewardPCT":     c.DevRewardPCT,
+		"devAddress":       c.DevAddress,
+		"fundWalletAmount": c.FundWalletAmount,
+		"tokenCount":       c.TokenCount,
+		"tokenPrice":       c.TokenPrice,
+		"allowNewTokens":   c.AllowNewTokens,
+	}
+
+	protocolDataBytes, err := json.Marshal(protocolData)
+	if err != nil {
+		return nil, err
+	}
+	baseMap["data"] = protocolDataBytes
+
+	return json.Marshal(baseMap)
 }
 
 // NewCoinbaseTransaction creates a new coinbase transaction. It takes a from wallet, a to wallet, and a configuration object as input.

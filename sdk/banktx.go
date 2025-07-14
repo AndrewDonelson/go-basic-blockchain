@@ -3,6 +3,7 @@
 package sdk
 
 import (
+	"encoding/json"
 	"fmt"
 )
 
@@ -11,6 +12,38 @@ import (
 type Bank struct {
 	Tx
 	Amount float64
+}
+
+// MarshalJSON implements custom JSON marshaling for Bank transaction
+func (b *Bank) MarshalJSON() ([]byte, error) {
+	// First marshal the base Tx
+	baseTx, err := json.Marshal(&b.Tx)
+	if err != nil {
+		return nil, err
+	}
+
+	// Create a map to hold the base transaction data
+	var baseMap map[string]interface{}
+	err = json.Unmarshal(baseTx, &baseMap)
+	if err != nil {
+		return nil, err
+	}
+
+	// Add the bank-specific data
+	baseMap["amount"] = b.Amount
+
+	// Serialize the protocol data to the Data field
+	protocolData := map[string]interface{}{
+		"amount": b.Amount,
+	}
+
+	protocolDataBytes, err := json.Marshal(protocolData)
+	if err != nil {
+		return nil, err
+	}
+	baseMap["data"] = protocolDataBytes
+
+	return json.Marshal(baseMap)
 }
 
 // NewBankTransaction creates a new Bank transaction. It takes a from wallet, a to wallet, and an amount to transfer.

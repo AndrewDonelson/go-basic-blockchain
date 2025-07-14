@@ -323,6 +323,31 @@ func (pr *ProtocolRouter) GetLastRollup() map[string]time.Time {
 	return result
 }
 
+// GetValidatedTransactions returns validated transactions for a specific protocol
+func (pr *ProtocolRouter) GetValidatedTransactions(protocol string) []*ProtocolTransaction {
+	pr.mu.RLock()
+	defer pr.mu.RUnlock()
+
+	var validatedTxs []*ProtocolTransaction
+
+	switch protocol {
+	case "BANK":
+		for _, tx := range pr.bankQueue {
+			if tx.Status == StatusValidated {
+				validatedTxs = append(validatedTxs, tx)
+			}
+		}
+	case "MESSAGE":
+		for _, tx := range pr.messageQueue {
+			if tx.Status == StatusValidated {
+				validatedTxs = append(validatedTxs, tx)
+			}
+		}
+	}
+
+	return validatedTxs
+}
+
 // Helper functions
 func generateTransactionID(data []byte, sender, recipient string) string {
 	input := fmt.Sprintf("%s:%s:%s", string(data), sender, recipient)

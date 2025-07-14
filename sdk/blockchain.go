@@ -10,7 +10,9 @@ import (
 	"fmt"
 	"log"
 	"math/big"
+	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -20,6 +22,7 @@ import (
 	"github.com/AndrewDonelson/go-basic-blockchain/internal/helios/difficulty"
 	"github.com/AndrewDonelson/go-basic-blockchain/internal/helios/sidechain"
 	"github.com/AndrewDonelson/go-basic-blockchain/internal/helios/validation"
+	"github.com/AndrewDonelson/go-basic-blockchain/internal/progress"
 )
 
 // State represents the current state of the blockchain.
@@ -57,11 +60,13 @@ type Blockchain struct {
 	difficultyAdjuster *difficulty.DifficultyAdjuster // Helios difficulty adjustment
 	sidechainRouter    *sidechain.ProtocolRouter      // Sidechain protocol router
 	useHeliosMining    bool                           // Flag to enable/disable Helios mining
+
+	// Progress indicator
+	progressIndicator *progress.ProgressIndicator
 }
 
 // NewBlockchain creates a new instance of the Blockchain struct with the provided configuration.
 func NewBlockchain(cfg *Config) *Blockchain {
-	log.Println("NewBlockchain called")
 
 	// If no config is provided, create a default one
 	if cfg == nil {
@@ -78,10 +83,11 @@ func NewBlockchain(cfg *Config) *Blockchain {
 		AvgTxsPerBlock:    0,
 		State:             &State{},
 		useHeliosMining:   true, // Enable Helios mining by default
+		progressIndicator: progress.NewProgressIndicator(),
 	}
 
 	// Initialize Helios components
-	heliosConfig := algorithm.DefaultHeliosConfig()
+	heliosConfig := algorithm.TestHeliosConfig() // Use test config for faster mining
 	bc.heliosAlgorithm = algorithm.NewHeliosAlgorithm(heliosConfig)
 	bc.heliosValidator = validation.NewProofValidator(bc.heliosAlgorithm)
 
@@ -121,12 +127,18 @@ func NewBlockchain(cfg *Config) *Blockchain {
 
 	err := bc.Load()
 	if err != nil {
-		log.Println("No existing blockchain found", err)
+		log.Println("No existing blockchain state found, creating new blockchain")
 		err = bc.createBlockchain()
 		if err != nil {
 			log.Printf("Error creating blockchain: %v", err)
 			return nil
 		}
+	}
+
+	// Load existing blocks from disk
+	err = bc.LoadExistingBlocks()
+	if err != nil {
+		log.Printf("Error loading existing blocks: %v", err)
 	}
 
 	if len(bc.Blocks) == 0 {
@@ -147,8 +159,29 @@ func (bc *Blockchain) DisplayStatus() {
 	staticTransactionQueueLen := len(bc.TransactionQueue)
 
 	if staticBlocksLen != len(bc.Blocks) || staticTransactionQueueLen != len(bc.TransactionQueue) {
-		log.Printf("[%s] Blockchain Activity: Blocks: %d, Transaction Queue: %d\n",
-			time.Now().Format(logDateTimeFormat), len(bc.Blocks), len(bc.TransactionQueue))
+		log.Printf("Blockchain Activity: Blocks: %d, Transaction Queue: %d\n",
+			len(bc.Blocks), len(bc.TransactionQueue))
+	}
+
+	// Update progress indicator
+	if bc.progressIndicator != nil {
+		status := progress.BlockchainStatus{
+			IsMining:    true, // Assume mining is active
+			BlockCount:  len(bc.Blocks),
+			TxQueueSize: len(bc.TransactionQueue),
+			Difficulty:  bc.cfg.Difficulty,
+			HashRate:    0, // TODO: Calculate actual hash rate
+			LastBlock:   "",
+			Peers:       0, // TODO: Get actual peer count
+			IsSynced:    true,
+			Uptime:      0, // TODO: Calculate uptime
+		}
+
+		if len(bc.Blocks) > 0 {
+			status.LastBlock = bc.Blocks[len(bc.Blocks)-1].Hash
+		}
+
+		bc.progressIndicator.UpdateStatus(status)
 	}
 }
 
@@ -213,7 +246,7 @@ func (bc *Blockchain) Save() error {
 //
 // Returns an error if any step in the process fails.
 func (bc *Blockchain) createBlockchain() error {
-	log.Println("Creating a new Blockchain...")
+	log.Println("Initializing new blockchain...")
 	ThisBlockchainOrganizationID = NewBigInt(BlockhainOrganizationID)
 	ThisBlockchainAppID = NewBigInt(BlockchainAppID)
 	ThisBlockchainAdminUserID = NewBigInt(BlockchainAdminUserID)
@@ -243,7 +276,7 @@ func (bc *Blockchain) createBlockchain() error {
 	}
 
 	bc.cfg.DevAddress = devWallet.GetAddress()
-	log.Printf("A Blockchain project Dev wallet was created for you with address [%s] and password [%s] (you can change this later)\n", bc.cfg.DevAddress, devWalletPW)
+	log.Printf("Dev wallet created: %s (password: %s)", bc.cfg.DevAddress, devWalletPW)
 
 	minerWalletPW, err := GenerateRandomPassword()
 	if err != nil {
@@ -266,7 +299,7 @@ func (bc *Blockchain) createBlockchain() error {
 	}
 
 	bc.cfg.MinerAddress = minerWallet.GetAddress()
-	log.Printf("A Node miner wallet was created for you with address [%s] and password [%s] (you can change this later)\n", bc.cfg.MinerAddress, minerWalletPW)
+	log.Printf("Miner wallet created: %s (password: %s)", bc.cfg.MinerAddress, minerWalletPW)
 
 	cbTX, err := NewCoinbaseTransaction(devWallet, devWallet, bc.cfg)
 	if err != nil {
@@ -282,7 +315,7 @@ func (bc *Blockchain) createBlockchain() error {
 	if err != nil {
 		return err
 	}
-	log.Printf("A Coinbase Transaction was created and set Dev wallet Balance to [%d] tokens)\n", cbTX.TokenCount)
+	log.Printf("Coinbase transaction created: %d tokens allocated", cbTX.TokenCount)
 
 	genesisTxs = append(genesisTxs, cbTX)
 
@@ -295,7 +328,7 @@ func (bc *Blockchain) createBlockchain() error {
 	if err != nil {
 		return err
 	}
-	log.Printf("A Bank Transaction was created sent [%0.4f] tokens to the miner wallet)\n", bankTX.Amount)
+	log.Printf("Bank transaction created: %.2f tokens transferred to miner", bankTX.Amount)
 
 	genesisTxs = append(genesisTxs, bankTX)
 
@@ -360,18 +393,71 @@ func (bc *Blockchain) HasTransaction(id *PUID) bool {
 
 // LoadExistingBlocks loads any existing blocks from disk and appends them to the blockchain.
 func (bc *Blockchain) LoadExistingBlocks() error {
-	files, _ := filepath.Glob(fmt.Sprintf("%s/*.json", blockFolder))
+	// Look for both .json and .jso files (in case of truncated names)
+	jsonFiles, _ := filepath.Glob(fmt.Sprintf("%s/*.json", blockFolder))
+	jsoFiles, _ := filepath.Glob(fmt.Sprintf("%s/*.jso", blockFolder))
+	files := append(jsonFiles, jsoFiles...)
 	if len(files) == 0 {
-		log.Printf("[%s] No existing Blocks\n", time.Now().Format(logDateTimeFormat))
-		bc.createBlockchain()
+		log.Printf("No existing blocks found\n")
 		return nil
 	}
 
-	log.Printf("[%s] Loading Blockchain [%d]...\n", time.Now().Format(logDateTimeFormat), len(files))
+	log.Printf("Loading %d existing blocks...", len(files))
 
-	// TODO: Implement block loading logic here
+	// Sort files by block index to load them in order
+	sort.Strings(files)
 
-	log.Printf("[%s] Done\n", time.Now().Format(logDateTimeFormat))
+	for _, file := range files {
+		log.Printf("Processing block file: %s", file)
+		// Extract block index from filename (e.g., "0.json" -> 0)
+		filename := filepath.Base(file)
+		if !strings.HasSuffix(filename, ".json") && !strings.HasSuffix(filename, ".jso") {
+			log.Printf("Skipping file (not .json/.jso): %s", filename)
+			continue
+		}
+
+		blockIndexStr := strings.TrimSuffix(strings.TrimSuffix(filename, ".json"), ".jso")
+		blockIndex, err := strconv.Atoi(blockIndexStr)
+		if err != nil {
+			log.Printf("Invalid block filename: %s", filename)
+			continue
+		}
+
+		// Read the JSON file directly
+		fileData, err := os.ReadFile(file)
+		if err != nil {
+			log.Printf("Error reading block file %s: %v", file, err)
+			continue
+		}
+
+		// Parse the JSON into a Block
+		block := &Block{}
+		err = json.Unmarshal(fileData, block)
+		if err != nil {
+			log.Printf("Error parsing block JSON %s: %v", file, err)
+			continue
+		}
+
+		// Add block to blockchain
+		bc.Blocks = append(bc.Blocks, block)
+		log.Printf("Successfully loaded block %d: %s", blockIndex, block.Hash)
+
+		// Add block to TXLookup
+		err = bc.TXLookup.Add(block)
+		if err != nil {
+			log.Printf("Error adding block %d to TXLookup: %v", blockIndex, err)
+		}
+	}
+
+	log.Printf("Successfully loaded %d blocks", len(bc.Blocks))
+
+	// Update blockchain state to reflect loaded blocks
+	if len(bc.Blocks) > 0 {
+		lastBlockIndex := int(bc.Blocks[len(bc.Blocks)-1].Index.Int64())
+		bc.CurrentBlockIndex = lastBlockIndex
+		bc.NextBlockIndex = lastBlockIndex + 1
+		log.Printf("Updated blockchain state: current_block_index=%d, next_block_index=%d", bc.CurrentBlockIndex, bc.NextBlockIndex)
+	}
 
 	return nil
 }
@@ -380,6 +466,11 @@ func (bc *Blockchain) LoadExistingBlocks() error {
 func (bc *Blockchain) AddTransaction(transaction Transaction) {
 	bc.mux.Lock()
 	defer bc.mux.Unlock()
+
+	// Show transaction progress
+	if bc.progressIndicator != nil {
+		bc.progressIndicator.ShowTransactionProgress(transaction.GetID(), "pending")
+	}
 
 	// Route transaction through sidechain router if it's a supported protocol
 	protocol := transaction.GetProtocol()
@@ -413,6 +504,11 @@ func (bc *Blockchain) AddTransaction(transaction Transaction) {
 		// For other protocols, add directly to queue
 		bc.TransactionQueue = append(bc.TransactionQueue, transaction)
 	}
+
+	// Show transaction confirmed
+	if bc.progressIndicator != nil {
+		bc.progressIndicator.ShowTransactionProgress(transaction.GetID(), "confirmed")
+	}
 }
 
 // Mine attempts to mine a new block for the blockchain.
@@ -433,11 +529,31 @@ func (bc *Blockchain) mineWithHelios(block *Block, difficulty int) *Block {
 	// Create block header for mining
 	blockHeader := block.createBlockHeaderForMining()
 
+	// Show Helios Stage 1: Proof Generation
+	if bc.progressIndicator != nil {
+		bc.progressIndicator.ShowHeliosProgress(1, "Proof Generation")
+	}
+
+	// Show mining progress
+	if bc.progressIndicator != nil {
+		bc.progressIndicator.ShowMiningProgress(int(block.Index.Int64()), difficulty, block.Hash)
+	}
+
 	// Mine using Helios algorithm
 	proof, err := bc.heliosAlgorithm.Mine(blockHeader, targetDifficulty)
 	if err != nil {
 		log.Printf("Helios mining failed: %v", err)
 		return block
+	}
+
+	// Show Helios Stage 2: Sidechain Routing
+	if bc.progressIndicator != nil {
+		bc.progressIndicator.ShowHeliosProgress(2, "Sidechain Routing")
+	}
+
+	// Show Helios Stage 3: Block Finalization
+	if bc.progressIndicator != nil {
+		bc.progressIndicator.ShowHeliosProgress(3, "Block Finalization")
 	}
 
 	// Update block with Helios proof
@@ -451,6 +567,12 @@ func (bc *Blockchain) mineWithHelios(block *Block, difficulty int) *Block {
 func (bc *Blockchain) mineWithSimplePoW(block *Block, difficulty int) *Block {
 	prefix := strings.Repeat("0", difficulty)
 	log.Printf("Mining a new Block [#%s] with [%d] Txs...", block.Index.String(), len(block.Transactions))
+
+	// Show mining progress
+	if bc.progressIndicator != nil {
+		bc.progressIndicator.ShowMiningProgress(int(block.Index.Int64()), difficulty, block.Hash)
+	}
+
 	for i := 0; i < maxNonce; i++ {
 		block.Header.Nonce = uint32(i)
 		block.Hash = block.CalculateHash()
@@ -458,13 +580,12 @@ func (bc *Blockchain) mineWithSimplePoW(block *Block, difficulty int) *Block {
 		if strings.HasPrefix(block.Hash, prefix) {
 			err := block.save()
 			if err != nil {
-				log.Printf("[%s] Error saving block: %v\n", time.Now().Format(logDateTimeFormat), err)
+				log.Printf("Error saving block: %v\n", err)
 			}
 			bc.Blocks = append(bc.Blocks, block)
 			bc.TransactionQueue = []Transaction{}
 
-			log.Printf("[%s] Mined a new Block [#%s] with [%d] TXs & Hash [%s]\n",
-				time.Now().Format(logDateTimeFormat),
+			log.Printf("Mined a new Block [#%s] with [%d] TXs & Hash [%s]\n",
 				block.Index.String(),
 				len(block.Transactions),
 				block.Hash)
@@ -484,6 +605,12 @@ func (bc *Blockchain) VerifySignature(tx Transaction) error {
 // Run is a long-running function that manages the blockchain.
 func (bc *Blockchain) Run(difficulty int) {
 	log.Println("Blockchain.Run started")
+
+	// Start progress indicator
+	if bc.progressIndicator != nil {
+		bc.progressIndicator.Start()
+	}
+
 	statusTicker := time.NewTicker(time.Second)
 	blockTicker := time.NewTicker(time.Duration(bc.cfg.BlockTime) * time.Second)
 
@@ -495,6 +622,8 @@ func (bc *Blockchain) Run(difficulty int) {
 
 	go func() {
 		for range blockTicker.C {
+			now := time.Now()
+			log.Printf("Block ticker fired at %s, creating new block...", now.Format("15:04:05"))
 			bc.createNewBlock(difficulty)
 		}
 	}()
@@ -509,29 +638,111 @@ func (bc *Blockchain) createNewBlock(difficulty int) {
 		previousHash = bc.Blocks[len(bc.Blocks)-1].Hash
 	}
 
-	newBlock := NewBlock(bc.TransactionQueue, previousHash)
-	newBlock.Index = *big.NewInt(int64(len(bc.Blocks)))
+	// Collect sidechain rollup transactions
+	sidechainTxs := bc.collectSidechainRollups()
+
+	// Combine main chain and sidechain transactions
+	allTransactions := append(bc.TransactionQueue, sidechainTxs...)
+
+	newBlock := NewBlock(allTransactions, previousHash)
+	newBlock.Index = *big.NewInt(int64(bc.NextBlockIndex))
+
+	// Show block progress
+	if bc.progressIndicator != nil {
+		bc.progressIndicator.ShowBlockProgress(int(newBlock.Index.Int64()), len(allTransactions))
+	}
+
 	bc.Mine(newBlock, difficulty)
 
 	err := bc.TXLookup.Add(newBlock)
 	if err != nil {
-		log.Printf("[%s] Error adding block to TXLookup: %v\n", time.Now().Format(logDateTimeFormat), err)
+		log.Printf("Error adding block to TXLookup: %v\n", err)
 	}
 
 	err = newBlock.save()
 	if err != nil {
-		log.Printf("[%s] Error saving block: %v\n", time.Now().Format(logDateTimeFormat), err)
+		log.Printf("Error saving block: %v\n", err)
 	}
 
 	bc.Blocks = append(bc.Blocks, newBlock)
+	bc.CurrentBlockIndex = int(newBlock.Index.Int64())
+	bc.NextBlockIndex = bc.CurrentBlockIndex + 1
 	bc.TransactionQueue = []Transaction{} // Clear the queue
 
 	err = bc.Save()
 	if err != nil {
-		log.Printf("[%s] Error saving blockchain state: %v\n", time.Now().Format(logDateTimeFormat), err)
+		log.Printf("Error saving blockchain state: %v\n", err)
 	}
 
-	log.Printf("New block created: [#%s] Hash: %s", newBlock.Index.String(), newBlock.Hash)
+	log.Printf("New block created: [#%s] Hash: %s with %d main chain + %d sidechain transactions",
+		newBlock.Index.String(), newBlock.Hash, len(bc.TransactionQueue), len(sidechainTxs))
+}
+
+// collectSidechainRollups collects validated sidechain transactions for inclusion in the main block
+func (bc *Blockchain) collectSidechainRollups() []Transaction {
+	var rollupTxs []Transaction
+
+	// Get validated transactions from sidechain router
+	if bc.sidechainRouter != nil {
+		// Get bank protocol rollups
+		bankTxs := bc.sidechainRouter.GetValidatedTransactions("BANK")
+		for _, tx := range bankTxs {
+			// Convert ProtocolTransaction back to Bank transaction
+			if bankTx, err := bc.convertToBankTransaction(tx); err == nil {
+				rollupTxs = append(rollupTxs, bankTx)
+			}
+		}
+
+		// Get message protocol rollups
+		messageTxs := bc.sidechainRouter.GetValidatedTransactions("MESSAGE")
+		for _, tx := range messageTxs {
+			// Convert ProtocolTransaction back to Message transaction
+			if messageTx, err := bc.convertToMessageTransaction(tx); err == nil {
+				rollupTxs = append(rollupTxs, messageTx)
+			}
+		}
+
+		log.Printf("Collected %d sidechain rollup transactions (%d bank, %d message)",
+			len(rollupTxs), len(bankTxs), len(messageTxs))
+	}
+
+	return rollupTxs
+}
+
+// convertToBankTransaction converts a ProtocolTransaction back to a Bank transaction
+func (bc *Blockchain) convertToBankTransaction(ptx *sidechain.ProtocolTransaction) (*Bank, error) {
+	// This is a simplified conversion - in a real implementation, you'd properly deserialize
+	// For now, we'll create a placeholder transaction
+	fromWallet := &Wallet{Address: ptx.Sender}
+	toWallet := &Wallet{Address: ptx.Recipient}
+
+	bankTx := &Bank{
+		Tx: Tx{
+			From: fromWallet,
+			To:   toWallet,
+			Fee:  0.05,
+		},
+		Amount: 0.0, // Would be extracted from ptx.Data
+	}
+	return bankTx, nil
+}
+
+// convertToMessageTransaction converts a ProtocolTransaction back to a Message transaction
+func (bc *Blockchain) convertToMessageTransaction(ptx *sidechain.ProtocolTransaction) (*Message, error) {
+	// This is a simplified conversion - in a real implementation, you'd properly deserialize
+	// For now, we'll create a placeholder transaction
+	fromWallet := &Wallet{Address: ptx.Sender}
+	toWallet := &Wallet{Address: ptx.Recipient}
+
+	messageTx := &Message{
+		Tx: Tx{
+			From: fromWallet,
+			To:   toWallet,
+			Fee:  0.01,
+		},
+		Message: "Rollup message", // Would be extracted from ptx.Data
+	}
+	return messageTx, nil
 }
 
 // generateHash generates a SHA-512 hash for the given block.

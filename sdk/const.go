@@ -14,8 +14,8 @@ const (
 	BlockchainMinerAssetID  = 2
 
 	// Blockchain Parameters
-	blockTimeInSec        = 5
-	proofOfWorkDifficulty = 4
+	blockTimeInSec        = 20
+	proofOfWorkDifficulty = 2
 	transactionFee        = 0.05    // 5 hundredths of a coin (a nickel-ish)
 	minTransactionFee     = 0.01    // Minimum transaction fee
 	minerRewardPCT        = 50.0    // Miner reward is 50% of the transaction fee
@@ -38,7 +38,7 @@ const (
 	devAddress   = "DEV"   // Will be supplied by the genesis block
 
 	// Data Storage
-	dataFolder   = "../data"
+	dataFolder   = "data"
 	walletFolder = dataFolder + "/wallets"
 	blockFolder  = dataFolder + "/blocks"
 	cfgFile      = "../../.local.env"

@@ -232,7 +232,7 @@ func (p *P2P) Start() error {
 		return errors.New("P2P network is already running")
 	}
 
-	log.Printf("P2P network starting on %s\n", p2pHostname)
+	log.Printf("P2P network starting on %s", p2pHostname)
 	p.running = true
 
 	go p.runProcessQueue()

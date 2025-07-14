@@ -10,6 +10,7 @@ import (
 	"encoding/pem"
 	"fmt"
 	"log"
+	"time"
 )
 
 // PEM is a struct that holds the PEM encoded private and public keys for a cryptographic key pair.
@@ -76,9 +77,15 @@ func (p *PEM) AsBytes(s string) []byte {
 
 // Vault is a struct that holds the data (keypairs) associated with the wallet as well as the private key and PEM encoded keys
 type Vault struct {
-	Data map[string]interface{} // Data (keypairs) associated with the wallet
-	Key  *ecdsa.PrivateKey      `json:"-"`
-	Pem  *PEM
+	ID       string                 `json:"id"`
+	Name     string                 `json:"name"`
+	Tags     []string               `json:"tags"`
+	Balance  float64                `json:"balance"`
+	Created  time.Time              `json:"created"`
+	Modified time.Time              `json:"modified"`
+	Data     map[string]interface{} // Data (keypairs) associated with the wallet
+	Key      *ecdsa.PrivateKey      `json:"-"`
+	Pem      *PEM
 }
 
 // RestoreKeyFromPEM reconstructs the ecdsa.PrivateKey from the PEM string after loading from disk
@@ -117,12 +124,24 @@ func NewVault() *Vault {
 	return newVault
 }
 
+// NewVaultWithData creates a new vault with the given name, tags, and initial balance.
 func NewVaultWithData(name string, tags []string, balance float64) *Vault {
-	newVault := NewVault()
-	newVault.SetData("name", name)
-	newVault.SetData("tags", tags)
-	newVault.SetData("balance", balance)
-	return newVault
+	vault := &Vault{
+		ID:       NewPUIDEmpty().String(),
+		Name:     name,
+		Tags:     tags,
+		Balance:  balance,
+		Created:  time.Now(),
+		Modified: time.Now(),
+		Data:     make(map[string]interface{}),
+	}
+
+	// Set initial data
+	vault.SetData("name", name)
+	vault.SetData("tags", tags)
+	vault.SetData("balance", balance)
+
+	return vault
 }
 
 // SetData sets the data (keypairs) associated with the wallet.
@@ -135,14 +154,11 @@ func (v *Vault) SetData(key string, value interface{}) error {
 	}
 
 	if v.Data == nil {
-		if verbose {
-			log.Fatalln("Vault Data is nil")
-		}
-		return nil
+		v.Data = make(map[string]interface{})
 	}
 
 	if verbose {
-		log.Printf("Setting data: %s to %v\n", key, value)
+		log.Printf("Setting data: %s to %v", key, value)
 	}
 
 	v.Data[key] = value

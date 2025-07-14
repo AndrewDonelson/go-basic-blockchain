@@ -79,6 +79,10 @@ build: ; $(info $(M) building executable ($(MODNAME))...) @ ## Build production 
 run-dev: ; $(info $(M) running development version...) @ ## Run development version
 	$Q ENV_FILE=$(ENV_FILE) $(GO) run -tags dev $(DEV_MAIN)
 
+.PHONY: demo
+demo: ; $(info $(M) running progress indicator demo...) @ ## Run progress indicator demo
+	$Q $(GO) run ./cmd/demo/main.go
+
 .PHONY: debug
 debug: ; $(info $(M) debugging development version...) @ ## Debug development version
 	$Q $(GO) build -gcflags="all=-N -l" -o $(BIN)/$(MODNAME)-debug$(EXE) $(DEV_MAIN)

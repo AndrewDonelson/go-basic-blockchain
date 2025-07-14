@@ -24,7 +24,7 @@ func main() {
 	if envFile != "" {
 		// Set the environment file path
 		os.Setenv("ENV_FILE", envFile)
-		log.Printf("Using custom environment file: %s\n", envFile)
+		log.Printf("Using custom environment file: %s", envFile)
 	}
 
 	// Create node options using the parsed flags
@@ -48,6 +48,5 @@ func main() {
 		os.Exit(1)
 	}
 
-	fmt.Println("Starting node...")
 	node.Run()
 }
