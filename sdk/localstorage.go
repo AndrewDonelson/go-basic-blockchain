@@ -43,7 +43,7 @@ func NewLocalStorage(dataPath string) error {
 		if localStorage.dataPath != dataPath && dataPath != "" {
 			localStorage.dataPath = dataPath
 			localStorage.setup() // Re-setup with new path
-			fmt.Println("local storage reinitialized @", localStorage.dataPath)
+			LogInfof("local storage reinitialized @ %s", localStorage.dataPath)
 		}
 		return nil
 	}
@@ -51,8 +51,12 @@ func NewLocalStorage(dataPath string) error {
 	// Create the LocalStorage instance
 	localStorage = &LocalStorage{}
 	if dataPath == "" {
-		// Use the default data path
-		localStorage.dataPath = "./data" // Modify the data path based on your requirements
+		home, err := os.UserHomeDir()
+		if err == nil {
+			localStorage.dataPath = filepath.Join(home, "gbb-data")
+		} else {
+			localStorage.dataPath = "./gbb-data"
+		}
 	} else {
 		// Use the given data path
 		localStorage.dataPath = dataPath
@@ -61,7 +65,7 @@ func NewLocalStorage(dataPath string) error {
 	// Perform any initial setup or data loading if needed
 	localStorage.setup()
 
-	fmt.Println("local storage initialized @", localStorage.dataPath)
+	LogInfof("local storage initialized @ %s", localStorage.dataPath)
 	return nil
 }
 
@@ -121,7 +125,7 @@ func (ls *LocalStorage) setup() {
 // If the type is not supported, it returns an error.
 func (ls *LocalStorage) file(t interface{}) (filePath string, err error) {
 
-	log.Printf("LocalStorage.file: Interface Detected: %T", t)
+	LogVerbosef("LocalStorage.file: Interface Detected: %T", t)
 	switch tt := t.(type) {
 	case *NodePersistData:
 		filePath = filepath.Join(ls.dataPath, "node.json")
@@ -199,7 +203,7 @@ func (ls *LocalStorage) Find(criteria interface{}) ([]interface{}, error) {
 	// Dummy implementation
 	switch criteria := criteria.(type) {
 	case *BlockQueryCriteria:
-		fmt.Printf("BlockQueryCriteria: %+v\n", criteria)
+		LogInfof("BlockQueryCriteria: %+v", criteria)
 		// Query Blocks based on criteria
 		blocks := []*Block{}
 		// Implement logic to query Blocks based on criteria
@@ -207,7 +211,7 @@ func (ls *LocalStorage) Find(criteria interface{}) ([]interface{}, error) {
 		// Return the found Blocks
 		return []interface{}{blocks}, nil
 	case *TransactionQueryCriteria:
-		fmt.Printf("TransactionQueryCriteria: %+v\n", criteria)
+		LogInfof("TransactionQueryCriteria: %+v", criteria)
 		// Query Transactions based on criteria
 		transactions := []*Transaction{}
 		// Implement logic to query Transactions based on criteria

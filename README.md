@@ -47,6 +47,11 @@ Key Features:
    ```bash
    make run
    ```
+   
+   Or run the binary directly:
+   ```bash
+   ./bin/gbbd.exe
+   ```
 
 5. Access the web interface at `http://localhost:8200`
 
@@ -130,12 +135,27 @@ make build
 
 ### Running
 ```bash
-make run
+make run          # Build and run
+make run-bin      # Run existing binary
+./bin/gbbd.exe    # Run directly
 ```
 
 ### Testing
 ```bash
-make test
+make test         # Run all tests
+make test-short   # Run short tests
+make test-unit    # Run unit tests only
+make test-coverage # Run with coverage
+```
+
+### Development
+```bash
+make setup        # Setup dependencies
+make fmt          # Format code
+make lint         # Run linter
+make clean        # Clean build artifacts
+make clean-data   # Clean blockchain data
+make clean-all    # Clean everything
 ```
 
 ### Documentation Generation

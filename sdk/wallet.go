@@ -126,7 +126,7 @@ func NewWallet(options *WalletOptions) (*Wallet, error) {
 	}
 
 	// Create a new wallet with a unique ID, name, and set of tags.
-	log.Printf("Creating wallet: %s", options.Name)
+	LogInfof("Creating wallet: %s", options.Name)
 	wallet := &Wallet{
 		ID:               NewPUID(options.OrganizationID, options.AppID, options.UserID, NewBigInt(0)),
 		Address:          "",
@@ -150,7 +150,7 @@ func NewWallet(options *WalletOptions) (*Wallet, error) {
 	// 	log.Printf("Created new Wallet: %s", wallet.GetAddress())
 	// }
 
-	log.Printf("Wallet created: %s", wallet.GetAddress())
+	LogVerbosef("Wallet created: %s", wallet.GetAddress())
 
 	// Save the wallet after creation
 	err = wallet.Close(options.Passphrase)

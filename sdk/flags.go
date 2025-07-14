@@ -56,6 +56,9 @@ func init() {
 
 	// Add new flag for environment file path
 	Args.Register("env", "Path to the .env file", "")
+
+	// Add verbose flag
+	Args.Register("verbose", "Enable verbose logging", false)
 }
 
 // NewArguments creates a new Arguments instance

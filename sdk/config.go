@@ -43,15 +43,26 @@ type Config struct {
 	MinTransactionFee float64 // New field: Minimum transaction fee
 	IsSeed            bool    // New field: Is this a seed node
 	SeedAddress       string  // New field: Address of the seed node to connect to
+	Verbose           bool    // Enable verbose logging
 	promptUpdate      bool
 	testing           bool
 }
 
 // NewConfig creates a new configuration object with default values.
 func NewConfig() *Config {
+	home, err := os.UserHomeDir()
+	dataPath := "./data"
+	if err == nil {
+		dataPath = filepath.Join(home, "gbb-data")
+	}
+	verbose := true // Enable verbose by default
+	if v := os.Getenv("VERBOSE"); v == "0" || v == "false" || v == "FALSE" {
+		verbose = false
+	}
 	cfg := &Config{
-		DataPath: filepath.Join(".", "data"),
+		DataPath: dataPath,
 		Version:  "1.0", // Set initial version
+		Verbose:  verbose,
 	}
 
 	cfg.setDefaultValues() // Set default values (lowest priority)
@@ -161,6 +172,7 @@ func (c *Config) loadFromEnv() {
 		c.Domain = getEnv("DOMAIN", c.Domain)
 		c.MaxBlockSize = getEnvAsInt("MAX_BLOCK_SIZE", c.MaxBlockSize)
 		c.MinTransactionFee = getEnvAsFloat("MIN_TRANSACTION_FEE", c.MinTransactionFee)
+		c.Verbose = getEnvAsBool("VERBOSE", c.Verbose)
 	}
 }
 
@@ -189,6 +201,8 @@ func (c *Config) applyCommandLineFlags() {
 			c.IsSeed = Args.GetBool("seed")
 		case "seed-address":
 			c.SeedAddress = Args.GetString("seed-address")
+		case "verbose":
+			c.Verbose = Args.GetBool("verbose")
 			// Add more cases for other flags as needed
 		}
 	}

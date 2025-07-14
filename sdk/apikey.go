@@ -7,7 +7,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
-	"log"
 	"net"
 	"net/http"
 	"strings"
@@ -132,7 +131,7 @@ func bearerToken(r *http.Request, header string) (string, error) {
 func apiKeyIsValid(rawKey string, availableKeys map[string][]byte) (string, bool) {
 	//expectedKey := generateAPIKeyForEmail("nlaakald@gmail.com") // Assuming you have this function
 	//logger.Info("Expected API Key:", expectedKey)
-	log.Printf("RAW Key API Key: %s", rawKey)
+	LogVerbosef("RAW Key API Key: %s", rawKey)
 
 	email, ok := matchAPIKeyToEmail(rawKey, availableKeys)
 	if ok {

@@ -16,7 +16,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"strings"
 	"time"
 )
@@ -88,7 +87,7 @@ func NewTransaction(protocol string, from *Wallet, to *Wallet) (*Tx, error) {
 		return nil, fmt.Errorf("wallets can't be nil")
 	}
 
-	log.Printf("Creating %s transaction: %s → %s", protocol, from.GetAddress()[:8], to.GetAddress()[:8])
+	LogInfof("Creating %s transaction: %s → %s", protocol, from.GetAddress()[:8], to.GetAddress()[:8])
 
 	toWalletPUID := to.ID
 	if toWalletPUID == nil {
@@ -229,7 +228,7 @@ func (t *Tx) Bytes() []byte {
 	enc := gob.NewEncoder(&buf)
 	err := enc.Encode(t)
 	if err != nil {
-		log.Printf("Error encoding transaction: %v", err)
+		LogInfof("Error encoding transaction: %v", err)
 		return nil
 	}
 	return buf.Bytes()
@@ -239,7 +238,7 @@ func (t *Tx) Bytes() []byte {
 func (t *Tx) JSON() string {
 	data, err := json.MarshalIndent(t, "", "  ")
 	if err != nil {
-		log.Printf("Error marshaling transaction to JSON: %v", err)
+		LogInfof("Error marshaling transaction to JSON: %v", err)
 		return ""
 	}
 	return string(data)
@@ -262,7 +261,7 @@ func (t *Tx) Send(bc *Blockchain) error {
 	}
 
 	bc.AddTransaction(t)
-	log.Printf("Transaction %s added to the transaction queue\n", t.ID)
+	LogInfof("Transaction %s added to the transaction queue\n", t.ID)
 	return nil
 }
 

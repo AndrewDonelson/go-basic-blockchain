@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"html/template"
 	"io/ioutil"
-	"log"
 	"net/http"
 	"strconv"
 	"time"
@@ -96,7 +95,7 @@ func NewAPI(bc *Blockchain) *API {
 		router: mux.NewRouter(),
 	}
 
-	log.Printf("Initializing API...\n")
+	LogInfof("Initializing API...")
 
 	// Register the API endpoints
 	api.registerRoutes()
@@ -155,7 +154,7 @@ func loggingMiddleware(next http.Handler) http.Handler {
 
 		// Log the response details
 		//api.logger.Printf("%s -> Response: %d %d bytes", cacheReqStr, ww.statusCode, ww.bytesWritten)
-		log.Printf("%s -> Response: %d %d bytes\n", cacheReqStr, ww.statusCode, ww.bytesWritten)
+		LogVerbosef("%s -> Response: %d %d bytes", cacheReqStr, ww.statusCode, ww.bytesWritten)
 	})
 }
 
@@ -200,9 +199,9 @@ func (api *API) Start() {
 	api.router.Use(apiKeyMiddleware)
 
 	// Start the HTTP server
-	log.Printf("API server starting on %s", apiHostname)
+	LogInfof("API server starting on %s", apiHostname)
 	api.running = true
-	log.Fatal(http.ListenAndServe(apiHostname, api.router))
+	api.log.Fatal(http.ListenAndServe(apiHostname, api.router))
 }
 
 // GetConfig returns the configuration used to create the API instance.

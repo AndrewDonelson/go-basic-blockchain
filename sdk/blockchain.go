@@ -246,7 +246,7 @@ func (bc *Blockchain) Save() error {
 //
 // Returns an error if any step in the process fails.
 func (bc *Blockchain) createBlockchain() error {
-	log.Println("Initializing new blockchain...")
+	LogInfof("Initializing new blockchain...")
 	ThisBlockchainOrganizationID = NewBigInt(BlockhainOrganizationID)
 	ThisBlockchainAppID = NewBigInt(BlockchainAppID)
 	ThisBlockchainAdminUserID = NewBigInt(BlockchainAdminUserID)
@@ -276,7 +276,7 @@ func (bc *Blockchain) createBlockchain() error {
 	}
 
 	bc.cfg.DevAddress = devWallet.GetAddress()
-	log.Printf("Dev wallet created: %s (password: %s)", bc.cfg.DevAddress, devWalletPW)
+	LogVerbosef("Dev wallet created: %s (password: %s)", bc.cfg.DevAddress, devWalletPW)
 
 	minerWalletPW, err := GenerateRandomPassword()
 	if err != nil {
@@ -299,7 +299,7 @@ func (bc *Blockchain) createBlockchain() error {
 	}
 
 	bc.cfg.MinerAddress = minerWallet.GetAddress()
-	log.Printf("Miner wallet created: %s (password: %s)", bc.cfg.MinerAddress, minerWalletPW)
+	LogVerbosef("Miner wallet created: %s (password: %s)", bc.cfg.MinerAddress, minerWalletPW)
 
 	cbTX, err := NewCoinbaseTransaction(devWallet, devWallet, bc.cfg)
 	if err != nil {
@@ -315,7 +315,7 @@ func (bc *Blockchain) createBlockchain() error {
 	if err != nil {
 		return err
 	}
-	log.Printf("Coinbase transaction created: %d tokens allocated", cbTX.TokenCount)
+	LogVerbosef("Coinbase transaction created: %d tokens allocated", cbTX.TokenCount)
 
 	genesisTxs = append(genesisTxs, cbTX)
 
@@ -328,7 +328,7 @@ func (bc *Blockchain) createBlockchain() error {
 	if err != nil {
 		return err
 	}
-	log.Printf("Bank transaction created: %.2f tokens transferred to miner", bankTX.Amount)
+	LogVerbosef("Bank transaction created: %.2f tokens transferred to miner", bankTX.Amount)
 
 	genesisTxs = append(genesisTxs, bankTX)
 
@@ -521,7 +521,7 @@ func (bc *Blockchain) Mine(block *Block, difficulty int) *Block {
 
 // mineWithHelios mines a block using the Helios three-stage algorithm
 func (bc *Blockchain) mineWithHelios(block *Block, difficulty int) *Block {
-	log.Printf("Mining block [#%s] with Helios algorithm...", block.Index.String())
+	LogInfof("Mining block [#%s] with Helios algorithm...", block.Index.String())
 
 	// Convert difficulty to big.Int target
 	targetDifficulty := new(big.Int).Lsh(big.NewInt(1), uint(256-difficulty))

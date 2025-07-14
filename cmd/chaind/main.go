@@ -41,6 +41,9 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Set global verbose flag for logging
+	sdk.ConfigSetVerbose(nodeOpts.Config.Verbose)
+
 	// Get the node instance and run it
 	node := sdk.GetNode()
 	if node == nil {

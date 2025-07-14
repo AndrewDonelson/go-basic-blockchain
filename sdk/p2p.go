@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"net"
 	"strings"
 	"sync"
@@ -108,7 +107,7 @@ func (p *P2P) RegisterNode(node *Node) error {
 	}
 
 	p.nodes[node.ID] = node
-	log.Printf("Registered node: %s\n", node.ID)
+	LogInfof("Registered node: %s", node.ID)
 	return nil
 }
 
@@ -133,7 +132,7 @@ func (p *P2P) BroadcastMessage(msg P2PTransaction) error {
 	for _, node := range p.nodes {
 		err := node.ProcessP2PTransaction(msg)
 		if err != nil {
-			log.Printf("Error broadcasting to node %s: %v\n", node.ID, err)
+			LogInfof("Error broadcasting to node %s: %v", node.ID, err)
 		}
 	}
 
@@ -146,7 +145,7 @@ func (p *P2P) AddTransaction(tx P2PTransaction) {
 	defer p.mutex.Unlock()
 
 	p.queue = append(p.queue, tx)
-	log.Printf("New transaction added to the queue: %s\n", tx.ID)
+	LogVerbosef("New transaction added to the queue: %s", tx.ID)
 }
 
 // HasTransaction checks if the P2P network has a specified transaction.
@@ -156,12 +155,12 @@ func (p *P2P) HasTransaction(id *PUID) bool {
 
 	for _, node := range p.nodes {
 		if node.Blockchain.HasTransaction(id) {
-			log.Printf("Transaction found in the network: %s\n", id)
+			LogInfof("Transaction found in the network: %s", id)
 			return true
 		}
 	}
 
-	log.Printf("Transaction not found in the network: %s\n", id)
+	LogInfof("Transaction not found in the network: %s", id)
 	return false
 }
 
@@ -171,7 +170,7 @@ func (p *P2P) ProcessQueue() {
 	defer p.mutex.Unlock()
 
 	for _, tx := range p.queue {
-		log.Printf("Processing transaction: %s (%s)\n", tx.ID, tx.Action)
+		LogVerbosef("Processing transaction: %s (%s)", tx.ID, tx.Action)
 
 		switch tx.Action {
 		case "validate":
@@ -185,7 +184,7 @@ func (p *P2P) ProcessQueue() {
 		case "register":
 			p.registerNode(tx)
 		default:
-			log.Printf("Unknown transaction action: %s\n", tx.Action)
+			LogInfof("Unknown transaction action: %s", tx.Action)
 		}
 	}
 
@@ -195,24 +194,24 @@ func (p *P2P) ProcessQueue() {
 
 // Broadcast broadcasts a P2PTransaction to nodes in the network.
 func (p *P2P) Broadcast(tx P2PTransaction) error {
-	log.Println("Starting P2P broadcast")
+	LogInfof("Starting P2P broadcast")
 	p.mutex.RLock()
 	defer p.mutex.RUnlock()
 
 	if len(p.nodes) == 0 {
-		log.Println("No nodes to broadcast to")
+		LogInfof("No nodes to broadcast to")
 		return nil
 	}
 
 	for _, node := range p.nodes {
-		log.Printf("Broadcasting to node: %s", node.ID)
+		LogInfof("Broadcasting to node: %s", node.ID)
 		err := node.ProcessP2PTransaction(tx)
 		if err != nil {
-			log.Printf("Error broadcasting to node %s: %v", node.ID, err)
+			LogInfof("Error broadcasting to node %s: %v", node.ID, err)
 			return fmt.Errorf("error broadcasting to node %s: %w", node.ID, err)
 		}
 	}
-	log.Printf("Broadcasted transaction: %s", tx.ID)
+	LogInfof("Broadcasted transaction: %s", tx.ID)
 	return nil
 }
 
@@ -232,7 +231,7 @@ func (p *P2P) Start() error {
 		return errors.New("P2P network is already running")
 	}
 
-	log.Printf("P2P network starting on %s", p2pHostname)
+	LogInfof("P2P network starting on %s", p2pHostname)
 	p.running = true
 
 	go p.runProcessQueue()
@@ -259,7 +258,7 @@ func (p *P2P) Stop() error {
 		p.listener.Close()
 	}
 
-	log.Println("P2P network stopped")
+	LogInfof("P2P network stopped")
 	return nil
 }
 
@@ -272,7 +271,7 @@ func (p *P2P) runProcessQueue() {
 
 func (p *P2P) runNodeDiscovery() {
 	s := spinner.New(spinner.CharSets[9], 100*time.Millisecond)
-	log.Println("Starting node discovery...")
+	LogInfof("Starting node discovery...")
 	s.Start()
 	defer s.Stop()
 	for p.IsRunning() {
@@ -285,17 +284,17 @@ func (p *P2P) listenForConnections() {
 	var err error
 	p.listener, err = net.Listen("tcp", p2pHostname)
 	if err != nil {
-		log.Printf("Error starting P2P listener: %v", err)
+		LogInfof("Error starting P2P listener: %v", err)
 		return
 	}
 	defer p.listener.Close()
 
-	log.Printf("P2P seed node listening on %s", p2pHostname)
+	LogInfof("P2P seed node listening on %s", p2pHostname)
 
 	for p.IsRunning() {
 		conn, err := p.listener.Accept()
 		if err != nil {
-			log.Printf("Error accepting connection: %v", err)
+			LogInfof("Error accepting connection: %v", err)
 			continue
 		}
 		go p.handleConnection(conn)
@@ -304,12 +303,12 @@ func (p *P2P) listenForConnections() {
 
 func (p *P2P) handleConnection(conn net.Conn) {
 	defer conn.Close()
-	log.Printf("New connection from %s", conn.RemoteAddr())
+	LogInfof("New connection from %s", conn.RemoteAddr())
 
 	// Perform handshake
 	err := p.performHandshake(conn)
 	if err != nil {
-		log.Printf("Handshake failed: %v", err)
+		LogInfof("Handshake failed: %v", err)
 		return
 	}
 
@@ -319,7 +318,7 @@ func (p *P2P) handleConnection(conn net.Conn) {
 		message, err := reader.ReadString('\n')
 		if err != nil {
 			if err != io.EOF {
-				log.Printf("Error reading message: %v", err)
+				LogInfof("Error reading message: %v", err)
 			}
 			break
 		}
@@ -327,7 +326,7 @@ func (p *P2P) handleConnection(conn net.Conn) {
 		// Process the message
 		err = p.processMessage(strings.TrimSpace(message), conn)
 		if err != nil {
-			log.Printf("Error processing message: %v", err)
+			LogInfof("Error processing message: %v", err)
 			break
 		}
 	}
@@ -438,7 +437,7 @@ func (p *P2P) discoverNodes() {
 		if node.ID != p.nodes[p.getSelfNodeID()].ID {
 			newNodes, err := p.requestNodeList(node)
 			if err != nil {
-				log.Printf("Error requesting node list from %s: %v\n", node.ID, err)
+				LogInfof("Error requesting node list from %s: %v", node.ID, err)
 				continue
 			}
 
@@ -446,9 +445,9 @@ func (p *P2P) discoverNodes() {
 				if !p.IsRegistered(newNode.ID) {
 					err := p.RegisterNode(newNode)
 					if err != nil {
-						log.Printf("Error registering new node: %v\n", err)
+						LogInfof("Error registering new node: %v", err)
 					} else {
-						log.Printf("Discovered new node: %s\n", newNode.ID)
+						LogInfof("Discovered new node: %s", newNode.ID)
 					}
 				}
 			}
@@ -493,16 +492,16 @@ func (p *P2P) requestNodeList(node *Node) ([]*Node, error) {
 
 func (p *P2P) validateTransaction(tx P2PTransaction) {
 	// Implement transaction validation logic
-	log.Printf("Validating transaction: %s\n", tx.ID)
+	LogVerbosef("Validating transaction: %s", tx.ID)
 	// TODO: Implement actual validation logic
 }
 
 func (p *P2P) updateNodeStatus(tx P2PTransaction) {
-	log.Printf("Updating node status: %s\n", tx.ID)
+	LogVerbosef("Updating node status: %s", tx.ID)
 	var status NodeStatus
 	err := json.Unmarshal(tx.Data.([]byte), &status)
 	if err != nil {
-		log.Printf("Error unmarshaling node status: %v\n", err)
+		LogInfof("Error unmarshaling node status: %v", err)
 		return
 	}
 
@@ -512,33 +511,33 @@ func (p *P2P) updateNodeStatus(tx P2PTransaction) {
 	if node, exists := p.nodes[status.NodeID]; exists {
 		node.Status = status.Status
 		node.LastSeen = time.Now()
-		log.Printf("Updated status of node %s: %s\n", status.NodeID, status.Status)
+		LogVerbosef("Updated status of node %s: %s", status.NodeID, status.Status)
 	} else {
-		log.Printf("Node %s not found in the network\n", status.NodeID)
+		LogInfof("Node %s not found in the network", status.NodeID)
 	}
 }
 
 func (p *P2P) addNode(tx P2PTransaction) {
-	log.Printf("Adding new node: %s\n", tx.ID)
+	LogVerbosef("Adding new node: %s", tx.ID)
 	var newNode Node
 	err := json.Unmarshal(tx.Data.([]byte), &newNode)
 	if err != nil {
-		log.Printf("Error unmarshaling new node data: %v\n", err)
+		LogInfof("Error unmarshaling new node data: %v", err)
 		return
 	}
 
 	err = p.RegisterNode(&newNode)
 	if err != nil {
-		log.Printf("Error registering new node: %v\n", err)
+		LogInfof("Error registering new node: %v", err)
 	}
 }
 
 func (p *P2P) removeNode(tx P2PTransaction) {
-	log.Printf("Removing node: %s\n", tx.ID)
+	LogVerbosef("Removing node: %s", tx.ID)
 	var nodeID string
 	err := json.Unmarshal(tx.Data.([]byte), &nodeID)
 	if err != nil {
-		log.Printf("Error unmarshaling node ID: %v\n", err)
+		LogInfof("Error unmarshaling node ID: %v", err)
 		return
 	}
 
@@ -547,24 +546,24 @@ func (p *P2P) removeNode(tx P2PTransaction) {
 
 	if _, exists := p.nodes[nodeID]; exists {
 		delete(p.nodes, nodeID)
-		log.Printf("Removed node from the network: %s\n", nodeID)
+		LogVerbosef("Removed node from the network: %s", nodeID)
 	} else {
-		log.Printf("Node %s not found in the network\n", nodeID)
+		LogInfof("Node %s not found in the network", nodeID)
 	}
 }
 
 func (p *P2P) registerNode(tx P2PTransaction) {
-	log.Printf("Registering new node: %s\n", tx.ID)
+	LogVerbosef("Registering new node: %s", tx.ID)
 	var newNode Node
 	err := json.Unmarshal(tx.Data.([]byte), &newNode)
 	if err != nil {
-		log.Printf("Error unmarshaling new node data: %v\n", err)
+		LogInfof("Error unmarshaling new node data: %v", err)
 		return
 	}
 
 	err = p.RegisterNode(&newNode)
 	if err != nil {
-		log.Printf("Error registering new node: %v\n", err)
+		LogInfof("Error registering new node: %v", err)
 		return
 	}
 
@@ -606,11 +605,11 @@ func (p *P2P) SetAsSeedNode() {
 	p.mutex.Lock()
 	defer p.mutex.Unlock()
 	p.isSeedNode = true
-	log.Println("This node is set as a seed node")
+	LogInfof("This node is set as a seed node")
 }
 
 func (p *P2P) ConnectToSeedNode(address string) error {
-	log.Printf("Connecting to seed node at %s\n", address)
+	LogInfof("Connecting to seed node at %s", address)
 
 	conn, err := net.Dial("tcp", address)
 	if err != nil {
@@ -638,9 +637,9 @@ func (p *P2P) ConnectToSeedNode(address string) error {
 		}
 		err := p.RegisterNode(newNode)
 		if err != nil {
-			log.Printf("Error registering node from seed: %v\n", err)
+			LogInfof("Error registering node from seed: %v", err)
 		} else {
-			log.Printf("Added node from seed: %s (%s)\n", newNode.ID, newNode.Config.P2PHostName)
+			LogInfof("Added node from seed: %s (%s)", newNode.ID, newNode.Config.P2PHostName)
 		}
 	}
 

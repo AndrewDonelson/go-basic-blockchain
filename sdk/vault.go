@@ -9,7 +9,6 @@ import (
 	"crypto/x509"
 	"encoding/pem"
 	"fmt"
-	"log"
 	"time"
 )
 
@@ -107,7 +106,7 @@ func (v *Vault) RestoreKeyFromPEM() error {
 
 // NewVault creates a new Vault struct
 func NewVault() *Vault {
-	log.Printf("Creating new Vault\n")
+	LogInfof("Creating new Vault")
 	newVault := &Vault{
 		Data: make(map[string]interface{}),
 		Key:  nil,
@@ -115,7 +114,7 @@ func NewVault() *Vault {
 	}
 
 	// Generate a new private key.
-	log.Printf("Generating new keypair\n")
+	LogVerbosef("Generating new keypair")
 	err := newVault.NewKeyPair()
 	if err != nil {
 		return nil
@@ -149,7 +148,7 @@ func NewVaultWithData(name string, tags []string, balance float64) *Vault {
 // The data included built-in data such as the wallet name, tags, and balance.
 func (v *Vault) SetData(key string, value interface{}) error {
 	if v == nil {
-		log.Fatalln("Vault is nil")
+		LogInfof("Vault is nil")
 		return nil
 	}
 
@@ -158,7 +157,7 @@ func (v *Vault) SetData(key string, value interface{}) error {
 	}
 
 	if verbose {
-		log.Printf("Setting data: %s to %v", key, value)
+		LogVerbosef("Setting data: %s to %v", key, value)
 	}
 
 	v.Data[key] = value
@@ -184,12 +183,12 @@ func (v *Vault) NewKeyPair() (err error) {
 	for i, curve := range curves {
 		key, err := ecdsa.GenerateKey(curve, rand.Reader)
 		if err == nil {
-			log.Printf("Successfully generated key with curve %s", curveNames[i])
+			LogVerbosef("Successfully generated key with curve %s", curveNames[i])
 			v.Key = key
 			v.Pem = NewPEM(key)
 			return nil
 		}
-		log.Printf("Failed to generate key with curve %s: %v", curveNames[i], err)
+		LogVerbosef("Failed to generate key with curve %s: %v", curveNames[i], err)
 	}
 	// If all curves fail, do not set v.Key or v.Pem
 	return fmt.Errorf("failed to generate keypair with any supported curve: %v", err)

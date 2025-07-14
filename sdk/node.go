@@ -6,8 +6,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
 	"os"
+	"path/filepath"
 	"sync"
 	"time"
 
@@ -129,20 +129,25 @@ func NewNode(opts *NodeOptions) error {
 	// Load existing data
 	err = node.load()
 	if err != nil {
-		log.Printf("No existing node state found, creating new node")
+		LogVerbosef("No existing node state found, creating new node")
 	}
 
 	node.initialized = true
 	node.Status = "ready"
 
-	log.Printf("Node initialized: %s", node.ID)
+	LogInfof("Node initialized: %s", node.ID)
 	return nil
 }
 
 func DefaultNodeOptions() *NodeOptions {
+	home, err := os.UserHomeDir()
+	dataPath := "./data"
+	if err == nil {
+		dataPath = filepath.Join(home, "gbb-data")
+	}
 	return &NodeOptions{
 		EnvName:  "chaind",
-		DataPath: "./data",
+		DataPath: dataPath,
 		Config:   NewConfig(),
 	}
 }
@@ -166,7 +171,7 @@ func (n *Node) save() error {
 		return fmt.Errorf("error saving node state: %w", err)
 	}
 
-	fmt.Printf("Saved node state: %s\n", n.ID)
+	LogVerbosef("Saved node state: %s", n.ID)
 	return nil
 }
 
@@ -181,7 +186,7 @@ func (n *Node) load() error {
 	n.ID = data.ID
 	n.Config = data.Config
 
-	log.Printf("Loaded node state: %s\n", n.ID)
+	LogVerbosef("Loaded node state: %s", n.ID)
 	return nil
 }
 
@@ -190,12 +195,12 @@ func (n *Node) load() error {
 func LogEvent(format string, args ...interface{}) {
 	// Clear the current line containing the spinner
 	fmt.Print("\r                                                    \r")
-	log.Printf(format, args...)
+	LogInfof(format, args...)
 }
 
 // Run runs the node.
 func (n *Node) Run() {
-	log.Println("Starting node...")
+	LogInfof("Starting node...")
 
 	// Start progress indicator
 	if n.ProgressIndicator != nil {
@@ -205,10 +210,10 @@ func (n *Node) Run() {
 
 	// Start P2P network
 	go n.P2P.Start()
-	log.Println("P2P network starting on :8101")
+	LogInfof("P2P network starting on :8101")
 
 	if n.Blockchain == nil {
-		log.Println("Error: Blockchain is not initialized")
+		LogInfof("Error: Blockchain is not initialized")
 		n.ProgressIndicator.ShowError("Blockchain not initialized")
 		return
 	}
@@ -252,46 +257,24 @@ func (n *Node) Run() {
 	// This is a simple check and might not work in all environments
 	_, isTerminal := os.LookupEnv("TERM")
 
-	// Keep the main goroutine alive
-	for {
-		select {
-		case <-spinnerTick.C:
-			if isTerminal {
-				// Update the spinner animation
+	// Spinner and status updates should only be shown if verbose is enabled
+	if n.Config.Verbose && isTerminal {
+		for {
+			select {
+			case <-spinnerTick.C:
 				frameIndex = (frameIndex + 1) % len(spinnerFrames)
-				blockCount := 0
-				txCount := 0
-
-				if n.Blockchain != nil {
-					blockCount = n.Blockchain.GetBlockCount()
-					txCount = len(n.Blockchain.TransactionQueue)
-				}
-
-				// Display the spinner with blockchain stats using fixed-width formatting
-				fmt.Printf("\r%s Node: %-8s | Blocks: %-4d | TXs: %-3d",
-					spinnerFrames[frameIndex],
-					n.ID[:8],
-					blockCount,
-					txCount)
+				fmt.Printf("\r%s Node: %s | Blocks: %d    | TXs: %d  ", spinnerFrames[frameIndex], n.ID[:8], n.Blockchain.GetBlockCount(), len(n.Blockchain.TransactionQueue))
+			case <-statsTick.C:
+				fmt.Printf("\r📊 Status: Blocks=%d    | TXs=%d   | Difficulty=%d  | Peers=%d  | Uptime=%s         ", n.Blockchain.GetBlockCount(), len(n.Blockchain.TransactionQueue), n.Config.Difficulty, len(n.P2P.nodes), time.Since(n.LastSeen).Truncate(time.Second))
+			case <-networkTick.C:
+				fmt.Printf("\r🌐 Network: Connected (%d  peers) - Synced", len(n.P2P.nodes))
+			case <-logCh:
+				// handle log output if needed
 			}
-		case <-statsTick.C:
-			// Periodically update blockchain status
-			// This helps ensure we don't miss important state changes
-			if n.Blockchain != nil {
-				n.Blockchain.DisplayStatus()
-			}
-		case <-networkTick.C:
-			// Update network status
-			if n.P2P != nil {
-				peerCount := len(n.P2P.nodes)
-				isSynced := true // TODO: Implement actual sync status
-				n.ProgressIndicator.ShowNetworkStatus(peerCount, isSynced)
-			}
-		case <-logCh:
-			// This would be triggered by a significant event
-			// The actual logging happens in event handlers
 		}
 	}
+	// Otherwise, just block forever
+	select {}
 }
 
 // ProcessP2PTransaction processes a P2PTransaction received from the P2P network.

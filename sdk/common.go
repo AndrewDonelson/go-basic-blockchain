@@ -336,3 +336,19 @@ func isBase64Encoded(s string) bool {
 	_, err := base64.StdEncoding.DecodeString(s)
 	return err == nil
 }
+
+var configVerbose = false // will be set from Config at startup
+
+func LogVerbosef(format string, args ...interface{}) {
+	if configVerbose {
+		log.Printf("[VERBOSE] "+format, args...)
+	}
+}
+
+func LogInfof(format string, args ...interface{}) {
+	log.Printf(format, args...)
+}
+
+func ConfigSetVerbose(v bool) {
+	configVerbose = v
+}

@@ -5,25 +5,29 @@
 # OS Detection and path normalization
 ifeq ($(OS),Windows_NT)
     # Windows-specific settings
-    PATHSEP := \\
+    PATHSEP := \
     RM := rmdir /s /q
     MKDIR := mkdir
+    MKDIR_P := if not exist
     # Function to normalize paths for Windows
     normalize_path = $(subst /,$(PATHSEP),$1)
     EXE := .exe
+    MKDIR_CMD = if not exist "$(BIN)" mkdir "$(BIN)"
 else
     # Unix-specific settings
     PATHSEP := /
     RM := rm -rf
     MKDIR := mkdir -p
+    MKDIR_P := mkdir -p
     # Keep paths as-is on Unix
     normalize_path = $1
     EXE :=
+    MKDIR_CMD = mkdir -p $(BIN)
 endif
 
 # Project configuration
 ORGANIZATION := Nlaak Studios, LLC
-MODNAME      := $(shell basename $(shell go list -m))
+MODNAME      := gbbd
 MODULE       := $(shell go list -m)
 VERSION      := $(shell git describe --tags --always --dirty --match=v* 2> /dev/null || echo v0.0.0)
 DATE         := $(shell date -u +"%Y-%m-%dT%H:%M:%SZ")
@@ -68,8 +72,10 @@ GOOS_LIST    := linux windows darwin
 all: setup fmt lint test build ## Run setup, format, lint, test, and build
 
 .PHONY: build
-build: ; $(info $(M) building executable ($(MODNAME))...) @ ## Build production binary
-	$Q $(GO) build \
+build:
+	$(info $(M) building executable ($(MODNAME))...)
+	$(Q) mkdir -p $(BIN)
+	$(Q) $(GO) build \
 		-mod=mod \
 		-tags release \
 		-ldflags '-X $(MODULE)/cmd.Version=$(VERSION) -X $(MODULE)/cmd.BuildDate=$(DATE)' \
@@ -83,8 +89,25 @@ run-dev: ; $(info $(M) running development version...) @ ## Run development vers
 demo: ; $(info $(M) running progress indicator demo...) @ ## Run progress indicator demo
 	$Q $(GO) run ./cmd/demo/main.go
 
+.PHONY: run
+run: build ; $(info $(M) running blockchain node...) @ ## Build and run the blockchain node
+	$Q $(BIN)/$(MODNAME)$(EXE)
+
+.PHONY: run-bin
+run-bin: ; $(info $(M) running existing binary...) @ ## Run existing binary (assumes it's built)
+	$Q $(BIN)/$(MODNAME)$(EXE)
+
+.PHONY: install
+install: build ; $(info $(M) installing binary...) @ ## Install binary to system PATH
+	$Q cp $(BIN)/$(MODNAME)$(EXE) $(GOBIN)/$(MODNAME)$(EXE)
+
 .PHONY: debug
 debug: ; $(info $(M) debugging development version...) @ ## Debug development version
+ifeq ($(OS),Windows_NT)
+	$Q if not exist "$(BIN)" mkdir "$(BIN)"
+else
+	$Q $(MKDIR_P) $(BIN)
+endif
 	$Q $(GO) build -gcflags="all=-N -l" -o $(BIN)/$(MODNAME)-debug$(EXE) $(DEV_MAIN)
 	$Q $(DELVE) exec $(BIN)/$(MODNAME)-debug$(EXE)
 
@@ -102,7 +125,7 @@ fmt: ; $(info $(M) running gofmt...) @ ## Run gofmt on all source files
 lint: ; $(info $(M) running golangci-lint...) @ ## Run golangci-lint
 ifeq ($(OS),Windows_NT)
 	$Q $(GO) install github.com/golangci/golangci-lint/cmd/golangci-lint@$(GOLANGCI_VER)
-	$Q $(GOLANGCI) run --timeout 5m
+	$Q "$(GOLANGCI)" run --timeout 5m
 else
 	$Q curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | sh -s -- -b "$(GOBIN)" $(GOLANGCI_VER)
 	$Q $(GOLANGCI) run --timeout 5m
@@ -143,16 +166,27 @@ test-coverage: ; $(info $(M) running coverage tests...) @ ## Run coverage tests
 .PHONY: clean
 clean: ; $(info $(M) cleaning...) @ ## Clean build artifacts
 ifeq ($(OS),Windows_NT)
-	$Q if exist $(BIN) $(RM) $(BIN)
-	$Q if exist test $(RM) test
-	$Q if exist vendor $(RM) vendor
-	$Q if exist go.sum del go.sum
+	$Q if exist "$(BIN)" $(RM) "$(BIN)"
+	$Q if exist "test" $(RM) "test"
+	$Q if exist "vendor" $(RM) "vendor"
+	$Q if exist "go.sum" del "go.sum"
 else
 	$Q $(RM) $(BIN)
 	$Q $(RM) test
 	$Q $(RM) vendor
 	$Q $(RM) go.sum
 endif
+
+.PHONY: clean-data
+clean-data: ; $(info $(M) cleaning blockchain data...) @ ## Clean blockchain data
+ifeq ($(OS),Windows_NT)
+	$Q if exist "data" $(RM) "data"
+else
+	$Q $(RM) data
+endif
+
+.PHONY: clean-all
+clean-all: clean clean-data ; $(info $(M) cleaning everything...) @ ## Clean build artifacts and blockchain data
 
 .PHONY: docker
 docker: all ; $(info $(M) building docker image...) @ ## Build docker image
@@ -176,7 +210,7 @@ verify: ; $(info $(M) verifying dependencies...) @ ## Verify dependencies
 .PHONY: security-scan
 security-scan: ; $(info $(M) running security scan...) @ ## Run security scan
 	$Q $(GO) install github.com/securego/gosec/v2/cmd/gosec@latest
-	$Q $(GOBIN)/gosec$(EXE) -no-fail ./...
+	$Q "$(GOBIN)/gosec$(EXE)" -no-fail ./...
 
 .PHONY: help
 help:
@@ -204,7 +238,7 @@ endif
 # Generate documentation
 docs: ; $(info $(M) generating documentation...) @ ## Generate project documentation
 	$Q $(MKDIR) $(CURDIR)/docs
-	integration$Q godoc -url . -html > $(CURDIR)/docs/index.html
+	$Q godoc -url . -html > $(CURDIR)/docs/index.html
 	$Q find ./sdk -name "*.go" -not -path "*/test*" | xargs godoc -url | sed 's|/pkg/|./|g' > $(CURDIR)/docs/sdk.html
 	$Q echo "Generating documentation overview..."
 	$Q $(GO) run scripts/generate_docs.go
