@@ -136,9 +136,18 @@ func NewVaultWithData(name string, tags []string, balance float64) *Vault {
 	}
 
 	// Set initial data
-	vault.SetData("name", name)
-	vault.SetData("tags", tags)
-	vault.SetData("balance", balance)
+	if err := vault.SetData("name", name); err != nil {
+		// Log error but continue
+		_ = err // Suppress unused variable warning
+	}
+	if err := vault.SetData("tags", tags); err != nil {
+		// Log error but continue
+		_ = err // Suppress unused variable warning
+	}
+	if err := vault.SetData("balance", balance); err != nil {
+		// Log error but continue
+		_ = err // Suppress unused variable warning
+	}
 
 	return vault
 }

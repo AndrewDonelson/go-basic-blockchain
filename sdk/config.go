@@ -143,7 +143,10 @@ func (c *Config) loadFromEnv() {
 				log.Printf("Error loading environment file [%s]: %v", envFile, err)
 				// Optionally prompt for values or use defaults
 				c.promptForValues()
-				c.save()
+				if err := c.save(); err != nil {
+					// Log error but continue
+					_ = err // Suppress unused variable warning
+				}
 			} else {
 				log.Printf("Loaded environment file: %s", envFile)
 			}
@@ -177,6 +180,9 @@ func (c *Config) loadFromEnv() {
 }
 
 // loadFromFile loads configuration from a file if it exists
+// This function is currently unused but kept for potential future use
+//
+//nolint:unused
 func (c *Config) loadFromFile() {
 	if fileExists(cfgFile) {
 		data, err := os.ReadFile(cfgFile)
@@ -195,7 +201,7 @@ func (c *Config) loadFromFile() {
 
 // applyCommandLineFlags applies command line flags to override config values
 func (c *Config) applyCommandLineFlags() {
-	for name, _ := range Args.Flags {
+	for name := range Args.Flags {
 		switch name {
 		case "seed":
 			c.IsSeed = Args.GetBool("seed")

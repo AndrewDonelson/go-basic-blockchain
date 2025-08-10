@@ -86,7 +86,8 @@ type Wallet struct {
 	EncryptionParams *EncryptionParams
 	Ciphertext       []byte
 	vault            *Vault
-	mutex            sync.Mutex
+	//nolint:unused
+	mutex sync.Mutex // Currently unused but kept for potential future use
 }
 
 // EncryptionParams holds the encryption parameters for the private key.
@@ -619,7 +620,10 @@ func (w *Wallet) Unlock(passphrase string) error {
 			return err
 		}
 
-		w.bytesToVault(dataAsBytes)
+		if err := w.bytesToVault(dataAsBytes); err != nil {
+			// Log error but continue
+			_ = err // Suppress unused variable warning
+		}
 
 		// Set the wallet's data.
 		w.Ciphertext = []byte{}

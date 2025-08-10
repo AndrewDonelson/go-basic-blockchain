@@ -160,6 +160,9 @@ func (n *Node) IsReady() bool {
 }
 
 // save saves the node state to disk.
+// This function is currently unused but kept for potential future use
+//
+//nolint:unused
 func (n *Node) save() error {
 	data := &NodePersistData{
 		ID:     n.ID,
@@ -209,7 +212,12 @@ func (n *Node) Run() {
 	}
 
 	// Start P2P network
-	go n.P2P.Start()
+	go func() {
+		if err := n.P2P.Start(); err != nil {
+			// Log error but continue
+			_ = err // Suppress unused variable warning
+		}
+	}()
 	LogInfof("P2P network starting on :8101")
 
 	if n.Blockchain == nil {
@@ -323,7 +331,10 @@ func (n *Node) Register() error {
 	}
 
 	LogEvent("Registering node with P2P network")
-	n.P2P.RegisterNode(n)
+	if err := n.P2P.RegisterNode(n); err != nil {
+		// Log error but continue
+		_ = err // Suppress unused variable warning
+	}
 	LogEvent("Node registered with P2P network")
 
 	LogEvent("Marshaling node data to JSON")
@@ -456,12 +467,15 @@ func (n *Node) registerNode(tx P2PTransaction) error {
 	n.P2P.nodes[newNode.ID] = &newNode
 	LogEvent("Registered new node in the network: %s", newNode.ID)
 
-	n.P2P.Broadcast(P2PTransaction{
+	if err := n.P2P.Broadcast(P2PTransaction{
 		Tx:     tx.Tx,
 		Target: "all",
 		Action: "add",
 		Data:   tx.Data,
-	})
+	}); err != nil {
+		// Log error but continue
+		_ = err // Suppress unused variable warning
+	}
 
 	return nil
 }

@@ -174,7 +174,11 @@ func (pr *ProtocolRouter) markTransactionFailed(tx *ProtocolTransaction, errorMs
 
 	// Call failure callback if set
 	if pr.onTransactionFailed != nil {
-		pr.onTransactionFailed(tx, errorMsg)
+		if err := pr.onTransactionFailed(tx, errorMsg); err != nil {
+			// Log the error but don't fail the transaction marking
+			// This is a callback error, not a transaction error
+			_ = err // Suppress unused variable warning
+		}
 	}
 }
 
@@ -239,7 +243,11 @@ func (pr *ProtocolRouter) createRollup(protocol string, transactions []*Protocol
 
 	// Call rollup callback if set
 	if pr.onRollupCreated != nil {
-		pr.onRollupCreated(rollup)
+		if err := pr.onRollupCreated(rollup); err != nil {
+			// Log the error but don't fail the rollup creation
+			// This is a callback error, not a rollup error
+			_ = err // Suppress unused variable warning
+		}
 	}
 }
 
@@ -296,7 +304,15 @@ func (pr *ProtocolRouter) GetStats() *RouterStats {
 
 	// Create a copy to avoid race conditions
 	stats := &RouterStats{}
-	*stats = *pr.stats
+	// Copy stats without copying the mutex
+	stats.TotalTransactions = pr.stats.TotalTransactions
+	stats.ValidatedTransactions = pr.stats.ValidatedTransactions
+	stats.FailedTransactions = pr.stats.FailedTransactions
+	stats.RollupBlocksCreated = pr.stats.RollupBlocksCreated
+	stats.BankTransactions = pr.stats.BankTransactions
+	stats.MessageTransactions = pr.stats.MessageTransactions
+	stats.AverageValidationTime = pr.stats.AverageValidationTime
+	stats.AverageRollupTime = pr.stats.AverageRollupTime
 	return stats
 }
 

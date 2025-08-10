@@ -47,6 +47,8 @@ GOLANGCI_VER := v1.55.2
 
 # Build variables
 BIN          := $(CURDIR)/bin
+BIN_DEBUG    := $(CURDIR)/bin/debug
+BIN_RELEASE  := $(CURDIR)/bin/release
 PKGS         := $(or $(PKG),$(shell $(GO) list ./...))
 TESTPKGS     := $(shell $(GO) list -f '{{ if or .TestGoFiles .XTestGoFiles }}{{ .ImportPath }}{{ end }}' $(PKGS))
 TIMEOUT      := 15
@@ -74,12 +76,12 @@ all: setup fmt lint test build ## Run setup, format, lint, test, and build
 .PHONY: build
 build:
 	$(info $(M) building executable ($(MODNAME))...)
-	$(Q) mkdir -p $(BIN)
+	$(Q) mkdir -p $(BIN_RELEASE)
 	$(Q) $(GO) build \
 		-mod=mod \
 		-tags release \
 		-ldflags '-X $(MODULE)/cmd.Version=$(VERSION) -X $(MODULE)/cmd.BuildDate=$(DATE)' \
-		-o $(BIN)/$(MODNAME)$(EXE) $(DEV_MAIN)
+		-o $(BIN_RELEASE)/$(MODNAME)$(EXE) $(DEV_MAIN)
 
 .PHONY: run-dev
 run-dev: ; $(info $(M) running development version...) @ ## Run development version
@@ -91,25 +93,21 @@ demo: ; $(info $(M) running progress indicator demo...) @ ## Run progress indica
 
 .PHONY: run
 run: build ; $(info $(M) running blockchain node...) @ ## Build and run the blockchain node
-	$Q $(BIN)/$(MODNAME)$(EXE)
+	$Q $(BIN_RELEASE)/$(MODNAME)$(EXE)
 
 .PHONY: run-bin
 run-bin: ; $(info $(M) running existing binary...) @ ## Run existing binary (assumes it's built)
-	$Q $(BIN)/$(MODNAME)$(EXE)
+	$Q $(BIN_RELEASE)/$(MODNAME)$(EXE)
 
 .PHONY: install
 install: build ; $(info $(M) installing binary...) @ ## Install binary to system PATH
-	$Q cp $(BIN)/$(MODNAME)$(EXE) $(GOBIN)/$(MODNAME)$(EXE)
+	$Q cp $(BIN_RELEASE)/$(MODNAME)$(EXE) $(GOBIN)/$(MODNAME)$(EXE)
 
 .PHONY: debug
 debug: ; $(info $(M) debugging development version...) @ ## Debug development version
-ifeq ($(OS),Windows_NT)
-	$Q if not exist "$(BIN)" mkdir "$(BIN)"
-else
-	$Q $(MKDIR_P) $(BIN)
-endif
-	$Q $(GO) build -gcflags="all=-N -l" -o $(BIN)/$(MODNAME)-debug$(EXE) $(DEV_MAIN)
-	$Q $(DELVE) exec $(BIN)/$(MODNAME)-debug$(EXE)
+	$Q mkdir -p $(BIN_DEBUG)
+	$Q $(GO) build -gcflags="all=-N -l" -o $(BIN_DEBUG)/$(MODNAME)$(EXE) $(DEV_MAIN)
+	$Q $(DELVE) exec $(BIN_DEBUG)/$(MODNAME)$(EXE)
 
 .PHONY: setup
 setup: | $(GOBIN) ; $(info $(M) setting up dependencies...) @ ## Setup go modules
@@ -169,12 +167,10 @@ ifeq ($(OS),Windows_NT)
 	$Q if exist "$(BIN)" $(RM) "$(BIN)"
 	$Q if exist "test" $(RM) "test"
 	$Q if exist "vendor" $(RM) "vendor"
-	$Q if exist "go.sum" del "go.sum"
 else
 	$Q $(RM) $(BIN)
 	$Q $(RM) test
 	$Q $(RM) vendor
-	$Q $(RM) go.sum
 endif
 
 .PHONY: clean-data
@@ -193,11 +189,10 @@ docker: all ; $(info $(M) building docker image...) @ ## Build docker image
 	docker build -t $(MODNAME):$(VERSION) -f Dockerfile .
 
 .PHONY: release
-release: clean all build-all ; $(info $(M) creating release...) @ ## Create a new release
-	$Q $(MKDIR) release
-	$Q cp $(BIN)/* release/
-	$Q tar -czvf release/$(MODNAME)-$(VERSION).tar.gz -C release $(MODNAME)*
-	$Q echo "Created release $(VERSION)"
+release: clean test build-all ; $(info $(M) creating release...) @ ## Build all cross-compiled binaries
+	$Q echo "Release $(VERSION) built successfully"
+	$Q echo "Release binaries available in $(BIN_RELEASE)/ directory:"
+	$Q ls -la $(BIN_RELEASE)/$(MODNAME)* || echo "No release binaries found"
 
 .PHONY: cross
 cross: build-all ## Build for all platforms
@@ -249,15 +244,7 @@ docs-serve: docs ; $(info $(M) serving documentation...) @ ## Serve documentatio
 
 # Cross-compilation targets
 .PHONY: build-all
-build-all: ## Build for all platforms and architectures
-	$(foreach os,$(GOOS_LIST),\
-		$(foreach arch,$(GOARCH_LIST),\
-			$(info $(M) Building for $(os)/$(arch)...)\
-			$(shell GOOS=$(os) GOARCH=$(arch) $(GO) build \
-				-mod=mod \
-				-tags release \
-				-ldflags '-X $(MODULE)/cmd.Version=$(VERSION) -X $(MODULE)/cmd.BuildDate=$(DATE)' \
-				-o $(BIN)/$(MODNAME)-$(os)-$(arch)$(if $(filter windows,$(os)),.exe,) $(DEV_MAIN))))
+build-all: build-linux-amd64 build-linux-arm64 build-windows-amd64 build-windows-arm64 build-darwin-amd64 build-darwin-arm64 ## Build for all platforms and architectures
 
 # Individual OS+architecture targets
 .PHONY: build-linux-amd64 build-linux-arm64 build-windows-amd64 build-windows-arm64 build-darwin-amd64 build-darwin-arm64
@@ -275,11 +262,12 @@ build-darwin-arm64: GOOS := darwin
 build-darwin-arm64: GOARCH := arm64
 
 build-linux-amd64 build-linux-arm64 build-windows-amd64 build-windows-arm64 build-darwin-amd64 build-darwin-arm64: ; $(info $(M) building for $(GOOS)/$(GOARCH)...) @ ## Build for specific OS/architecture
+	$Q mkdir -p $(BIN_RELEASE)
 	$Q GOOS=$(GOOS) GOARCH=$(GOARCH) $(GO) build \
 		-mod=mod \
 		-tags release \
 		-ldflags '-X $(MODULE)/cmd.Version=$(VERSION) -X $(MODULE)/cmd.BuildDate=$(DATE)' \
-		-o $(BIN)/$(MODNAME)-$(GOOS)-$(GOARCH)$(if $(filter windows,$(GOOS)),.exe,) $(DEV_MAIN)
+		-o $(BIN_RELEASE)/$(MODNAME)-$(GOOS)-$(GOARCH)$(if $(filter windows,$(GOOS)),.exe,) $(DEV_MAIN)
 
 # Default target
 .DEFAULT_GOAL := help

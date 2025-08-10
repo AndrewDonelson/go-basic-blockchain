@@ -16,9 +16,6 @@ var (
 )
 
 func Sleepy() {
-	// Generate a random seed based on the current time
-	rand.Seed(time.Now().UnixNano())
-
 	// Generate a random duration between 1 and 3 seconds
 	minDuration := 1 * time.Second
 	maxDuration := 2 * time.Second
@@ -29,7 +26,6 @@ func Sleepy() {
 }
 
 func TestMain(m *testing.M) {
-	rand.Seed(time.Now().UnixNano())
 	os.Exit(m.Run())
 }
 

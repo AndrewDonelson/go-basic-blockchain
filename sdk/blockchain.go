@@ -207,7 +207,9 @@ func (bc *Blockchain) Load() error {
 	}
 
 	if data.TXLookup != nil {
-		bc.TXLookup.Set(data.TXLookup)
+		if err := bc.TXLookup.Set(data.TXLookup); err != nil {
+			log.Printf("Error setting TX lookup: %v", err)
+		}
 	}
 
 	if data.CurrBlockIndex != nil {
@@ -293,7 +295,9 @@ func (bc *Blockchain) createBlockchain() error {
 		return fmt.Errorf("failed to close miner wallet: %v", err)
 	}
 
-	minerWallet.Open(minerWalletPW)
+	if err := minerWallet.Open(minerWalletPW); err != nil {
+		log.Printf("Error opening miner wallet: %v", err)
+	}
 	if err != nil {
 		return fmt.Errorf("failed to open miner wallet: %v", err)
 	}
@@ -393,12 +397,15 @@ func (bc *Blockchain) HasTransaction(id *PUID) bool {
 
 // LoadExistingBlocks loads any existing blocks from disk and appends them to the blockchain.
 func (bc *Blockchain) LoadExistingBlocks() error {
+	// Use the configured data path instead of the relative blockFolder
+	blocksPath := filepath.Join(bc.cfg.DataPath, "blocks")
+
 	// Look for both .json and .jso files (in case of truncated names)
-	jsonFiles, _ := filepath.Glob(fmt.Sprintf("%s/*.json", blockFolder))
-	jsoFiles, _ := filepath.Glob(fmt.Sprintf("%s/*.jso", blockFolder))
+	jsonFiles, _ := filepath.Glob(filepath.Join(blocksPath, "*.json"))
+	jsoFiles, _ := filepath.Glob(filepath.Join(blocksPath, "*.jso"))
 	files := append(jsonFiles, jsoFiles...)
 	if len(files) == 0 {
-		log.Printf("No existing blocks found\n")
+		log.Printf("No existing blocks found in %s\n", blocksPath)
 		return nil
 	}
 
@@ -624,6 +631,8 @@ func (bc *Blockchain) Run(difficulty int) {
 		for range blockTicker.C {
 			now := time.Now()
 			log.Printf("Block ticker fired at %s, creating new block...", now.Format("15:04:05"))
+			log.Printf("Current blockchain state before creating new block: CurrentBlockIndex=%d, NextBlockIndex=%d, TotalBlocks=%d",
+				bc.CurrentBlockIndex, bc.NextBlockIndex, len(bc.Blocks))
 			bc.createNewBlock(difficulty)
 		}
 	}()
@@ -676,6 +685,7 @@ func (bc *Blockchain) createNewBlock(difficulty int) {
 
 	log.Printf("New block created: [#%s] Hash: %s with %d main chain + %d sidechain transactions",
 		newBlock.Index.String(), newBlock.Hash, len(bc.TransactionQueue), len(sidechainTxs))
+	log.Printf("Blockchain state updated: CurrentBlockIndex=%d, NextBlockIndex=%d", bc.CurrentBlockIndex, bc.NextBlockIndex)
 }
 
 // collectSidechainRollups collects validated sidechain transactions for inclusion in the main block

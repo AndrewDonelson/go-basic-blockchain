@@ -3,6 +3,7 @@
 package sdk
 
 import (
+	"log"
 	"net/http"
 	"net/url"
 )
@@ -47,7 +48,9 @@ func (api *API) handleAccountRegister(w http.ResponseWriter, r *http.Request) {
 		RespondError(w, http.StatusInternalServerError, "Failed to get local storage")
 		return
 	}
-	ls.Set("email", email)
+	if err := ls.Set("email", email); err != nil {
+		log.Printf("Error setting email: %v", err)
+	}
 
 	// Send a verification email
 	verificationLink := api.GetConfig().Domain + "/account/verify?email=" + url.QueryEscape(email) + "&token=" + token
@@ -57,14 +60,20 @@ func (api *API) handleAccountRegister(w http.ResponseWriter, r *http.Request) {
 		RespondError(w, http.StatusInternalServerError, "Failed to send verification email")
 		return
 	}
-	w.Write([]byte("Registration successful. Please verify your email."))
+	if _, err := w.Write([]byte("Registration successful. Please verify your email.")); err != nil {
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
 }
 
 // handleAccountLogin handles the login of an existing account and returns an API key.
 // POST email & password hash and returns JSON with API key
 func (api *API) handleAccountLogin(w http.ResponseWriter, r *http.Request) {
 	// Return "Not Yet Implemented"
-	w.Write([]byte("Not Yet Implemented"))
+	if _, err := w.Write([]byte("Not Yet Implemented")); err != nil {
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
 }
 
 // handleAccountVerify handles the verification of a new account from the email link.
@@ -73,5 +82,8 @@ func (api *API) handleAccountVerify(w http.ResponseWriter, r *http.Request) {
 	token := r.URL.Query().Get("token")
 	api.log.Notice("Received Verification Link: ", token)
 	// Return "Not Yet Implemented"
-	w.Write([]byte("Not Yet Implemented"))
+	if _, err := w.Write([]byte("Not Yet Implemented")); err != nil {
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
 }

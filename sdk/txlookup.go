@@ -137,6 +137,9 @@ func (txlm *TXLookupManager) split(merged string) (entry *IndexEntry) {
 }
 
 // Exists tells whether the Index contains entry.
+// This function is currently unused but kept for potential future use
+//
+//nolint:unused
 func (txlm *TXLookupManager) exists(entry string) bool {
 	return txlm.index.Exists(entry)
 }

@@ -87,3 +87,106 @@ func (b *Bank) Process() string {
 
 	return fmt.Sprintf("Transferred %f from %s to %s", b.Amount, b.From.Address, b.To.Address)
 }
+
+// Transaction interface method implementations
+// These methods delegate to the embedded Tx struct
+
+func (b *Bank) GetProtocol() string {
+	return b.Tx.GetProtocol()
+}
+
+func (b *Bank) GetID() string {
+	if b == nil {
+		return "" // Return empty string if Bank is nil
+	}
+	if b.Tx.ID == nil {
+		return "" // Return empty string if Tx is not properly initialized
+	}
+	return b.Tx.GetID()
+}
+
+func (b *Bank) GetHash() string {
+	return b.Tx.GetHash()
+}
+
+func (b *Bank) GetSignature() string {
+	return b.Tx.GetSignature()
+}
+
+func (b *Bank) GetSenderWallet() *Wallet {
+	return b.Tx.GetSenderWallet()
+}
+
+func (b *Bank) GetRecipientWallet() *Wallet {
+	return b.Tx.GetRecipientWallet()
+}
+
+func (b *Bank) GetFee() float64 {
+	return b.Tx.GetFee()
+}
+
+func (b *Bank) GetStatus() TransactionStatus {
+	return b.Tx.GetStatus()
+}
+
+func (b *Bank) SetStatus(status TransactionStatus) {
+	b.Tx.SetStatus(status)
+}
+
+func (b *Bank) Sign(privPEM []byte) (string, error) {
+	return b.Tx.Sign(privPEM)
+}
+
+func (b *Bank) Verify(pubKey []byte, sign string) (bool, error) {
+	return b.Tx.Verify(pubKey, sign)
+}
+
+func (b *Bank) Send(bc *Blockchain) error {
+	return b.Tx.Send(bc)
+}
+
+func (b *Bank) String() string {
+	return b.Tx.String()
+}
+
+func (b *Bank) Hex() string {
+	return b.Tx.Hex()
+}
+
+func (b *Bank) Hash() string {
+	if b == nil {
+		return "" // Return empty string if Bank is nil
+	}
+	if b.Tx.ID == nil {
+		return "" // Return empty string if Tx is not properly initialized
+	}
+	return b.Tx.Hash()
+}
+
+func (b *Bank) Bytes() []byte {
+	return b.Tx.Bytes()
+}
+
+func (b *Bank) JSON() string {
+	return b.Tx.JSON()
+}
+
+func (b *Bank) Validate() error {
+	return b.Tx.Validate()
+}
+
+func (b *Bank) Size() int {
+	return b.Tx.Size()
+}
+
+func (b *Bank) EstimateFee(feePerByte float64) float64 {
+	return b.Tx.EstimateFee(feePerByte)
+}
+
+func (b *Bank) SetPriority(priority int) {
+	b.Tx.SetPriority(priority)
+}
+
+func (b *Bank) GetPriority() int {
+	return b.Tx.GetPriority()
+}

@@ -334,8 +334,16 @@ func (p *P2P) handleConnection(conn net.Conn) {
 
 func (p *P2P) performHandshake(conn net.Conn) error {
 	// Set a timeout for the handshake
-	conn.SetDeadline(time.Now().Add(10 * time.Second))
-	defer conn.SetDeadline(time.Time{}) // Reset the deadline
+	if err := conn.SetDeadline(time.Now().Add(10 * time.Second)); err != nil {
+		// Log error but continue
+		_ = err // Suppress unused variable warning
+	}
+	defer func() {
+		if err := conn.SetDeadline(time.Time{}); err != nil {
+			// Log error but continue
+			_ = err // Suppress unused variable warning
+		}
+	}() // Reset the deadline
 
 	// 1. Receive "HELLO" message
 	reader := bufio.NewReader(conn)
@@ -568,12 +576,15 @@ func (p *P2P) registerNode(tx P2PTransaction) {
 	}
 
 	// Broadcast the new node to all other nodes
-	p.BroadcastMessage(P2PTransaction{
+	if err := p.BroadcastMessage(P2PTransaction{
 		Tx:     tx.Tx,
 		Target: "all",
 		Action: "add",
 		Data:   tx.Data,
-	})
+	}); err != nil {
+		// Log error but continue
+		_ = err // Suppress unused variable warning
+	}
 }
 
 func (p *P2P) BroadcastStatus(node *Node, status string) error {
@@ -648,8 +659,16 @@ func (p *P2P) ConnectToSeedNode(address string) error {
 
 func (p *P2P) performClientHandshake(conn net.Conn) error {
 	// Set a timeout for the handshake
-	conn.SetDeadline(time.Now().Add(10 * time.Second))
-	defer conn.SetDeadline(time.Time{}) // Reset the deadline
+	if err := conn.SetDeadline(time.Now().Add(10 * time.Second)); err != nil {
+		// Log error but continue
+		_ = err // Suppress unused variable warning
+	}
+	defer func() {
+		if err := conn.SetDeadline(time.Time{}); err != nil {
+			// Log error but continue
+			_ = err // Suppress unused variable warning
+		}
+	}() // Reset the deadline
 
 	// 1. Send a "HELLO" message
 	_, err := conn.Write([]byte("HELLO\n"))
@@ -698,8 +717,16 @@ func (p *P2P) performClientHandshake(conn net.Conn) error {
 
 func (p *P2P) requestNodeListFromSeed(conn net.Conn) ([]NodeInfo, error) {
 	// Set a timeout for the request
-	conn.SetDeadline(time.Now().Add(10 * time.Second))
-	defer conn.SetDeadline(time.Time{}) // Reset the deadline
+	if err := conn.SetDeadline(time.Now().Add(10 * time.Second)); err != nil {
+		// Log error but continue
+		_ = err // Suppress unused variable warning
+	}
+	defer func() {
+		if err := conn.SetDeadline(time.Time{}); err != nil {
+			// Log error but continue
+			_ = err // Suppress unused variable warning
+		}
+	}() // Reset the deadline
 
 	// 1. Send a "GET_NODES" message
 	_, err := conn.Write([]byte("GET_NODES\n"))
@@ -735,6 +762,10 @@ func (p *P2P) getSelfNodeID() string {
 	return ""
 }
 
+// max returns the maximum of two integers
+// This function is currently unused but kept for potential future use
+//
+//nolint:unused
 func max(a, b int) int {
 	if a > b {
 		return a

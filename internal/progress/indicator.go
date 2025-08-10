@@ -58,7 +58,7 @@ func NewProgressIndicator() *ProgressIndicator {
 				"  Validating    ", // Validating block
 				"  Broadcasting  ", // Broadcasting block/tx
 			},
-			150*time.Millisecond,
+			300*time.Millisecond, // Slower spinner to reduce flickering
 			spinner.WithColor("cyan"),
 			spinner.WithSuffix(" Blockchain Active"),
 			spinner.WithFinalMSG("✅ Blockchain Ready"),
@@ -164,7 +164,11 @@ func (pi *ProgressIndicator) ShowMiningProgress(blockIndex int, difficulty int, 
 	defer miningSpinner.Stop()
 
 	// Show hash attempts with consistent formatting
-	color.Yellow("Current Hash: %-16s...", currentHash[:16])
+	hashDisplay := currentHash
+	if len(currentHash) > 16 {
+		hashDisplay = currentHash[:16]
+	}
+	color.Yellow("Current Hash: %-16s...", hashDisplay)
 }
 
 // ShowTransactionProgress shows transaction processing progress
@@ -176,15 +180,21 @@ func (pi *ProgressIndicator) ShowTransactionProgress(txID string, status string)
 		return
 	}
 
+	// Handle short transaction IDs
+	txDisplay := txID
+	if len(txID) > 8 {
+		txDisplay = txID[:8]
+	}
+
 	switch status {
 	case "pending":
-		color.Blue("📝 Transaction %-8s: Pending", txID[:8])
+		color.Blue("📝 Transaction %-8s: Pending", txDisplay)
 	case "validating":
-		color.Yellow("🔍 Transaction %-8s: Validating", txID[:8])
+		color.Yellow("🔍 Transaction %-8s: Validating", txDisplay)
 	case "confirmed":
-		color.Green("✅ Transaction %-8s: Confirmed", txID[:8])
+		color.Green("✅ Transaction %-8s: Confirmed", txDisplay)
 	case "failed":
-		color.Red("❌ Transaction %-8s: Failed", txID[:8])
+		color.Red("❌ Transaction %-8s: Failed", txDisplay)
 	}
 }
 
@@ -214,11 +224,17 @@ func (pi *ProgressIndicator) ShowBlockProgress(blockIndex int, txCount int) {
 	// Simulate progress for each transaction
 	for i := 0; i < txCount; i++ {
 		time.Sleep(50 * time.Millisecond)
-		blockBar.Add(1)
+		if err := blockBar.Add(1); err != nil {
+			// Log error but continue
+			_ = err // Suppress unused variable warning
+		}
 	}
 
 	// Finish the progress bar
-	blockBar.Finish()
+	if err := blockBar.Finish(); err != nil {
+		// Log error but continue
+		_ = err // Suppress unused variable warning
+	}
 }
 
 // ShowNetworkStatus shows network connectivity status
@@ -259,10 +275,18 @@ func (pi *ProgressIndicator) ShowHeliosProgress(stage int, stageName string) {
 
 // statusUpdateLoop handles periodic status updates
 func (pi *ProgressIndicator) statusUpdateLoop() {
-	ticker := time.NewTicker(2 * time.Second)
+	ticker := time.NewTicker(5 * time.Second) // Reduced frequency to reduce flickering
 	defer ticker.Stop()
 
-	for pi.isRunning {
+	for {
+		pi.mutex.RLock()
+		isRunning := pi.isRunning
+		pi.mutex.RUnlock()
+
+		if !isRunning {
+			break
+		}
+
 		select {
 		case status := <-pi.updateChan:
 			pi.displayStatus(status)
@@ -277,7 +301,11 @@ func (pi *ProgressIndicator) statusUpdateLoop() {
 
 // displayStatus displays the current blockchain status
 func (pi *ProgressIndicator) displayStatus(status BlockchainStatus) {
-	if !pi.isRunning {
+	pi.mutex.RLock()
+	isRunning := pi.isRunning
+	pi.mutex.RUnlock()
+
+	if !isRunning {
 		return
 	}
 
@@ -297,9 +325,13 @@ func (pi *ProgressIndicator) displayStatus(status BlockchainStatus) {
 	// Add padding to ensure consistent width
 	paddedStatusLine := fmt.Sprintf("%-80s", statusLine)
 
-	// Update spinner suffix with status
+	// Update spinner suffix with status (only if it changed to reduce flickering)
 	if pi.spinner != nil {
-		pi.spinner.Suffix = " " + paddedStatusLine
+		currentSuffix := pi.spinner.Suffix
+		newSuffix := " " + paddedStatusLine
+		if currentSuffix != newSuffix {
+			pi.spinner.Suffix = newSuffix
+		}
 	}
 
 	// Update progress bar if mining

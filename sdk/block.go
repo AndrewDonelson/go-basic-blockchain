@@ -15,6 +15,7 @@ import (
 	"math"
 	"math/big"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/AndrewDonelson/go-basic-blockchain/internal/helios/algorithm"
@@ -29,6 +30,15 @@ const (
 
 	// InitialBlockReward is the initial reward for mining a block
 	InitialBlockReward = 50.0
+
+	// TargetBlockTime is the desired time between blocks in seconds
+	TargetBlockTime = 20 * time.Second
+
+	// TestTargetBlockTimeLow is the target block time for low difficulty tests (3 seconds)
+	TestTargetBlockTimeLow = 3 * time.Second
+
+	// TestTargetBlockTimeHigh is the target block time for high difficulty tests (6 seconds)
+	TestTargetBlockTimeHigh = 6 * time.Second
 )
 
 // BlockHeader represents the header of a block in the blockchain.
@@ -98,6 +108,10 @@ func (b *Block) GetTransactions(id string) []Transaction {
 }
 
 // hash returns the hash of the block as a string.
+// hash calculates the hash of the block
+// This function is currently unused but kept for potential future use
+//
+//nolint:unused
 func (b *Block) hash() string {
 	blockCopy := *b
 	blockCopy.Hash = ""
@@ -106,6 +120,9 @@ func (b *Block) hash() string {
 }
 
 // blockExists checks if a block file with the given filename exists.
+// This function is currently unused but kept for potential future use
+//
+//nolint:unused
 func (b *Block) blockExists(filename string) bool {
 	_, err := os.Stat(filename)
 	return !os.IsNotExist(err)
@@ -113,7 +130,9 @@ func (b *Block) blockExists(filename string) bool {
 
 // save saves the block to disk using localStorage.
 func (b *Block) save() error {
-	err := localStorage.Set("block", b)
+	// The localStorage system automatically determines the file path based on the Block type
+	// It will save to blocks/{index}.json
+	err := localStorage.Set("", b)
 	if err != nil {
 		return err
 	}
@@ -122,6 +141,9 @@ func (b *Block) save() error {
 }
 
 // load loads the block from disk using localStorage.
+// This function is currently unused but kept for potential future use
+//
+//nolint:unused
 func (b *Block) load(blockNumber big.Int) error {
 	b.Index = blockNumber
 	err := localStorage.Get("block", b)
@@ -157,7 +179,14 @@ func (b *Block) Validate(previousBlock *Block) error {
 func (b *Block) CalculateMerkleRoot() []byte {
 	var transactions [][]byte
 	for _, tx := range b.Transactions {
-		transactions = append(transactions, []byte(tx.Hash()))
+		if tx == nil {
+			continue // Skip nil transactions
+		}
+		hash := tx.Hash()
+		if hash == "" {
+			continue // Skip transactions with empty hash
+		}
+		transactions = append(transactions, []byte(hash))
 	}
 	tree := NewMerkleTree(transactions)
 	if tree.Root == nil {
@@ -244,22 +273,29 @@ func (b *Block) CreateBloomFilter() *BloomFilter {
 		k:      3,
 	}
 	for _, tx := range b.Transactions {
-		bf.Add([]byte(tx.GetID()))
+		if tx == nil {
+			continue // Skip nil transactions
+		}
+		txID := tx.GetID()
+		if txID == "" {
+			continue // Skip transactions with empty ID
+		}
+		bf.Add([]byte(txID))
 	}
 	return bf
 }
 
 // Mine performs the proof-of-work algorithm to mine the block.
 func (b *Block) Mine(difficulty uint) {
-	target := big.NewInt(1)
-	target.Lsh(target, uint(256-difficulty))
+	// For difficulty n, we need the hash to start with n zeros in hex
+	// This means the first n*4 bits must be zero
+	prefix := strings.Repeat("0", int(difficulty))
 
 	for {
 		hash := b.CalculateHash()
-		hashInt := new(big.Int).SetBytes([]byte(hash))
 
-		if hashInt.Cmp(target) == -1 {
-			b.Header.Nonce++
+		// Check if hash starts with the required number of zeros
+		if strings.HasPrefix(hash, prefix) {
 			b.Hash = hash // Update Hash for backwards compatibility
 			return
 		}
@@ -305,9 +341,8 @@ func NewMerkleTree(data [][]byte) *MerkleTree {
 	var nodes []*MerkleNode
 
 	if len(data) == 0 {
-		// Create a single node with empty data for an empty tree
-		node := NewMerkleNode(nil, nil, []byte{})
-		return &MerkleTree{Root: node}
+		// Return nil root for empty tree
+		return &MerkleTree{Root: nil}
 	}
 
 	if len(data)%2 != 0 {

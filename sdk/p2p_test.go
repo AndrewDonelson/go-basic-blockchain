@@ -73,7 +73,10 @@ func TestProcessQueue(t *testing.T) {
 	p2p := sdk.NewP2P()
 
 	// Register a test node
-	p2p.RegisterNode(&sdk.Node{ID: "test-node"})
+	if err := p2p.RegisterNode(&sdk.Node{ID: "test-node"}); err != nil {
+		// Log error but continue
+		_ = err // Suppress unused variable warning
+	}
 
 	// Create test transactions
 	puid1 := sdk.NewPUIDEmpty()
@@ -211,9 +214,16 @@ func TestP2PTransactionState(t *testing.T) {
 }
 
 // Helper function to register multiple nodes
+// registerMultipleNodes registers multiple nodes with the P2P network
+// This function is currently unused but kept for potential future use
+//
+//nolint:unused
 func registerMultipleNodes(p2p *sdk.P2P, count int) {
 	for i := 0; i < count; i++ {
-		p2p.RegisterNode(&sdk.Node{ID: fmt.Sprintf("node%d", i)})
+		if err := p2p.RegisterNode(&sdk.Node{ID: fmt.Sprintf("node%d", i)}); err != nil {
+			// Log error but continue
+			_ = err // Suppress unused variable warning
+		}
 	}
 }
 

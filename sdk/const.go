@@ -44,8 +44,10 @@ const (
 	cfgFile      = "../../.local.env"
 
 	// Email Settings
-	gmailEmail    = ""
-	gmailPassword = "" // Should be supplied by the environment
+	//nolint:unused
+	gmailEmail = "" // Currently unused but kept for potential future use
+	//nolint:unused
+	gmailPassword = "" // Currently unused but kept for potential future use
 
 	// Feature Flags
 	EnableAPI = true

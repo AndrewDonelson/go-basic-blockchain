@@ -6,7 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"html/template"
-	"io/ioutil"
+	"io"
 	"net/http"
 	"strconv"
 	"time"
@@ -112,7 +112,10 @@ func RespondError(w http.ResponseWriter, statusCode int, message string) {
 	errorResponse := ErrorResponse{Message: message}
 
 	// Encode and send the error message as JSON
-	json.NewEncoder(w).Encode(errorResponse)
+	if err := json.NewEncoder(w).Encode(errorResponse); err != nil {
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
 }
 
 func isPublicPath(path string) bool {
@@ -355,7 +358,10 @@ func (api *API) handleVersion(w http.ResponseWriter, r *http.Request) {
 
 	// Write the JSON response
 	w.WriteHeader(http.StatusOK)
-	w.Write(data)
+	if _, err := w.Write(data); err != nil {
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
 }
 
 // handleInfo handles the info endpoint.
@@ -381,13 +387,19 @@ func (api *API) handleInfo(w http.ResponseWriter, r *http.Request) {
 
 	// Write the JSON response
 	w.WriteHeader(http.StatusOK)
-	w.Write(data)
+	if _, err := w.Write(data); err != nil {
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
 }
 
 // handleHealth handles the health endpoint.
 func (api *API) handleHealth(w http.ResponseWriter, r *http.Request) {
 	// Return "Not Yet Implemented"
-	w.Write([]byte("Not Yet Implemented"))
+	if _, err := w.Write([]byte("Not Yet Implemented")); err != nil {
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
 }
 
 // handleConsensusP2P handles the consensus/P2P endpoint. This is used to recieve and process a Broadcast a Message to 1/3. Upon validation it is then
@@ -396,7 +408,7 @@ func (api *API) handleHealth(w http.ResponseWriter, r *http.Request) {
 // 2. Add the transaction to the P2P queue
 func (api *API) handleConsensusP2P(w http.ResponseWriter, r *http.Request) {
 	// get the post data and unmarshal it into a P2PTransaction
-	data, err := ioutil.ReadAll(r.Body)
+	data, err := io.ReadAll(r.Body)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
@@ -419,13 +431,19 @@ func (api *API) handleConsensusP2P(w http.ResponseWriter, r *http.Request) {
 // handleConsensusTx handles the consensus/tx endpoint.
 func (api *API) handleConsensusTx(w http.ResponseWriter, r *http.Request) {
 	// Return "Not Yet Implemented"
-	w.Write([]byte("Not Yet Implemented"))
+	if _, err := w.Write([]byte("Not Yet Implemented")); err != nil {
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
 }
 
 // handleConsensusBlock handles the consensus/block endpoint.
 func (api *API) handleConsensusBlock(w http.ResponseWriter, r *http.Request) {
 	// Return "Not Yet Implemented"
-	w.Write([]byte("Not Yet Implemented"))
+	if _, err := w.Write([]byte("Not Yet Implemented")); err != nil {
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
 }
 
 // handleBlockchain handles the blockchain endpoint.
@@ -452,7 +470,10 @@ func (api *API) handleBlockchain(w http.ResponseWriter, r *http.Request) {
 
 	// Write the JSON response
 	w.WriteHeader(http.StatusOK)
-	w.Write(data)
+	if _, err := w.Write(data); err != nil {
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
 }
 
 // handleBrowseBlocks handles the /blockchain/blocks endpoint.
@@ -494,7 +515,10 @@ func (api *API) handleBrowseBlocks(w http.ResponseWriter, r *http.Request) {
 
 	// Write the JSON response
 	w.WriteHeader(http.StatusOK)
-	w.Write(data)
+	if _, err := w.Write(data); err != nil {
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
 }
 
 // handleViewBlock handles the /blockchain/blocks/{index} endpoint.
@@ -529,7 +553,10 @@ func (api *API) handleViewBlock(w http.ResponseWriter, r *http.Request) {
 
 	// Write the JSON response
 	w.WriteHeader(http.StatusOK)
-	w.Write(data)
+	if _, err := w.Write(data); err != nil {
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
 }
 
 // handleBrowseTransactionsInBlock handles the /blockchain/blocks/{index}/transactions endpoint.
@@ -564,7 +591,10 @@ func (api *API) handleBrowseTransactionsInBlock(w http.ResponseWriter, r *http.R
 
 	// Write the JSON response
 	w.WriteHeader(http.StatusOK)
-	w.Write(data)
+	if _, err := w.Write(data); err != nil {
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
 }
 
 // handleViewTransactionInBlock handles the /blockchain/blocks/{index}/transactions/{id} endpoint.
@@ -620,78 +650,117 @@ func (api *API) handleViewTransactionInBlock(w http.ResponseWriter, r *http.Requ
 	// 	w.Write(data)
 
 	// Return "Not Yet Implemented"
-	w.Write([]byte("Not Yet Implemented"))
+	if _, err := w.Write([]byte("Not Yet Implemented")); err != nil {
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
 
 }
 
 // handleBrowseTransactionsByProtocolInBlock handles the /blockchain/blocks/{index}/transactions/{protocol} endpoint.
 func (api *API) handleBrowseTransactionsByProtocolInBlock(w http.ResponseWriter, r *http.Request) {
 	// Return "Not Yet Implemented"
-	w.Write([]byte("Not Yet Implemented"))
+	if _, err := w.Write([]byte("Not Yet Implemented")); err != nil {
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
 }
 
 // handleBrowseWallets handles the /blockchain/wallets endpoint.
 func (api *API) handleBrowseWallets(w http.ResponseWriter, r *http.Request) {
 	// Return "Not Yet Implemented"
-	w.Write([]byte("Not Yet Implemented"))
+	if _, err := w.Write([]byte("Not Yet Implemented")); err != nil {
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
 }
 
 // handleCreateWallet handles the /blockchain/wallets/new endpoint.
 func (api *API) handleCreateWallet(w http.ResponseWriter, r *http.Request) {
 	// Return "Not Yet Implemented"
-	w.Write([]byte("Not Yet Implemented"))
+	if _, err := w.Write([]byte("Not Yet Implemented")); err != nil {
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
 }
 
 // handleViewWallet handles the /blockchain/wallets/{id} endpoint.
 func (api *API) handleViewWallet(w http.ResponseWriter, r *http.Request) {
 	// Return "Not Yet Implemented"
-	w.Write([]byte("Not Yet Implemented"))
+	if _, err := w.Write([]byte("Not Yet Implemented")); err != nil {
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
 }
 
 // handleUpdateWallet handles the /blockchain/wallets/{id} endpoint.
 func (api *API) handleUpdateWallet(w http.ResponseWriter, r *http.Request) {
 	// Return "Not Yet Implemented"
-	w.Write([]byte("Not Yet Implemented"))
+	if _, err := w.Write([]byte("Not Yet Implemented")); err != nil {
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
 }
 
 // handleViewWalletBalance handles the /blockchain/wallets/{id}/balance endpoint.
 func (api *API) handleViewWalletBalance(w http.ResponseWriter, r *http.Request) {
 	// Return "Not Yet Implemented"
-	w.Write([]byte("Not Yet Implemented"))
+	if _, err := w.Write([]byte("Not Yet Implemented")); err != nil {
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
 }
 
 // handleBrowseTransactionsForWallet handles the /blockchain/wallets/{id}/transactions endpoint.
 func (api *API) handleBrowseTransactionsForWallet(w http.ResponseWriter, r *http.Request) {
 	// Return "Not Yet Implemented"
-	w.Write([]byte("Not Yet Implemented"))
+	if _, err := w.Write([]byte("Not Yet Implemented")); err != nil {
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
 }
 
 // handleViewTransactionForWallet handles the /blockchain/wallets/{id}/transactions/{id} endpoint.
 func (api *API) handleViewTransactionForWallet(w http.ResponseWriter, r *http.Request) {
 	// Return "Not Yet Implemented"
-	w.Write([]byte("Not Yet Implemented"))
+	if _, err := w.Write([]byte("Not Yet Implemented")); err != nil {
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
 }
 
 // handleBrowseTransactionsByProtocolForWallet handles the /blockchain/wallets/{id}/transactions/{protocol} endpoint.
 func (api *API) handleBrowseTransactionsByProtocolForWallet(w http.ResponseWriter, r *http.Request) {
 	// Return "Not Yet Implemented"
-	w.Write([]byte("Not Yet Implemented"))
+	if _, err := w.Write([]byte("Not Yet Implemented")); err != nil {
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
 }
 
 // handleBrowseTransactions handles the /blockchain/transactions endpoint.
 func (api *API) handleBrowseTransactions(w http.ResponseWriter, r *http.Request) {
 	// Return "Not Yet Implemented"
-	w.Write([]byte("Not Yet Implemented"))
+	if _, err := w.Write([]byte("Not Yet Implemented")); err != nil {
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
 }
 
 // handleViewTransaction handles the /blockchain/transactions/{id} endpoint.
 func (api *API) handleViewTransaction(w http.ResponseWriter, r *http.Request) {
 	// Return "Not Yet Implemented"
-	w.Write([]byte("Not Yet Implemented"))
+	if _, err := w.Write([]byte("Not Yet Implemented")); err != nil {
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
 }
 
 // handleBrowseTransactionsByProtocol handles the /blockchain/transactions/{protocol} endpoint.
 func (api *API) handleBrowseTransactionsByProtocol(w http.ResponseWriter, r *http.Request) {
 	// Return "Not Yet Implemented"
-	w.Write([]byte("Not Yet Implemented"))
+	if _, err := w.Write([]byte("Not Yet Implemented")); err != nil {
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
 }

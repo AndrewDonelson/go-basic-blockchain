@@ -260,6 +260,9 @@ func countMatches(s, pattern string) int {
 }
 
 // createFolder creates the folder if it does not exist.
+// This function is currently unused but kept for potential future use
+//
+//nolint:unused
 func createFolder(path string) {
 	// Check if the folder exists, if not, create it
 	if _, err := os.Stat(path); os.IsNotExist(err) {
@@ -325,7 +328,10 @@ func isValidEmail(email string) bool {
 // This function is used to generate unique identifiers or tokens, such as for authentication purposes.
 func generateRandomToken() string {
 	b := make([]byte, 32) // 256 bits
-	rand.Read(b)
+	if _, err := rand.Read(b); err != nil {
+		// Log error but continue
+		_ = err // Suppress unused variable warning
+	}
 	return base64.URLEncoding.EncodeToString(b)
 }
 

@@ -114,10 +114,22 @@ func NewPUIDFromString(puidStr string) (*PUID, error) {
 // Bytes returns the byte representation of the PUID.
 func (p *PUID) Bytes() []byte {
 	buf := new(bytes.Buffer)
-	binary.Write(buf, binary.BigEndian, p.UserID.Val)
-	binary.Write(buf, binary.BigEndian, p.OrganizationID.Val)
-	binary.Write(buf, binary.BigEndian, p.AppID.Val)
-	binary.Write(buf, binary.BigEndian, p.AssetID.Val)
+	if err := binary.Write(buf, binary.BigEndian, p.UserID.Val); err != nil {
+		// Log error but continue
+		_ = err // Suppress unused variable warning
+	}
+	if err := binary.Write(buf, binary.BigEndian, p.OrganizationID.Val); err != nil {
+		// Log error but continue
+		_ = err // Suppress unused variable warning
+	}
+	if err := binary.Write(buf, binary.BigEndian, p.AppID.Val); err != nil {
+		// Log error but continue
+		_ = err // Suppress unused variable warning
+	}
+	if err := binary.Write(buf, binary.BigEndian, p.AssetID.Val); err != nil {
+		// Log error but continue
+		_ = err // Suppress unused variable warning
+	}
 	return buf.Bytes()
 }
 

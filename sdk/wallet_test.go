@@ -109,7 +109,8 @@ func TestWalletListCount(t *testing.T) {
 	count, err := LocalWalletCount()
 	assert.NoError(t, err)
 	if count != 0 {
-		LocalWalletList()
+		err := LocalWalletList()
+		assert.NoError(t, err)
 	}
 }
 

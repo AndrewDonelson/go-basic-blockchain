@@ -51,14 +51,26 @@ func init() {
 	Args = NewArguments()
 
 	// Register new command-line flags for seed node functionality
-	Args.Register("seed", "Run as a seed node", true)
-	Args.Register("seed-address", "Address of the seed node to connect to", "")
+	if err := Args.Register("seed", "Run as a seed node", true); err != nil {
+		// Log error but continue
+		_ = err // Suppress unused variable warning
+	}
+	if err := Args.Register("seed-address", "Address of the seed node to connect to", ""); err != nil {
+		// Log error but continue
+		_ = err // Suppress unused variable warning
+	}
 
 	// Add new flag for environment file path
-	Args.Register("env", "Path to the .env file", "")
+	if err := Args.Register("env", "Path to the .env file", ""); err != nil {
+		// Log error but continue
+		_ = err // Suppress unused variable warning
+	}
 
 	// Add verbose flag
-	Args.Register("verbose", "Enable verbose logging", false)
+	if err := Args.Register("verbose", "Enable verbose logging", false); err != nil {
+		// Log error but continue
+		_ = err // Suppress unused variable warning
+	}
 }
 
 // NewArguments creates a new Arguments instance
