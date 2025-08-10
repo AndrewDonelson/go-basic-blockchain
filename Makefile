@@ -64,6 +64,7 @@ COVERAGE_HTML   := $(COVERAGE_DIR)/index.html
 
 # Development variables
 DEV_MAIN     := ./cmd/chaind/main.go
+CLI_MAIN     := ./cmd/gbb-cli/main.go
 ENV_FILE     := $(CURDIR)/.local.env
 
 # Architecture support
@@ -75,13 +76,18 @@ all: setup fmt lint test build ## Run setup, format, lint, test, and build
 
 .PHONY: build
 build:
-	$(info $(M) building executable ($(MODNAME))...)
+	$(info $(M) building executables...)
 	$(Q) mkdir -p $(BIN_RELEASE)
 	$(Q) $(GO) build \
 		-mod=mod \
 		-tags release \
 		-ldflags '-X $(MODULE)/cmd.Version=$(VERSION) -X $(MODULE)/cmd.BuildDate=$(DATE)' \
 		-o $(BIN_RELEASE)/$(MODNAME)$(EXE) $(DEV_MAIN)
+	$(Q) $(GO) build \
+		-mod=mod \
+		-tags release \
+		-ldflags '-X $(MODULE)/cmd.Version=$(VERSION) -X $(MODULE)/cmd.BuildDate=$(DATE)' \
+		-o $(BIN_RELEASE)/gbb-cli$(EXE) $(CLI_MAIN)
 
 .PHONY: run-dev
 run-dev: ; $(info $(M) running development version...) @ ## Run development version
@@ -98,6 +104,20 @@ run: build ; $(info $(M) running blockchain node...) @ ## Build and run the bloc
 .PHONY: run-bin
 run-bin: ; $(info $(M) running existing binary...) @ ## Run existing binary (assumes it's built)
 	$Q $(BIN_RELEASE)/$(MODNAME)$(EXE)
+
+.PHONY: build-cli
+build-cli:
+	$(info $(M) building CLI executable...)
+	$(Q) mkdir -p $(BIN_RELEASE)
+	$(Q) $(GO) build \
+		-mod=mod \
+		-tags release \
+		-ldflags '-X $(MODULE)/cmd.Version=$(VERSION) -X $(MODULE)/cmd.BuildDate=$(DATE)' \
+		-o $(BIN_RELEASE)/gbb-cli$(EXE) $(CLI_MAIN)
+
+.PHONY: run-cli
+run-cli: build-cli ; $(info $(M) running CLI...) @ ## Build and run the CLI
+	$Q $(BIN_RELEASE)/gbb-cli$(EXE)
 
 .PHONY: install
 install: build ; $(info $(M) installing binary...) @ ## Install binary to system PATH
@@ -192,7 +212,10 @@ docker: all ; $(info $(M) building docker image...) @ ## Build docker image
 release: clean test build-all ; $(info $(M) creating release...) @ ## Build all cross-compiled binaries
 	$Q echo "Release $(VERSION) built successfully"
 	$Q echo "Release binaries available in $(BIN_RELEASE)/ directory:"
-	$Q ls -la $(BIN_RELEASE)/$(MODNAME)* || echo "No release binaries found"
+	$Q echo "Blockchain binaries:"
+	$Q ls -la $(BIN_RELEASE)/$(MODNAME)* || echo "No blockchain binaries found"
+	$Q echo "CLI binaries:"
+	$Q ls -la $(BIN_RELEASE)/gbb-cli* || echo "No CLI binaries found"
 
 .PHONY: cross
 cross: build-all ## Build for all platforms
@@ -268,6 +291,11 @@ build-linux-amd64 build-linux-arm64 build-windows-amd64 build-windows-arm64 buil
 		-tags release \
 		-ldflags '-X $(MODULE)/cmd.Version=$(VERSION) -X $(MODULE)/cmd.BuildDate=$(DATE)' \
 		-o $(BIN_RELEASE)/$(MODNAME)-$(GOOS)-$(GOARCH)$(if $(filter windows,$(GOOS)),.exe,) $(DEV_MAIN)
+	$Q GOOS=$(GOOS) GOARCH=$(GOARCH) $(GO) build \
+		-mod=mod \
+		-tags release \
+		-ldflags '-X $(MODULE)/cmd.Version=$(VERSION) -X $(MODULE)/cmd.BuildDate=$(DATE)' \
+		-o $(BIN_RELEASE)/gbb-cli-$(GOOS)-$(GOARCH)$(if $(filter windows,$(GOOS)),.exe,) $(CLI_MAIN)
 
 # Default target
 .DEFAULT_GOAL := help

@@ -31,6 +31,7 @@ type ProgressIndicator struct {
 	status     BlockchainStatus
 	mutex      sync.RWMutex
 	isRunning  bool
+	isPaused   bool
 	startTime  time.Time
 	updateChan chan BlockchainStatus
 }
@@ -93,6 +94,7 @@ func (pi *ProgressIndicator) Start() {
 	}
 
 	pi.isRunning = true
+	pi.isPaused = false
 
 	if pi.spinner != nil {
 		pi.spinner.Start()
@@ -112,13 +114,59 @@ func (pi *ProgressIndicator) Stop() {
 	}
 
 	pi.isRunning = false
+	pi.isPaused = true
 
 	if pi.spinner != nil {
 		pi.spinner.Stop()
 	}
 
-	// Clear the line
+	// Clear the line multiple times to ensure clean state
 	fmt.Print("\r\033[K")
+	fmt.Print("\r\033[K")
+	fmt.Print("\r\033[K")
+}
+
+// Pause pauses the progress indicator
+func (pi *ProgressIndicator) Pause() {
+	pi.mutex.Lock()
+	defer pi.mutex.Unlock()
+
+	if !pi.isRunning {
+		return
+	}
+
+	pi.isPaused = true
+
+	if pi.spinner != nil {
+		pi.spinner.Stop()
+	}
+
+	// Clear the line and any remaining output
+	fmt.Print("\r\033[K")
+	fmt.Print("\r\033[K") // Double clear to ensure clean state
+}
+
+// Resume resumes the progress indicator
+func (pi *ProgressIndicator) Resume() {
+	pi.mutex.Lock()
+	defer pi.mutex.Unlock()
+
+	if !pi.isRunning {
+		return
+	}
+
+	pi.isPaused = false
+
+	if pi.spinner != nil {
+		pi.spinner.Start()
+	}
+}
+
+// IsPaused returns true if the progress indicator is currently paused
+func (pi *ProgressIndicator) IsPaused() bool {
+	pi.mutex.RLock()
+	defer pi.mutex.RUnlock()
+	return pi.isPaused
 }
 
 // UpdateStatus updates the blockchain status
@@ -281,10 +329,19 @@ func (pi *ProgressIndicator) statusUpdateLoop() {
 	for {
 		pi.mutex.RLock()
 		isRunning := pi.isRunning
+		isPaused := pi.isPaused
 		pi.mutex.RUnlock()
 
 		if !isRunning {
 			break
+		}
+
+		// Skip updates if paused
+		if isPaused {
+			select {
+			case <-ticker.C:
+				continue
+			}
 		}
 
 		select {
@@ -303,9 +360,15 @@ func (pi *ProgressIndicator) statusUpdateLoop() {
 func (pi *ProgressIndicator) displayStatus(status BlockchainStatus) {
 	pi.mutex.RLock()
 	isRunning := pi.isRunning
+	isPaused := pi.isPaused
 	pi.mutex.RUnlock()
 
-	if !isRunning {
+	if !isRunning || isPaused {
+		return
+	}
+
+	// Double-check pause state to be extra safe
+	if isPaused {
 		return
 	}
 

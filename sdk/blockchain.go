@@ -63,6 +63,10 @@ type Blockchain struct {
 
 	// Progress indicator
 	progressIndicator *progress.ProgressIndicator
+
+	// Menu state
+	menuActive bool
+	menuMutex  sync.RWMutex
 }
 
 // NewBlockchain creates a new instance of the Blockchain struct with the provided configuration.
@@ -152,6 +156,15 @@ func NewBlockchain(cfg *Config) *Blockchain {
 
 // DisplayStatus displays the current status of the blockchain.
 func (bc *Blockchain) DisplayStatus() {
+	// Check if menu is active - if so, don't display ANY status at all
+	bc.menuMutex.RLock()
+	menuActive := bc.menuActive
+	bc.menuMutex.RUnlock()
+
+	if menuActive {
+		return // Exit early - don't display ANY status when menu is active
+	}
+
 	bc.mux.Lock()
 	defer bc.mux.Unlock()
 
@@ -163,25 +176,28 @@ func (bc *Blockchain) DisplayStatus() {
 			len(bc.Blocks), len(bc.TransactionQueue))
 	}
 
-	// Update progress indicator
+	// Update progress indicator only if not paused
 	if bc.progressIndicator != nil {
-		status := progress.BlockchainStatus{
-			IsMining:    true, // Assume mining is active
-			BlockCount:  len(bc.Blocks),
-			TxQueueSize: len(bc.TransactionQueue),
-			Difficulty:  bc.cfg.Difficulty,
-			HashRate:    0, // TODO: Calculate actual hash rate
-			LastBlock:   "",
-			Peers:       0, // TODO: Get actual peer count
-			IsSynced:    true,
-			Uptime:      0, // TODO: Calculate uptime
-		}
+		// Check if progress indicator is paused (menu is active)
+		if !bc.progressIndicator.IsPaused() {
+			status := progress.BlockchainStatus{
+				IsMining:    true, // Assume mining is active
+				BlockCount:  len(bc.Blocks),
+				TxQueueSize: len(bc.TransactionQueue),
+				Difficulty:  bc.cfg.Difficulty,
+				HashRate:    0, // TODO: Calculate actual hash rate
+				LastBlock:   "",
+				Peers:       0, // TODO: Get actual peer count
+				IsSynced:    true,
+				Uptime:      0, // TODO: Calculate uptime
+			}
 
-		if len(bc.Blocks) > 0 {
-			status.LastBlock = bc.Blocks[len(bc.Blocks)-1].Hash
-		}
+			if len(bc.Blocks) > 0 {
+				status.LastBlock = bc.Blocks[len(bc.Blocks)-1].Hash
+			}
 
-		bc.progressIndicator.UpdateStatus(status)
+			bc.progressIndicator.UpdateStatus(status)
+		}
 	}
 }
 
@@ -549,7 +565,14 @@ func (bc *Blockchain) mineWithHelios(block *Block, difficulty int) *Block {
 	// Mine using Helios algorithm
 	proof, err := bc.heliosAlgorithm.Mine(blockHeader, targetDifficulty)
 	if err != nil {
-		log.Printf("Helios mining failed: %v", err)
+		// Only log if menu is not active
+		bc.menuMutex.RLock()
+		menuActive := bc.menuActive
+		bc.menuMutex.RUnlock()
+
+		if !menuActive {
+			log.Printf("Helios mining failed: %v", err)
+		}
 		return block
 	}
 
@@ -566,14 +589,29 @@ func (bc *Blockchain) mineWithHelios(block *Block, difficulty int) *Block {
 	// Update block with Helios proof
 	block.updateWithHeliosProof(proof)
 
-	log.Printf("Helios mining successful: nonce=%d, hash=%s", proof.Nonce, proof.FinalHash)
+	// Only log if menu is not active
+	bc.menuMutex.RLock()
+	menuActive := bc.menuActive
+	bc.menuMutex.RUnlock()
+
+	if !menuActive {
+		log.Printf("Helios mining successful: nonce=%d, hash=%s", proof.Nonce, proof.FinalHash)
+	}
 	return block
 }
 
 // mineWithSimplePoW mines a block using the original simple proof-of-work
 func (bc *Blockchain) mineWithSimplePoW(block *Block, difficulty int) *Block {
 	prefix := strings.Repeat("0", difficulty)
-	log.Printf("Mining a new Block [#%s] with [%d] Txs...", block.Index.String(), len(block.Transactions))
+
+	// Only log if menu is not active
+	bc.menuMutex.RLock()
+	menuActive := bc.menuActive
+	bc.menuMutex.RUnlock()
+
+	if !menuActive {
+		log.Printf("Mining a new Block [#%s] with [%d] Txs...", block.Index.String(), len(block.Transactions))
+	}
 
 	// Show mining progress
 	if bc.progressIndicator != nil {
@@ -592,10 +630,17 @@ func (bc *Blockchain) mineWithSimplePoW(block *Block, difficulty int) *Block {
 			bc.Blocks = append(bc.Blocks, block)
 			bc.TransactionQueue = []Transaction{}
 
-			log.Printf("Mined a new Block [#%s] with [%d] TXs & Hash [%s]\n",
-				block.Index.String(),
-				len(block.Transactions),
-				block.Hash)
+			// Only log if menu is not active
+			bc.menuMutex.RLock()
+			menuActive := bc.menuActive
+			bc.menuMutex.RUnlock()
+
+			if !menuActive {
+				log.Printf("Mined a new Block [#%s] with [%d] TXs & Hash [%s]\n",
+					block.Index.String(),
+					len(block.Transactions),
+					block.Hash)
+			}
 			break
 		}
 	}
@@ -629,6 +674,15 @@ func (bc *Blockchain) Run(difficulty int) {
 
 	go func() {
 		for range blockTicker.C {
+			// Check if menu is active - if so, skip block creation and logging
+			bc.menuMutex.RLock()
+			menuActive := bc.menuActive
+			bc.menuMutex.RUnlock()
+
+			if menuActive {
+				continue // Skip block creation when menu is active
+			}
+
 			now := time.Now()
 			log.Printf("Block ticker fired at %s, creating new block...", now.Format("15:04:05"))
 			log.Printf("Current blockchain state before creating new block: CurrentBlockIndex=%d, NextBlockIndex=%d, TotalBlocks=%d",
@@ -683,9 +737,16 @@ func (bc *Blockchain) createNewBlock(difficulty int) {
 		log.Printf("Error saving blockchain state: %v\n", err)
 	}
 
-	log.Printf("New block created: [#%s] Hash: %s with %d main chain + %d sidechain transactions",
-		newBlock.Index.String(), newBlock.Hash, len(bc.TransactionQueue), len(sidechainTxs))
-	log.Printf("Blockchain state updated: CurrentBlockIndex=%d, NextBlockIndex=%d", bc.CurrentBlockIndex, bc.NextBlockIndex)
+	// Only log if menu is not active
+	bc.menuMutex.RLock()
+	menuActive := bc.menuActive
+	bc.menuMutex.RUnlock()
+
+	if !menuActive {
+		log.Printf("New block created: [#%s] Hash: %s with %d main chain + %d sidechain transactions",
+			newBlock.Index.String(), newBlock.Hash, len(bc.TransactionQueue), len(sidechainTxs))
+		log.Printf("Blockchain state updated: CurrentBlockIndex=%d, NextBlockIndex=%d", bc.CurrentBlockIndex, bc.NextBlockIndex)
+	}
 }
 
 // collectSidechainRollups collects validated sidechain transactions for inclusion in the main block
@@ -712,8 +773,15 @@ func (bc *Blockchain) collectSidechainRollups() []Transaction {
 			}
 		}
 
-		log.Printf("Collected %d sidechain rollup transactions (%d bank, %d message)",
-			len(rollupTxs), len(bankTxs), len(messageTxs))
+		// Only log if menu is not active
+		bc.menuMutex.RLock()
+		menuActive := bc.menuActive
+		bc.menuMutex.RUnlock()
+
+		if !menuActive {
+			log.Printf("Collected %d sidechain rollup transactions (%d bank, %d message)",
+				len(rollupTxs), len(bankTxs), len(messageTxs))
+		}
 	}
 
 	return rollupTxs
@@ -998,4 +1066,28 @@ func (bc *Blockchain) onRollupCreated(rollup *sidechain.RollupBlock) error {
 	log.Printf("Rollup block created: %s (protocol: %s) with %d transactions",
 		rollup.ID, rollup.Protocol, len(rollup.Transactions))
 	return nil
+}
+
+// GetProgressIndicator returns the progress indicator instance
+func (bc *Blockchain) GetProgressIndicator() *progress.ProgressIndicator {
+	return bc.progressIndicator
+}
+
+// SetMenuActive sets the menu active state
+func (bc *Blockchain) SetMenuActive(active bool) {
+	bc.menuMutex.Lock()
+	defer bc.menuMutex.Unlock()
+	bc.menuActive = active
+}
+
+// IsMenuActive returns true if the menu is currently active
+func (bc *Blockchain) IsMenuActive() bool {
+	bc.menuMutex.RLock()
+	defer bc.menuMutex.RUnlock()
+	return bc.menuActive
+}
+
+// Cleanup performs any necessary cleanup
+func (bc *Blockchain) Cleanup() {
+	// No cleanup needed for menu state
 }
