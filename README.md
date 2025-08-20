@@ -6,6 +6,8 @@
 
 Welcome to go-basic-blockchain, an educational project designed to demystify blockchain technology through a hands-on, from-scratch implementation in Go. This project serves as both a **comprehensive learning tool** and a **fully functional blockchain implementation** for developers, students, and blockchain enthusiasts.
 
+**🎯 Built Completely From Scratch**: This blockchain implementation uses no third-party blockchain libraries (no go-ethereum, Bitcoin, Tendermint/Cosmos, etc.) and includes our custom Helios consensus algorithm - all created from the ground up to fully teach Go programming and blockchain development.
+
 **🚀 NEW: Complete Learning Course** - This project now includes a comprehensive 19-section course covering everything from Go fundamentals to production deployment!
 
 **🎯 NEW: Fully Functional Blockchain Node** - Complete, operational blockchain with continuous mining, proper data persistence, and smooth progress monitoring.
