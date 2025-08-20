@@ -1,5 +1,7 @@
 # go-basic-blockchain
 
+[![Buy Me A Coffee](https://img.shields.io/badge/Buy%20Me%20A%20Coffee-FFDD00?style=for-the-badge&logo=buy-me-a-coffee&logoColor=black)](https://buymeacoffee.com/andrewdonelson)
+
 ## Educational Blockchain Implementation in Go with Advanced Consensus & Comprehensive Learning Course
 
 Welcome to go-basic-blockchain, an educational project designed to demystify blockchain technology through a hands-on, from-scratch implementation in Go. This project serves as both a **comprehensive learning tool** and a **fully functional blockchain implementation** for developers, students, and blockchain enthusiasts.
