@@ -11,7 +11,7 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/op/go-logging"
+	logging "github.com/op/go-logging"
 	//"gorm.io/gorm/logger"
 )
 

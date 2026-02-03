@@ -8,7 +8,7 @@ import (
 
 	"github.com/briandowns/spinner"
 	"github.com/fatih/color"
-	"github.com/schollz/progressbar/v3"
+	progressbar "github.com/schollz/progressbar/v3"
 )
 
 // BlockchainStatus represents the current status of the blockchain

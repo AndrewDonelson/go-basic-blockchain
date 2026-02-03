@@ -12,7 +12,7 @@ import (
 	"time"
 
 	"github.com/gorilla/mux"
-	"github.com/op/go-logging"
+	logging "github.com/op/go-logging"
 )
 
 // This is used for the API key middleware and this particular value is testing only. change to use your own

@@ -7,7 +7,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/op/go-logging"
+	logging "github.com/op/go-logging"
 	"github.com/stretchr/testify/assert"
 )
 

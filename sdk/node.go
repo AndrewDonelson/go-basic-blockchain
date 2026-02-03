@@ -62,6 +62,16 @@ type Node struct {
 	ProgressIndicator *progress.ProgressIndicator
 }
 
+// Lock locks the node's mutex
+func (n *Node) Lock() {
+	n.Mutex.Lock()
+}
+
+// Unlock unlocks the node's mutex
+func (n *Node) Unlock() {
+	n.Mutex.Unlock()
+}
+
 // node is the node instance
 var node *Node
 

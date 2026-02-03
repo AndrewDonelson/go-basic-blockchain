@@ -4,8 +4,8 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 
-	"github.com/tyler-smith/go-bip32"
-	"github.com/tyler-smith/go-bip39"
+	bip32 "github.com/tyler-smith/go-bip32"
+	bip39 "github.com/tyler-smith/go-bip39"
 )
 
 // GenerateMnemonic generates a new 12-word mnemonic passphrase.
