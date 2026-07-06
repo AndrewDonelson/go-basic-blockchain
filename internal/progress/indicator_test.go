@@ -2,6 +2,7 @@ package progress
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 )
@@ -147,6 +148,67 @@ func TestIsTerminalSupported(t *testing.T) {
 	// This test just ensures the function doesn't panic
 	result := isTerminalSupported()
 	_ = result // Use result to avoid unused variable warning
+}
+
+func TestDeriveAction(t *testing.T) {
+	tests := []struct {
+		name   string
+		status BlockchainStatus
+		want   string
+	}{
+		{name: "explicit action", status: BlockchainStatus{Action: "Broadcasting"}, want: "Broadcasting"},
+		{name: "no active action", status: BlockchainStatus{IsMining: true}, want: "IDLE"},
+		{name: "unsynced without explicit action", status: BlockchainStatus{IsSynced: false}, want: "IDLE"},
+	}
+
+	for _, tc := range tests {
+		if got := deriveAction(tc.status); got != tc.want {
+			t.Fatalf("%s: got %q want %q", tc.name, got, tc.want)
+		}
+	}
+}
+
+func TestCurrentStatusExpiresActionToIdle(t *testing.T) {
+	pi := NewProgressIndicator()
+	pi.mutex.Lock()
+	pi.status = BlockchainStatus{Action: "Broadcasting"}
+	pi.statusReady = true
+	pi.actionUpdatedAt = time.Now().Add(-actionDisplayTTL - time.Millisecond)
+	pi.mutex.Unlock()
+
+	status := pi.CurrentStatus()
+	if status.Action != idleAction {
+		t.Fatalf("expected expired action to become %q, got %q", idleAction, status.Action)
+	}
+}
+
+func TestBuildStatusLine(t *testing.T) {
+	status := BlockchainStatus{
+		Action:      "Linking",
+		BlockCount:  12,
+		TotalBlocks: 120,
+		TxQueueSize: 7,
+		Difficulty:  4,
+		Peers:       3,
+	}
+
+	line := buildStatusLine(status, 95*time.Second, statusSpinnerFrames[0])
+	for _, want := range []string{"Act:Linking", "Blk:12/120", "Tx:7", "Diff:4", "Peers:3", "Up:1m 35s"} {
+		if !strings.Contains(line, want) {
+			t.Fatalf("expected line to contain %q, got %q", want, line)
+		}
+	}
+	if got := len(line); got > 90 {
+		t.Fatalf("expected compact line, got length %d: %q", got, line)
+	}
+}
+
+func TestBuildStatusLineUsesSpinnerFrame(t *testing.T) {
+	status := BlockchainStatus{Action: "Mining"}
+	line := buildStatusLine(status, time.Second, statusSpinnerFrames[3])
+	if !strings.HasPrefix(line, statusSpinnerFrames[3]+" ") {
+		t.Fatalf("expected line to start with spinner frame %q, got %q", statusSpinnerFrames[3], line)
+	}
 }
 
 // Benchmark tests for performance

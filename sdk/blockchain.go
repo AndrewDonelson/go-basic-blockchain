@@ -89,6 +89,9 @@ func NewBlockchain(cfg *Config) *Blockchain {
 		useHeliosMining:   true, // Enable Helios mining by default
 		progressIndicator: progress.NewProgressIndicator(),
 	}
+	if n := GetNode(); n != nil && n.ProgressIndicator != nil {
+		bc.progressIndicator = n.ProgressIndicator
+	}
 
 	// Initialize Helios components
 	heliosConfig := algorithm.TestHeliosConfig() // Use test config for faster mining
@@ -170,6 +173,18 @@ func (bc *Blockchain) DisplayStatus() {
 
 	staticBlocksLen := len(bc.Blocks)
 	staticTransactionQueueLen := len(bc.TransactionQueue)
+	currentAction := ""
+	peerCount := 0
+	uptime := time.Duration(0)
+	if bc.progressIndicator != nil {
+		currentAction = bc.progressIndicator.CurrentStatus().Action
+	}
+	if n := GetNode(); n != nil && n.P2P != nil {
+		peerCount = n.P2P.PeerCount()
+		if !n.StartedAt.IsZero() {
+			uptime = time.Since(n.StartedAt)
+		}
+	}
 
 	if staticBlocksLen != len(bc.Blocks) || staticTransactionQueueLen != len(bc.TransactionQueue) {
 		log.Printf("Blockchain Activity: Blocks: %d, Transaction Queue: %d\n",
@@ -181,15 +196,16 @@ func (bc *Blockchain) DisplayStatus() {
 		// Check if progress indicator is paused (menu is active)
 		if !bc.progressIndicator.IsPaused() {
 			status := progress.BlockchainStatus{
+				Action:      currentAction,
 				IsMining:    true, // Assume mining is active
 				BlockCount:  len(bc.Blocks),
 				TxQueueSize: len(bc.TransactionQueue),
 				Difficulty:  bc.cfg.Difficulty,
 				HashRate:    0, // TODO: Calculate actual hash rate
 				LastBlock:   "",
-				Peers:       0, // TODO: Get actual peer count
+				Peers:       peerCount,
 				IsSynced:    true,
-				Uptime:      0, // TODO: Calculate uptime
+				Uptime:      uptime,
 			}
 
 			if len(bc.Blocks) > 0 {
@@ -241,14 +257,17 @@ func (bc *Blockchain) Load() error {
 
 // Save saves the blockchain state to disk.
 func (bc *Blockchain) Save() error {
+	bc.mux.Lock()
+	defer bc.mux.Unlock()
+	return bc.saveLocked()
+}
+
+func (bc *Blockchain) saveLocked() error {
 	data := &BlockchainPersistData{
 		TXLookup:       bc.TXLookup.index.Get(),
 		CurrBlockIndex: &bc.CurrentBlockIndex,
 		NextBlockIndex: &bc.NextBlockIndex,
 	}
-
-	bc.mux.Lock()
-	defer bc.mux.Unlock()
 
 	return localStorage.Set("state", data)
 }
@@ -306,15 +325,11 @@ func (bc *Blockchain) createBlockchain() error {
 		return fmt.Errorf("failed to create miner wallet: %v", err)
 	}
 
-	minerWallet.Close(minerWalletPW)
-	if err != nil {
+	if err = minerWallet.Close(minerWalletPW); err != nil {
 		return fmt.Errorf("failed to close miner wallet: %v", err)
 	}
 
-	if err := minerWallet.Open(minerWalletPW); err != nil {
-		log.Printf("Error opening miner wallet: %v", err)
-	}
-	if err != nil {
+	if err = minerWallet.Open(minerWalletPW); err != nil {
 		return fmt.Errorf("failed to open miner wallet: %v", err)
 	}
 
@@ -694,8 +709,6 @@ func (bc *Blockchain) Run(difficulty int) {
 
 func (bc *Blockchain) createNewBlock(difficulty int) {
 	bc.mux.Lock()
-	defer bc.mux.Unlock()
-
 	previousHash := ""
 	if len(bc.Blocks) > 0 {
 		previousHash = bc.Blocks[len(bc.Blocks)-1].Hash
@@ -704,11 +717,16 @@ func (bc *Blockchain) createNewBlock(difficulty int) {
 	// Collect sidechain rollup transactions
 	sidechainTxs := bc.collectSidechainRollups()
 
+	queuedTransactions := append([]Transaction(nil), bc.TransactionQueue...)
+	bc.TransactionQueue = []Transaction{}
+	nextBlockIndex := bc.NextBlockIndex
+	bc.mux.Unlock()
+
 	// Combine main chain and sidechain transactions
-	allTransactions := append(bc.TransactionQueue, sidechainTxs...)
+	allTransactions := append(queuedTransactions, sidechainTxs...)
 
 	newBlock := NewBlock(allTransactions, previousHash)
-	newBlock.Index = *big.NewInt(int64(bc.NextBlockIndex))
+	newBlock.Index = *big.NewInt(int64(nextBlockIndex))
 
 	// Show block progress
 	if bc.progressIndicator != nil {
@@ -727,12 +745,14 @@ func (bc *Blockchain) createNewBlock(difficulty int) {
 		log.Printf("Error saving block: %v\n", err)
 	}
 
+	bc.mux.Lock()
+	defer bc.mux.Unlock()
+
 	bc.Blocks = append(bc.Blocks, newBlock)
 	bc.CurrentBlockIndex = int(newBlock.Index.Int64())
 	bc.NextBlockIndex = bc.CurrentBlockIndex + 1
-	bc.TransactionQueue = []Transaction{} // Clear the queue
 
-	err = bc.Save()
+	err = bc.saveLocked()
 	if err != nil {
 		log.Printf("Error saving blockchain state: %v\n", err)
 	}
@@ -744,7 +764,7 @@ func (bc *Blockchain) createNewBlock(difficulty int) {
 
 	if !menuActive {
 		log.Printf("New block created: [#%s] Hash: %s with %d main chain + %d sidechain transactions",
-			newBlock.Index.String(), newBlock.Hash, len(bc.TransactionQueue), len(sidechainTxs))
+			newBlock.Index.String(), newBlock.Hash, len(queuedTransactions), len(sidechainTxs))
 		log.Printf("Blockchain state updated: CurrentBlockIndex=%d, NextBlockIndex=%d", bc.CurrentBlockIndex, bc.NextBlockIndex)
 	}
 }

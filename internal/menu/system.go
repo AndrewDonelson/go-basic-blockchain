@@ -7,8 +7,11 @@ import (
 	"os/exec"
 	"runtime"
 	"strings"
-	"time"
+
+	"golang.org/x/term"
 )
+
+var clearScreenFn = clearScreen
 
 // MenuItem represents a single menu option
 type MenuItem struct {
@@ -33,6 +36,7 @@ type MenuSystem struct {
 	CurrentMenu       *Menu
 	RootMenu          *Menu
 	IsActive          bool
+	readKeyOverride   func() string
 	ProgressIndicator interface {
 		Pause()
 		Resume()
@@ -83,7 +87,7 @@ func (m *Menu) AddSubMenu(id, title, description string) *Menu {
 
 // Display renders the current menu
 func (m *Menu) Display() {
-	clearScreen()
+	clearScreenFn()
 
 	// Display menu title
 	fmt.Printf("\n╔══════════════════════════════════════════════════════════════╗\n")
@@ -108,9 +112,22 @@ func (m *Menu) Display() {
 
 // Navigate handles menu navigation
 func (ms *MenuSystem) Navigate() error {
-	// Stop progress indicator when menu opens
+	readKey := ms.readKey
+	if ms.readKeyOverride != nil {
+		readKey = ms.readKeyOverride
+	}
+
+	var previousTermState *term.State
+	if ms.readKeyOverride == nil && term.IsTerminal(int(os.Stdin.Fd())) {
+		state, err := term.MakeRaw(int(os.Stdin.Fd()))
+		if err == nil {
+			previousTermState = state
+		}
+	}
+
+	// Pause progress indicator when menu opens.
 	if ms.ProgressIndicator != nil {
-		ms.ProgressIndicator.Stop()
+		ms.ProgressIndicator.Pause()
 	}
 
 	// Set menu active state in blockchain
@@ -119,11 +136,15 @@ func (ms *MenuSystem) Navigate() error {
 	}
 
 	// Clear screen and take over terminal
-	clearScreen()
+	clearScreenFn()
 	fmt.Println("Menu system active - all blockchain output paused")
 
 	ms.IsActive = true
 	defer func() {
+		if previousTermState != nil {
+			_ = term.Restore(int(os.Stdin.Fd()), previousTermState)
+		}
+
 		ms.IsActive = false
 
 		// Set menu inactive state in blockchain
@@ -131,29 +152,24 @@ func (ms *MenuSystem) Navigate() error {
 			ms.Blockchain.SetMenuActive(false)
 		}
 
-		// Start progress indicator when menu closes
+		// Resume progress indicator when menu closes.
 		if ms.ProgressIndicator != nil {
-			ms.ProgressIndicator.Start()
+			ms.ProgressIndicator.Resume()
 		}
 
 		// Clear screen when exiting menu
-		clearScreen()
+		clearScreenFn()
 		fmt.Println("Menu closed - blockchain output resumed")
 	}()
 
+	needsRender := true
 	for {
-		// Display current menu
-		ms.CurrentMenu.Display()
-
-		// Read input
-		key := ms.readKey()
-
-		// Skip empty input (timeout)
-		if key == "" {
-			// Small delay to prevent CPU spinning
-			time.Sleep(50 * time.Millisecond)
-			continue
+		if needsRender {
+			ms.CurrentMenu.Display()
+			needsRender = false
 		}
+
+		key := readKey()
 
 		switch key {
 		case "up":
@@ -161,11 +177,13 @@ func (ms *MenuSystem) Navigate() error {
 			if ms.CurrentMenu.CurrentItem < 0 {
 				ms.CurrentMenu.CurrentItem = len(ms.CurrentMenu.Items) - 1
 			}
+			needsRender = true
 		case "down":
 			ms.CurrentMenu.CurrentItem++
 			if ms.CurrentMenu.CurrentItem >= len(ms.CurrentMenu.Items) {
 				ms.CurrentMenu.CurrentItem = 0
 			}
+			needsRender = true
 		case "enter":
 			if len(ms.CurrentMenu.Items) > 0 {
 				selectedItem := ms.CurrentMenu.Items[ms.CurrentMenu.CurrentItem]
@@ -173,9 +191,10 @@ func (ms *MenuSystem) Navigate() error {
 				if selectedItem.SubMenu != nil {
 					// Navigate to submenu
 					ms.CurrentMenu = selectedItem.SubMenu
+					needsRender = true
 				} else if selectedItem.Action != nil {
 					// Execute action
-					clearScreen()
+					clearScreenFn()
 					fmt.Printf("Executing: %s\n\n", selectedItem.Title)
 
 					if err := selectedItem.Action(); err != nil {
@@ -184,12 +203,14 @@ func (ms *MenuSystem) Navigate() error {
 
 					fmt.Printf("\nPress any key to continue...")
 					ms.readKey()
+					needsRender = true
 				}
 			}
 		case "escape":
 			if ms.CurrentMenu.Parent != nil {
 				// Go back to parent menu
 				ms.CurrentMenu = ms.CurrentMenu.Parent
+				needsRender = true
 			} else {
 				// Exit menu system
 				return nil
@@ -201,78 +222,50 @@ func (ms *MenuSystem) Navigate() error {
 	}
 }
 
-// readKey reads a single key press with timeout to prevent blocking
+// readKey reads a single key press.
 func (ms *MenuSystem) readKey() string {
-	// Use a channel to handle input with timeout
-	inputChan := make(chan string, 1)
+	reader := bufio.NewReader(os.Stdin)
 
-	go func() {
-		reader := bufio.NewReader(os.Stdin)
-
-		// Read first byte
-		char, _, err := reader.ReadRune()
-		if err != nil {
-			inputChan <- ""
-			return
-		}
-
-		// Check for escape sequence
-		if char == 27 {
-			// Read next character
-			next, _, err := reader.ReadRune()
-			if err != nil {
-				inputChan <- "escape"
-				return
-			}
-
-			if next == 91 {
-				// Read the third character
-				third, _, err := reader.ReadRune()
-				if err != nil {
-					inputChan <- "escape"
-					return
-				}
-
-				switch third {
-				case 65:
-					inputChan <- "up"
-					return
-				case 66:
-					inputChan <- "down"
-					return
-				case 67:
-					inputChan <- "right"
-					return
-				case 68:
-					inputChan <- "left"
-					return
-				}
-			}
-
-			inputChan <- "escape"
-			return
-		}
-
-		// Check for special keys
-		switch char {
-		case 13:
-			inputChan <- "enter"
-			return
-		case 113, 81: // 'q' or 'Q'
-			inputChan <- "q"
-			return
-		}
-
-		inputChan <- string(char)
-	}()
-
-	// Wait for input with a short timeout
-	select {
-	case key := <-inputChan:
-		return key
-	case <-time.After(100 * time.Millisecond):
-		return "" // No input received
+	char, _, err := reader.ReadRune()
+	if err != nil {
+		return ""
 	}
+
+	if char == 27 {
+		next, _, err := reader.ReadRune()
+		if err != nil {
+			return "escape"
+		}
+
+		if next == 91 {
+			third, _, err := reader.ReadRune()
+			if err != nil {
+				return "escape"
+			}
+
+			switch third {
+			case 65:
+				return "up"
+			case 66:
+				return "down"
+			case 67:
+				return "right"
+			case 68:
+				return "left"
+			}
+		}
+
+		return "escape"
+	}
+
+	switch char {
+	case 13, 10:
+		return "enter"
+	case 113, 81:
+		return "q"
+	}
+
+	return string(char)
 }
 
 // clearScreen clears the terminal screen
@@ -284,7 +277,7 @@ func clearScreen() {
 		cmd = exec.Command("clear")
 	}
 	cmd.Stdout = os.Stdout
-	cmd.Run()
+	_ = cmd.Run()
 }
 
 // centerText centers text within a given width

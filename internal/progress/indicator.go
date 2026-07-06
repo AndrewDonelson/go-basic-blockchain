@@ -2,7 +2,10 @@ package progress
 
 import (
 	"fmt"
+	"io"
+	"log"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -13,8 +16,10 @@ import (
 
 // BlockchainStatus represents the current status of the blockchain
 type BlockchainStatus struct {
+	Action      string
 	IsMining    bool
 	BlockCount  int
+	TotalBlocks int
 	TxQueueSize int
 	Difficulty  int
 	HashRate    float64
@@ -26,28 +31,65 @@ type BlockchainStatus struct {
 
 // ProgressIndicator provides visual feedback for blockchain operations
 type ProgressIndicator struct {
-	spinner    *spinner.Spinner
-	statusBar  *progressbar.ProgressBar
-	status     BlockchainStatus
-	mutex      sync.RWMutex
-	isRunning  bool
-	isPaused   bool
-	startTime  time.Time
-	updateChan chan BlockchainStatus
+	spinner         *spinner.Spinner
+	statusBar       *progressbar.ProgressBar
+	status          BlockchainStatus
+	statusReady     bool
+	actionUpdatedAt time.Time
+	frameIndex      int
+	lastLine        string
+	lastWidth       int
+	mutex           sync.RWMutex
+	outputMu        sync.Mutex
+	isRunning       bool
+	isPaused        bool
+	isTerminal      bool
+	doneChan        chan struct{}
+	updateChan      chan BlockchainStatus
+}
+
+var (
+	activeIndicatorMu    sync.RWMutex
+	activeIndicator      *ProgressIndicator
+	installLogWriterOnce sync.Once
+)
+
+type statusAwareWriter struct {
+	writer io.Writer
+}
+
+func (w *statusAwareWriter) Write(p []byte) (int, error) {
+	pi := currentActiveIndicator()
+	if pi != nil {
+		pi.prepareForExternalOutput()
+	}
+
+	n, err := w.writer.Write(p)
+
+	if pi != nil {
+		pi.renderStatus(false)
+	}
+
+	return n, err
 }
 
 // NewProgressIndicator creates a new progress indicator
 func NewProgressIndicator() *ProgressIndicator {
+	installLogWriterOnce.Do(func() {
+		log.SetOutput(&statusAwareWriter{writer: os.Stderr})
+	})
+
 	// Check if we're in a terminal that supports colors and animations
 	isTerminal := isTerminalSupported()
 
 	pi := &ProgressIndicator{
 		updateChan: make(chan BlockchainStatus, 10),
-		startTime:  time.Now(),
+		doneChan:   make(chan struct{}),
+		isTerminal: isTerminal,
 	}
 
 	if isTerminal {
-		// Create spinner with professional, fixed-width, meaningful frames (all 18 chars)
+		// Keep a standalone spinner for mining helper output only.
 		pi.spinner = spinner.New(
 			[]string{
 				"  Mining        ", // Mining a block
@@ -59,9 +101,9 @@ func NewProgressIndicator() *ProgressIndicator {
 				"  Validating    ", // Validating block
 				"  Broadcasting  ", // Broadcasting block/tx
 			},
-			300*time.Millisecond, // Slower spinner to reduce flickering
+			300*time.Millisecond,
 			spinner.WithColor("cyan"),
-			spinner.WithSuffix(" Blockchain Active"),
+			spinner.WithSuffix(""),
 			spinner.WithFinalMSG("✅ Blockchain Ready"),
 		)
 
@@ -95,10 +137,13 @@ func (pi *ProgressIndicator) Start() {
 
 	pi.isRunning = true
 	pi.isPaused = false
-
-	if pi.spinner != nil {
-		pi.spinner.Start()
-	}
+	pi.statusReady = false
+	pi.actionUpdatedAt = time.Time{}
+	pi.frameIndex = 0
+	pi.lastLine = ""
+	pi.lastWidth = 0
+	pi.doneChan = make(chan struct{})
+	setActiveIndicator(pi)
 
 	// Start status update goroutine
 	go pi.statusUpdateLoop()
@@ -115,15 +160,20 @@ func (pi *ProgressIndicator) Stop() {
 
 	pi.isRunning = false
 	pi.isPaused = true
-
-	if pi.spinner != nil {
-		pi.spinner.Stop()
+	select {
+	case <-pi.doneChan:
+	default:
+		close(pi.doneChan)
 	}
 
-	// Clear the line multiple times to ensure clean state
+	pi.outputMu.Lock()
+	defer pi.outputMu.Unlock()
+	// Clear the active status line once on stop.
 	fmt.Print("\r\033[K")
-	fmt.Print("\r\033[K")
-	fmt.Print("\r\033[K")
+	pi.lastLine = ""
+	if currentActiveIndicator() == pi {
+		setActiveIndicator(nil)
+	}
 }
 
 // Pause pauses the progress indicator
@@ -137,13 +187,11 @@ func (pi *ProgressIndicator) Pause() {
 
 	pi.isPaused = true
 
-	if pi.spinner != nil {
-		pi.spinner.Stop()
-	}
-
-	// Clear the line and any remaining output
+	pi.outputMu.Lock()
+	defer pi.outputMu.Unlock()
 	fmt.Print("\r\033[K")
-	fmt.Print("\r\033[K") // Double clear to ensure clean state
+	pi.lastLine = ""
+	pi.lastWidth = 0
 }
 
 // Resume resumes the progress indicator
@@ -156,10 +204,10 @@ func (pi *ProgressIndicator) Resume() {
 	}
 
 	pi.isPaused = false
-
-	if pi.spinner != nil {
-		pi.spinner.Start()
+	if pi.doneChan == nil {
+		pi.doneChan = make(chan struct{})
 	}
+	setActiveIndicator(pi)
 }
 
 // IsPaused returns true if the progress indicator is currently paused
@@ -173,58 +221,73 @@ func (pi *ProgressIndicator) IsPaused() bool {
 func (pi *ProgressIndicator) UpdateStatus(status BlockchainStatus) {
 	pi.mutex.Lock()
 	pi.status = status
+	pi.statusReady = true
 	pi.mutex.Unlock()
 
-	// Send update to channel (non-blocking)
+	// Send update to channel (non-blocking).
 	select {
 	case pi.updateChan <- status:
 	default:
-		// Channel is full, skip this update
+		// Channel is full, skip this update.
+	}
+}
+
+// CurrentStatus returns the last cached blockchain status.
+func (pi *ProgressIndicator) CurrentStatus() BlockchainStatus {
+	pi.mutex.RLock()
+	defer pi.mutex.RUnlock()
+	return pi.normalizedStatusLocked(time.Now())
+}
+
+// UpdateAction updates only the action field of the cached status.
+func (pi *ProgressIndicator) UpdateAction(action string) {
+	pi.mutex.Lock()
+	status := pi.normalizedStatusLocked(time.Now())
+	status.Action = action
+	pi.status = status
+	pi.statusReady = true
+	if action == "" || action == idleAction {
+		pi.actionUpdatedAt = time.Time{}
+	} else {
+		pi.actionUpdatedAt = time.Now()
+	}
+	pi.mutex.Unlock()
+
+	select {
+	case pi.updateChan <- status:
+	default:
 	}
 }
 
 // ShowMiningProgress shows mining progress with current hash attempts
 func (pi *ProgressIndicator) ShowMiningProgress(blockIndex int, difficulty int, currentHash string) {
 	pi.mutex.RLock()
-	defer pi.mutex.RUnlock()
+	isRunning := pi.isRunning
+	pi.mutex.RUnlock()
 
-	if !pi.isRunning {
+	if !isRunning {
 		return
 	}
 
-	// Create mining-specific spinner with professional formatting
-	miningSpinner := spinner.New(
-		[]string{
-			"  Hashing...    ",
-			"  Computing...  ",
-			"  Targeting...  ",
-			"  Finding...    ",
-			"  Searching...  ",
-			"  Processing... ",
-		},
-		100*time.Millisecond,
-		spinner.WithColor("yellow"),
-		spinner.WithSuffix(fmt.Sprintf(" Block #%-4d (Difficulty: %-2d)", blockIndex, difficulty)),
-		spinner.WithFinalMSG(fmt.Sprintf("✅ Block #%d mined successfully", blockIndex)),
-	)
-
-	miningSpinner.Start()
-	defer miningSpinner.Stop()
+	pi.UpdateAction("Mining")
 
 	// Show hash attempts with consistent formatting
 	hashDisplay := currentHash
 	if len(currentHash) > 16 {
 		hashDisplay = currentHash[:16]
 	}
-	color.Yellow("Current Hash: %-16s...", hashDisplay)
+	pi.printExternalMessage(func() {
+		color.Yellow("Current Hash: %-16s...", hashDisplay)
+	})
 }
 
 // ShowTransactionProgress shows transaction processing progress
 func (pi *ProgressIndicator) ShowTransactionProgress(txID string, status string) {
 	pi.mutex.RLock()
-	defer pi.mutex.RUnlock()
+	isRunning := pi.isRunning
+	pi.mutex.RUnlock()
 
-	if !pi.isRunning {
+	if !isRunning {
 		return
 	}
 
@@ -236,24 +299,40 @@ func (pi *ProgressIndicator) ShowTransactionProgress(txID string, status string)
 
 	switch status {
 	case "pending":
-		color.Blue("📝 Transaction %-8s: Pending", txDisplay)
+		pi.UpdateAction("Packing")
+		pi.printExternalMessage(func() {
+			color.Blue("📝 Transaction %-8s: Pending", txDisplay)
+		})
 	case "validating":
-		color.Yellow("🔍 Transaction %-8s: Validating", txDisplay)
+		pi.UpdateAction("Validating")
+		pi.printExternalMessage(func() {
+			color.Yellow("🔍 Transaction %-8s: Validating", txDisplay)
+		})
 	case "confirmed":
-		color.Green("✅ Transaction %-8s: Confirmed", txDisplay)
+		pi.UpdateAction("Securing")
+		pi.printExternalMessage(func() {
+			color.Green("✅ Transaction %-8s: Confirmed", txDisplay)
+		})
 	case "failed":
-		color.Red("❌ Transaction %-8s: Failed", txDisplay)
+		pi.printExternalMessage(func() {
+			color.Red("❌ Transaction %-8s: Failed", txDisplay)
+		})
 	}
 }
 
 // ShowBlockProgress shows block creation progress
 func (pi *ProgressIndicator) ShowBlockProgress(blockIndex int, txCount int) {
 	pi.mutex.RLock()
-	defer pi.mutex.RUnlock()
+	isRunning := pi.isRunning
+	pi.mutex.RUnlock()
 
-	if !pi.isRunning {
+	if !isRunning {
 		return
 	}
+
+	pi.UpdateAction("Packing")
+	pi.prepareForExternalOutput()
+	defer pi.renderStatus(false)
 
 	// Create block progress bar
 	blockBar := progressbar.NewOptions(txCount,
@@ -288,25 +367,33 @@ func (pi *ProgressIndicator) ShowBlockProgress(blockIndex int, txCount int) {
 // ShowNetworkStatus shows network connectivity status
 func (pi *ProgressIndicator) ShowNetworkStatus(peers int, isSynced bool) {
 	pi.mutex.RLock()
-	defer pi.mutex.RUnlock()
+	isRunning := pi.isRunning
+	pi.mutex.RUnlock()
 
-	if !pi.isRunning {
+	if !isRunning {
 		return
 	}
 
 	if isSynced {
-		color.Green("🌐 Network: Connected (%-2d peers) - Synced", peers)
+		pi.UpdateAction("Securing")
+		pi.printExternalMessage(func() {
+			color.Green("🌐 Network: Connected (%-2d peers) - Synced", peers)
+		})
 	} else {
-		color.Yellow("🌐 Network: Connected (%-2d peers) - Syncing...", peers)
+		pi.UpdateAction("Syncing")
+		pi.printExternalMessage(func() {
+			color.Yellow("🌐 Network: Connected (%-2d peers) - Syncing...", peers)
+		})
 	}
 }
 
 // ShowHeliosProgress shows Helios consensus algorithm progress
 func (pi *ProgressIndicator) ShowHeliosProgress(stage int, stageName string) {
 	pi.mutex.RLock()
-	defer pi.mutex.RUnlock()
+	isRunning := pi.isRunning
+	pi.mutex.RUnlock()
 
-	if !pi.isRunning {
+	if !isRunning {
 		return
 	}
 
@@ -317,92 +404,157 @@ func (pi *ProgressIndicator) ShowHeliosProgress(stage int, stageName string) {
 	}
 
 	if stage >= 0 && stage < len(stages) {
-		color.Cyan("☀️  Helios Stage %d/%-2d: %-20s", stage+1, len(stages), stages[stage])
+		mappedActions := []string{"Mining", "Linking", "Securing"}
+		pi.UpdateAction(mappedActions[stage])
+		pi.printExternalMessage(func() {
+			color.Cyan("☀️  Helios Stage %d/%-2d: %-20s", stage+1, len(stages), stages[stage])
+		})
 	}
 }
 
-// statusUpdateLoop handles periodic status updates
+const statusRefreshInterval = 150 * time.Millisecond
+const actionDisplayTTL = 1500 * time.Millisecond
+const idleAction = "IDLE"
+
+// statusUpdateLoop handles periodic status updates and spinner animation.
 func (pi *ProgressIndicator) statusUpdateLoop() {
-	ticker := time.NewTicker(5 * time.Second) // Reduced frequency to reduce flickering
+	ticker := time.NewTicker(statusRefreshInterval)
 	defer ticker.Stop()
 
 	for {
-		pi.mutex.RLock()
-		isRunning := pi.isRunning
-		isPaused := pi.isPaused
-		pi.mutex.RUnlock()
-
-		if !isRunning {
-			break
-		}
-
-		// Skip updates if paused
-		if isPaused {
-			select {
-			case <-ticker.C:
-				continue
-			}
-		}
-
 		select {
 		case status := <-pi.updateChan:
-			pi.displayStatus(status)
+			pi.mutex.Lock()
+			pi.status = status
+			pi.statusReady = true
+			pi.mutex.Unlock()
+			pi.renderStatus(false)
 		case <-ticker.C:
-			pi.mutex.RLock()
-			status := pi.status
-			pi.mutex.RUnlock()
-			pi.displayStatus(status)
+			pi.renderStatus(true)
+		case <-pi.doneChan:
+			return
 		}
 	}
 }
 
-// displayStatus displays the current blockchain status
-func (pi *ProgressIndicator) displayStatus(status BlockchainStatus) {
+// renderStatus renders the current blockchain status without clearing the line.
+func (pi *ProgressIndicator) renderStatus(advanceSpinner bool) {
 	pi.mutex.RLock()
 	isRunning := pi.isRunning
 	isPaused := pi.isPaused
+	status := pi.normalizedStatusLocked(time.Now())
+	statusReady := pi.statusReady
+	frameIndex := pi.frameIndex
 	pi.mutex.RUnlock()
 
-	if !isRunning || isPaused {
+	if !isRunning || isPaused || !statusReady {
 		return
 	}
 
-	// Double-check pause state to be extra safe
-	if isPaused {
+	line := buildStatusLine(status, status.Uptime, statusSpinnerFrames[frameIndex])
+
+	pi.outputMu.Lock()
+	defer pi.outputMu.Unlock()
+
+	padWidth := 0
+	if pi.lastWidth > len(line) {
+		padWidth = pi.lastWidth - len(line)
+	}
+
+	if line == pi.lastLine && !advanceSpinner {
 		return
 	}
 
-	// Calculate uptime
-	uptime := time.Since(pi.startTime)
+	fmt.Printf("\r%s%s", line, strings.Repeat(" ", padWidth))
+	pi.lastLine = line
+	pi.lastWidth = len(line)
 
-	// Create a professional status line with fixed-width formatting
-	statusLine := fmt.Sprintf(
-		"📊 Status: Blocks=%-4d | TXs=%-3d | Difficulty=%-2d | Peers=%-2d | Uptime=%-8s",
+	if advanceSpinner {
+		pi.mutex.Lock()
+		pi.frameIndex = (frameIndex + 1) % len(statusSpinnerFrames)
+		pi.mutex.Unlock()
+	}
+}
+
+func (pi *ProgressIndicator) printExternalMessage(printFn func()) {
+	pi.prepareForExternalOutput()
+	printFn()
+	pi.renderStatus(false)
+}
+
+func (pi *ProgressIndicator) prepareForExternalOutput() {
+	pi.outputMu.Lock()
+	defer pi.outputMu.Unlock()
+	if pi.lastLine == "" {
+		return
+	}
+	fmt.Fprint(os.Stdout, "\r\033[K")
+	pi.lastLine = ""
+	pi.lastWidth = 0
+}
+
+func setActiveIndicator(pi *ProgressIndicator) {
+	activeIndicatorMu.Lock()
+	defer activeIndicatorMu.Unlock()
+	activeIndicator = pi
+}
+
+func currentActiveIndicator() *ProgressIndicator {
+	activeIndicatorMu.RLock()
+	defer activeIndicatorMu.RUnlock()
+	return activeIndicator
+}
+
+func (pi *ProgressIndicator) normalizedStatusLocked(now time.Time) BlockchainStatus {
+	status := pi.status
+	if status.Action == "" {
+		status.Action = idleAction
+		return status
+	}
+	if status.Action == idleAction {
+		return status
+	}
+	if pi.actionUpdatedAt.IsZero() || now.Sub(pi.actionUpdatedAt) > actionDisplayTTL {
+		status.Action = idleAction
+	}
+	return status
+}
+
+func deriveAction(status BlockchainStatus) string {
+	if status.Action != "" {
+		return status.Action
+	}
+	return idleAction
+}
+
+var statusSpinnerFrames = []string{"⣾", "⣽", "⣻", "⢿", "⡿", "⣟", "⣯", "⣷"}
+
+func buildStatusLine(status BlockchainStatus, uptime time.Duration, spin string) string {
+	if spin == "" {
+		spin = statusSpinnerFrames[0]
+	}
+
+	action := status.Action
+	if action == "" {
+		action = deriveAction(status)
+	}
+
+	totalBlocks := status.TotalBlocks
+	if totalBlocks < status.BlockCount {
+		totalBlocks = status.BlockCount
+	}
+
+	return fmt.Sprintf(
+		"%s Act:%s | Blk:%d/%d | Tx:%d | Diff:%d | Peers:%d | Up:%s",
+		spin,
+		action,
 		status.BlockCount,
+		totalBlocks,
 		status.TxQueueSize,
 		status.Difficulty,
 		status.Peers,
 		formatDuration(uptime),
 	)
-
-	// Add padding to ensure consistent width
-	paddedStatusLine := fmt.Sprintf("%-80s", statusLine)
-
-	// Update spinner suffix with status (only if it changed to reduce flickering)
-	if pi.spinner != nil {
-		currentSuffix := pi.spinner.Suffix
-		newSuffix := " " + paddedStatusLine
-		if currentSuffix != newSuffix {
-			pi.spinner.Suffix = newSuffix
-		}
-	}
-
-	// Update progress bar if mining
-	if status.IsMining && pi.statusBar != nil {
-		// Note: progressbar doesn't have a Set method, so we'll just update the description
-		// The progress bar will be updated through Add() calls in other methods
-		_ = status.BlockCount // Use block count for future implementation
-	}
 }
 
 // formatDuration formats duration in a human-readable way
@@ -430,20 +582,28 @@ func isTerminalSupported() bool {
 
 // ShowError displays an error message with appropriate styling
 func (pi *ProgressIndicator) ShowError(message string) {
-	color.Red("❌ Error:   %s", message)
+	pi.printExternalMessage(func() {
+		color.Red("❌ Error:   %s", message)
+	})
 }
 
 // ShowSuccess displays a success message with appropriate styling
 func (pi *ProgressIndicator) ShowSuccess(message string) {
-	color.Green("✅ Success: %s", message)
+	pi.printExternalMessage(func() {
+		color.Green("✅ Success: %s", message)
+	})
 }
 
 // ShowWarning displays a warning message with appropriate styling
 func (pi *ProgressIndicator) ShowWarning(message string) {
-	color.Yellow("⚠️  Warning: %s", message)
+	pi.printExternalMessage(func() {
+		color.Yellow("⚠️  Warning: %s", message)
+	})
 }
 
 // ShowInfo displays an info message with appropriate styling
 func (pi *ProgressIndicator) ShowInfo(message string) {
-	color.Blue("ℹ️  Info:    %s", message)
+	pi.printExternalMessage(func() {
+		color.Blue("ℹ️  Info:    %s", message)
+	})
 }

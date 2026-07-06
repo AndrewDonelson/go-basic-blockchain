@@ -26,20 +26,37 @@ type APIKeyConfig struct {
 	APIKeys      APIKeyList
 }
 
-var (
-	// apiKeys is a map of API keys to their corresponding values, used to store and manage API keys.
-	apiKeys = APIKeyList{
-		// Not real, used for demo/testing/protoyping
-		"nlaakald@gmail.com": "69a082ff3996745bd4b48bcc92d5bb40ff97115896183f1cb53a3409f818b15f",
+const (
+	envAPIKeyHeader       = "API_KEY_HEADER"
+	envBlockchainAPIKey   = "BLOCKCHAIN_API_KEY"
+	envBlockchainAPIEmail = "BLOCKCHAIN_API_EMAIL"
+	envServerSeed         = "BLOCKCHAIN_SERVER_SEED"
+
+	legacyDemoAPIKey = "69a082ff3996745bd4b48bcc92d5bb40ff97115896183f1cb53a3409f818b15f"
+	legacyServerSeed = "0ebe1955e527d0a3f354315d0af97e88be3d4a499c9dacd0d947bf1bd5c71bca"
+)
+
+// defaultAPIKeyConfig builds API auth settings from environment and falls back
+// to legacy values for local development compatibility.
+func defaultAPIKeyConfig() APIKeyConfig {
+	header := getEnv(envAPIKeyHeader, "Authorization")
+	principal := getEnv(envBlockchainAPIEmail, "local-dev")
+	apiKey := getEnv(envBlockchainAPIKey, "")
+	if apiKey == "" {
+		apiKey = legacyDemoAPIKey
 	}
 
-	// defaulAPIKeytConfig is a configuration struct that holds the API key header name and a map of API keys.
-	// The APIKeys field is a map of API keys to their corresponding values, used to store and manage API keys.
-	defaulAPIKeytConfig = APIKeyConfig{
-		APIKeyHeader: "Authorization",
-		APIKeys:      apiKeys,
+	return APIKeyConfig{
+		APIKeyHeader: header,
+		APIKeys: APIKeyList{
+			principal: apiKey,
+		},
 	}
-)
+}
+
+func configuredServerSeed() string {
+	return getEnv(envServerSeed, legacyServerSeed)
+}
 
 // ***[API Key Middleware]***
 // curl -H "Authorization: Bearer 69a082ff3996745bd4b48bcc92d5bb40ff97115896183f1cb53a3409f818b15f" http://localhost:8080/protected
@@ -184,7 +201,7 @@ func generateAPIKey() (apiKey string, hashedKey string, err error) {
 // The generated API key is intended to be associated with the provided email address.
 func generateAPIKeyForEmail(email string) string {
 	// Combine the server seed and the email
-	combined := serverSeed + email
+	combined := configuredServerSeed() + email
 
 	// Hash the combined string
 	hash := sha256.Sum256([]byte(combined))

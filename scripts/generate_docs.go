@@ -54,14 +54,11 @@ func parseGoFile(filePath string) (*DocumentationInfo, error) {
 		return nil, err
 	}
 
-	// Create documentation package
-	pkg := &ast.Package{
-		Name:  file.Name.Name,
-		Files: map[string]*ast.File{filePath: file},
-	}
-
 	// Use go/doc to extract documentation
-	docPkg := doc.New(pkg, "./", doc.AllDecls)
+	docPkg, err := doc.NewFromFiles(fset, []*ast.File{file}, "./", doc.AllDecls)
+	if err != nil {
+		return nil, err
+	}
 
 	docInfo := &DocumentationInfo{
 		Name:        docPkg.Name,

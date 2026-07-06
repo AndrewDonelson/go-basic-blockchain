@@ -43,7 +43,8 @@ ifeq ($(GOBIN),)
 endif
 GOLANGCI     := $(call normalize_path,$(GOBIN)/golangci-lint$(EXE))
 DELVE        := $(call normalize_path,$(GOBIN)/dlv$(EXE))
-GOLANGCI_VER := v1.53.3
+# Keep linter modern enough for current Go export data formats.
+GOLANGCI_VER := v1.64.8
 
 # Build variables
 BIN          := $(CURDIR)/bin
@@ -141,13 +142,8 @@ fmt: ; $(info $(M) running gofmt...) @ ## Run gofmt on all source files
 
 .PHONY: lint
 lint: ; $(info $(M) running golangci-lint...) @ ## Run golangci-lint
-ifeq ($(OS),Windows_NT)
 	$Q $(GO) install github.com/golangci/golangci-lint/cmd/golangci-lint@$(GOLANGCI_VER)
 	-$Q "$(GOLANGCI)" run --timeout 5m
-else
-	$Q curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | sh -s -- -b "$(GOBIN)" $(GOLANGCI_VER)
-	-$Q $(GOLANGCI) run --timeout 5m
-endif
 
 .PHONY: test
 test: fmt ; $(info $(M) running tests...) @ ## Run tests

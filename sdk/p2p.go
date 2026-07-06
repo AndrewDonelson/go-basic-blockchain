@@ -10,8 +10,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-
-	"github.com/briandowns/spinner"
 )
 
 type NodeInfo struct {
@@ -34,7 +32,26 @@ const (
 )
 
 func (p P2PTransactionState) String() string {
-	return [...]string{"NONE", "QUEUED", "PND13", "VALID", "PND23", "FINAL", "PND", "ARCHIVED"}[p]
+	switch p {
+	case P2PTxNone:
+		return "NONE"
+	case P2PTxQueued:
+		return "QUEUED"
+	case P2PTxPnd13:
+		return "PND13"
+	case P2PTxValid:
+		return "VALID"
+	case P2PTxPnd23:
+		return "PND23"
+	case P2PTxFinal:
+		return "FINAL"
+	case P2PTxPnd:
+		return "PND"
+	case P2PTxArchived:
+		return "ARCHIVED"
+	default:
+		return "UNKNOWN"
+	}
 }
 
 func P2PTransactionStateFromString(s string) (P2PTransactionState, error) {
@@ -195,6 +212,9 @@ func (p *P2P) ProcessQueue() {
 // Broadcast broadcasts a P2PTransaction to nodes in the network.
 func (p *P2P) Broadcast(tx P2PTransaction) error {
 	LogInfof("Starting P2P broadcast")
+	if node := GetNode(); node != nil && node.ProgressIndicator != nil {
+		node.ProgressIndicator.UpdateAction("Broadcasting")
+	}
 	p.mutex.RLock()
 	defer p.mutex.RUnlock()
 
@@ -222,6 +242,20 @@ func (p *P2P) IsRunning() bool {
 	return p.running
 }
 
+// PeerCount returns the number of registered peers.
+func (p *P2P) PeerCount() int {
+	p.mutex.RLock()
+	defer p.mutex.RUnlock()
+	return len(p.nodes)
+}
+
+func (p *P2P) getBindAddress() string {
+	if n := GetNode(); n != nil && n.Config != nil && n.Config.P2PHostName != "" {
+		return n.Config.P2PHostName
+	}
+	return p2pHostname
+}
+
 // Start starts the P2P network
 func (p *P2P) Start() error {
 	p.mutex.Lock()
@@ -231,7 +265,7 @@ func (p *P2P) Start() error {
 		return errors.New("P2P network is already running")
 	}
 
-	LogInfof("P2P network starting on %s", p2pHostname)
+	LogInfof("P2P network starting on %s", p.getBindAddress())
 	p.running = true
 
 	go p.runProcessQueue()
@@ -270,10 +304,10 @@ func (p *P2P) runProcessQueue() {
 }
 
 func (p *P2P) runNodeDiscovery() {
-	s := spinner.New(spinner.CharSets[9], 100*time.Millisecond)
 	LogInfof("Starting node discovery...")
-	s.Start()
-	defer s.Stop()
+	if node := GetNode(); node != nil && node.ProgressIndicator != nil {
+		node.ProgressIndicator.UpdateAction("Syncing")
+	}
 	for p.IsRunning() {
 		p.discoverNodes()
 		time.Sleep(30 * time.Second)
@@ -282,14 +316,15 @@ func (p *P2P) runNodeDiscovery() {
 
 func (p *P2P) listenForConnections() {
 	var err error
-	p.listener, err = net.Listen("tcp", p2pHostname)
+	bindAddr := p.getBindAddress()
+	p.listener, err = net.Listen("tcp", bindAddr)
 	if err != nil {
 		LogInfof("Error starting P2P listener: %v", err)
 		return
 	}
 	defer p.listener.Close()
 
-	LogInfof("P2P seed node listening on %s", p2pHostname)
+	LogInfof("P2P seed node listening on %s", bindAddr)
 
 	for p.IsRunning() {
 		conn, err := p.listener.Accept()
@@ -754,8 +789,9 @@ func (p *P2P) requestNodeListFromSeed(conn net.Conn) ([]NodeInfo, error) {
 func (p *P2P) getSelfNodeID() string {
 	p.mutex.RLock()
 	defer p.mutex.RUnlock()
+	selfAddr := p.getBindAddress()
 	for id, node := range p.nodes {
-		if node.Config.P2PHostName == p2pHostname {
+		if node.Config.P2PHostName == selfAddr {
 			return id
 		}
 	}

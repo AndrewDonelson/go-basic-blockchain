@@ -3,9 +3,10 @@
 package sdk
 
 import (
-	"log"
+	"encoding/json"
 	"net/http"
-	"net/url"
+	"strings"
+	"time"
 )
 
 // handleAccountRegister handles the registration of a new account and returns an API key.
@@ -19,6 +20,11 @@ import (
 // 3. sends an email with a verification link that expires is 30 minutes
 // 4. email link format: https://somedomain.com/account/verify?email=EMAIL&token=TOKEN
 func (api *API) handleAccountRegister(w http.ResponseWriter, r *http.Request) {
+	if api.accountStore == nil {
+		RespondError(w, http.StatusInternalServerError, "Account store unavailable")
+		return
+	}
+
 	// Extract email and password hash from query parameters
 	email := r.URL.Query().Get("email")
 	passwordHash := r.URL.Query().Get("password_hash")
@@ -35,32 +41,31 @@ func (api *API) handleAccountRegister(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Generate a verification token
 	token := generateRandomToken()
 
-	// Store the email and token in a database with an expiration time of 30 minutes
-	// You'd typically do this with a SQL INSERT operation, perhaps using a package like sqlx or gorm.
-	// For this example, we'll abstract this operation:
-	// storeEmailAndToken(email, token)
-	ls, err := GetLocalStorage()
+	err := api.accountStore.SavePending(PendingAccountRecord{
+		Email:        strings.ToLower(email),
+		PasswordHash: passwordHash,
+		Token:        token,
+		ExpiresAt:    time.Now().Add(30 * time.Minute),
+	})
 	if err != nil {
-		api.log.Error("Failed to get local storage", "error", err)
-		RespondError(w, http.StatusInternalServerError, "Failed to get local storage")
+		RespondError(w, http.StatusInternalServerError, "Failed to persist registration")
 		return
-	}
-	if err := ls.Set("email", email); err != nil {
-		log.Printf("Error setting email: %v", err)
 	}
 
-	// Send a verification email
-	verificationLink := api.GetConfig().Domain + "/account/verify?email=" + url.QueryEscape(email) + "&token=" + token
-	err = SendGmail(email, "Verify Your Account", "Click the link to verify: "+verificationLink, api.GetConfig())
-	if err != nil {
-		api.log.Error("Failed to send verification email", "error", err)
-		RespondError(w, http.StatusInternalServerError, "Failed to send verification email")
-		return
+	response := struct {
+		Status            string `json:"status"`
+		Message           string `json:"message"`
+		VerificationToken string `json:"verification_token"`
+	}{
+		Status:            "ok",
+		Message:           "Registration successful. Please verify your email.",
+		VerificationToken: token,
 	}
-	if _, err := w.Write([]byte("Registration successful. Please verify your email.")); err != nil {
+
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(response); err != nil {
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return
 	}
@@ -69,8 +74,50 @@ func (api *API) handleAccountRegister(w http.ResponseWriter, r *http.Request) {
 // handleAccountLogin handles the login of an existing account and returns an API key.
 // POST email & password hash and returns JSON with API key
 func (api *API) handleAccountLogin(w http.ResponseWriter, r *http.Request) {
-	// Return "Not Yet Implemented"
-	if _, err := w.Write([]byte("Not Yet Implemented")); err != nil {
+	if api.accountStore == nil {
+		RespondError(w, http.StatusInternalServerError, "Account store unavailable")
+		return
+	}
+
+	email := strings.ToLower(r.URL.Query().Get("email"))
+	passwordHash := r.URL.Query().Get("password_hash")
+
+	if !isValidEmail(email) {
+		RespondError(w, http.StatusBadRequest, "Invalid email format")
+		return
+	}
+
+	if len(passwordHash) != 64 {
+		RespondError(w, http.StatusBadRequest, "Invalid password hash")
+		return
+	}
+
+	record, exists, err := api.accountStore.GetVerified(email)
+	if err != nil {
+		RespondError(w, http.StatusInternalServerError, "Failed to read account store")
+		return
+	}
+
+	if !exists {
+		RespondError(w, http.StatusUnauthorized, "Account not verified")
+		return
+	}
+
+	if record.PasswordHash != passwordHash {
+		RespondError(w, http.StatusUnauthorized, "Invalid credentials")
+		return
+	}
+
+	response := struct {
+		Status string `json:"status"`
+		APIKey string `json:"api_key"`
+	}{
+		Status: "ok",
+		APIKey: generateAPIKeyForEmail(email),
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(response); err != nil {
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return
 	}
@@ -79,10 +126,74 @@ func (api *API) handleAccountLogin(w http.ResponseWriter, r *http.Request) {
 // handleAccountVerify handles the verification of a new account from the email link.
 // email link format: https://somedomain.com/account/verify?email=EMAIL&token=TOKEN
 func (api *API) handleAccountVerify(w http.ResponseWriter, r *http.Request) {
+	if api.accountStore == nil {
+		RespondError(w, http.StatusInternalServerError, "Account store unavailable")
+		return
+	}
+
+	email := strings.ToLower(r.URL.Query().Get("email"))
 	token := r.URL.Query().Get("token")
-	api.log.Notice("Received Verification Link: ", token)
-	// Return "Not Yet Implemented"
-	if _, err := w.Write([]byte("Not Yet Implemented")); err != nil {
+
+	if !isValidEmail(email) {
+		RespondError(w, http.StatusBadRequest, "Invalid email format")
+		return
+	}
+
+	if token == "" {
+		RespondError(w, http.StatusBadRequest, "Invalid verification token")
+		return
+	}
+
+	pending, exists, err := api.accountStore.GetPending(email)
+	if err != nil {
+		RespondError(w, http.StatusInternalServerError, "Failed to read account store")
+		return
+	}
+
+	if !exists {
+		RespondError(w, http.StatusNotFound, "Pending registration not found")
+		return
+	}
+
+	if pending.Token != token {
+		RespondError(w, http.StatusUnauthorized, "Invalid verification token")
+		return
+	}
+
+	if time.Now().After(pending.ExpiresAt) {
+		if err := api.accountStore.DeletePending(email); err != nil {
+			RespondError(w, http.StatusInternalServerError, "Failed to update account store")
+			return
+		}
+		RespondError(w, http.StatusUnauthorized, "Verification token expired")
+		return
+	}
+
+	err = api.accountStore.SaveVerified(VerifiedAccountRecord{
+		Email:        email,
+		PasswordHash: pending.PasswordHash,
+		VerifiedAt:   time.Now(),
+	})
+	if err != nil {
+		RespondError(w, http.StatusInternalServerError, "Failed to persist verified account")
+		return
+	}
+
+	if err := api.accountStore.DeletePending(email); err != nil {
+		RespondError(w, http.StatusInternalServerError, "Failed to update account store")
+		return
+	}
+
+	response := struct {
+		Status string `json:"status"`
+		APIKey string `json:"api_key"`
+	}{
+		Status: "ok",
+		APIKey: generateAPIKeyForEmail(email),
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(response); err != nil {
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return
 	}

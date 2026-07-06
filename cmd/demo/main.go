@@ -8,6 +8,28 @@ import (
 	"github.com/AndrewDonelson/go-basic-blockchain/internal/progress"
 )
 
+func demoTransactionIDs() []string {
+	return []string{"tx12345678", "tx87654321", "txabcdef12", "tx12abcdef"}
+}
+
+func demoHeliosStages() []string {
+	return []string{"Proof Generation", "Sidechain Routing", "Block Finalization"}
+}
+
+func buildDemoStatus(i int) progress.BlockchainStatus {
+	return progress.BlockchainStatus{
+		IsMining:    true,
+		BlockCount:  i + 1,
+		TxQueueSize: (i + 1) * 2,
+		Difficulty:  4,
+		HashRate:    float64((i + 1) * 100),
+		LastBlock:   fmt.Sprintf("block%d", i+1),
+		Peers:       i + 1,
+		IsSynced:    i%2 == 0,
+		Uptime:      time.Duration(i+1) * time.Minute,
+	}
+}
+
 func main() {
 	fmt.Println("🚀 Go Basic Blockchain - Progress Indicator Demo")
 	fmt.Println("================================================")
@@ -42,8 +64,7 @@ func main() {
 
 	// Demo transaction processing
 	fmt.Println("\n📝 Transaction Processing Demo:")
-	txIDs := []string{"tx12345678", "tx87654321", "txabcdef12", "tx12abcdef"}
-	for _, txID := range txIDs {
+	for _, txID := range demoTransactionIDs() {
 		pi.ShowTransactionProgress(txID, "pending")
 		time.Sleep(300 * time.Millisecond)
 		pi.ShowTransactionProgress(txID, "validating")
@@ -59,8 +80,7 @@ func main() {
 
 	// Demo Helios consensus
 	fmt.Println("\n☀️  Helios Consensus Demo:")
-	stages := []string{"Proof Generation", "Sidechain Routing", "Block Finalization"}
-	for i, stage := range stages {
+	for i, stage := range demoHeliosStages() {
 		pi.ShowHeliosProgress(i, stage)
 		time.Sleep(600 * time.Millisecond)
 	}
@@ -75,17 +95,7 @@ func main() {
 	// Demo status updates
 	fmt.Println("\n📊 Status Updates Demo:")
 	for i := 0; i < 5; i++ {
-		status := progress.BlockchainStatus{
-			IsMining:    true,
-			BlockCount:  i + 1,
-			TxQueueSize: (i + 1) * 2,
-			Difficulty:  4,
-			HashRate:    float64((i + 1) * 100),
-			LastBlock:   fmt.Sprintf("block%d", i+1),
-			Peers:       i + 1,
-			IsSynced:    i%2 == 0,
-			Uptime:      time.Duration(i+1) * time.Minute,
-		}
+		status := buildDemoStatus(i)
 		pi.UpdateStatus(status)
 		time.Sleep(1 * time.Second)
 	}

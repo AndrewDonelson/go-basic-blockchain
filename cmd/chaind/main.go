@@ -13,6 +13,34 @@ import (
 	"github.com/AndrewDonelson/go-basic-blockchain/sdk"
 )
 
+const (
+	menuActionOpenMenu = "open-menu"
+	menuActionExit     = "exit"
+	menuActionHelp     = "help"
+	menuActionUnknown  = "unknown"
+)
+
+func buildNodeOptionsFromArgs(seed bool, seedAddress string) *sdk.NodeOptions {
+	nodeOpts := sdk.DefaultNodeOptions()
+	nodeOpts.IsSeed = seed
+	nodeOpts.SeedAddress = seedAddress
+	return nodeOpts
+}
+
+func menuCommandAction(input string) string {
+	normalized := strings.ToLower(strings.TrimSpace(input))
+	switch normalized {
+	case "", "menu":
+		return menuActionOpenMenu
+	case "quit", "exit":
+		return menuActionExit
+	case "help":
+		return menuActionHelp
+	default:
+		return menuActionUnknown
+	}
+}
+
 func main() {
 	// Parse command-line flags
 	err := sdk.Args.Parse()
@@ -33,11 +61,7 @@ func main() {
 	}
 
 	// Create node options using the parsed flags
-	nodeOpts := sdk.DefaultNodeOptions()
-
-	// Apply command-line flags to node options
-	nodeOpts.IsSeed = sdk.Args.GetBool("seed")
-	nodeOpts.SeedAddress = sdk.Args.GetString("seed-address")
+	nodeOpts := buildNodeOptionsFromArgs(sdk.Args.GetBool("seed"), sdk.Args.GetString("seed-address"))
 
 	// Create the node
 	err = sdk.NewNode(nodeOpts)
@@ -72,14 +96,12 @@ func main() {
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 
 	// Keep the main thread alive
-	select {
-	case <-sigChan:
-		fmt.Println("\nShutting down blockchain...")
-		if node.Blockchain != nil {
-			node.Blockchain.Cleanup()
-		}
-		os.Exit(0)
+	<-sigChan
+	fmt.Println("\nShutting down blockchain...")
+	if node.Blockchain != nil {
+		node.Blockchain.Cleanup()
 	}
+	os.Exit(0)
 }
 
 // handleMenuInput handles user input for menu activation
@@ -94,9 +116,8 @@ func handleMenuInput(blockchain *sdk.Blockchain) {
 			continue
 		}
 
-		input = strings.TrimSpace(input)
-
-		if input == "" || strings.ToLower(input) == "menu" {
+		switch menuCommandAction(input) {
+		case menuActionOpenMenu:
 			// Create and start the menu system
 			menuSystem := menu.CreateBlockchainMenu(blockchain)
 			fmt.Println("\nOpening interactive menu...")
@@ -107,15 +128,16 @@ func handleMenuInput(blockchain *sdk.Blockchain) {
 
 			fmt.Println("\nMenu closed. Blockchain continues running.")
 			fmt.Println("Press ENTER or type 'menu' to open the menu again.")
-		} else if strings.ToLower(input) == "quit" || strings.ToLower(input) == "exit" {
+		case menuActionExit:
 			fmt.Println("Shutting down blockchain...")
 			os.Exit(0)
-		} else if strings.ToLower(input) == "help" {
+		case menuActionHelp:
 			fmt.Println("Available commands:")
 			fmt.Println("  ENTER or 'menu' - Open interactive menu")
 			fmt.Println("  'quit' or 'exit' - Shutdown blockchain")
 			fmt.Println("  'help' - Show this help")
-		} else {
+		case menuActionUnknown:
+			input = strings.TrimSpace(input)
 			fmt.Printf("Unknown command: %s. Type 'help' for available commands.\n", input)
 		}
 	}

@@ -12,12 +12,14 @@ func CreateBlockchainMenu(blockchain *sdk.Blockchain) *MenuSystem {
 	menuSystem := NewMenuSystem()
 
 	// Set the progress indicator if available
-	if blockchain.GetProgressIndicator() != nil {
+	if blockchain != nil && blockchain.GetProgressIndicator() != nil {
 		menuSystem.ProgressIndicator = blockchain.GetProgressIndicator()
 	}
 
 	// Set the blockchain for menu state management
-	menuSystem.Blockchain = blockchain
+	if blockchain != nil {
+		menuSystem.Blockchain = blockchain
+	}
 
 	// Create root menu
 	rootMenu := &Menu{
@@ -182,11 +184,15 @@ func createNewWallet(blockchain *sdk.Blockchain) error {
 	// Get user input for wallet details
 	fmt.Printf("Enter wallet name: ")
 	var name string
-	fmt.Scanln(&name)
+	if _, err := fmt.Scanln(&name); err != nil {
+		return err
+	}
 
 	fmt.Printf("Enter passphrase: ")
 	var passphrase string
-	fmt.Scanln(&passphrase)
+	if _, err := fmt.Scanln(&passphrase); err != nil {
+		return err
+	}
 
 	// Create wallet options
 	walletOpts := sdk.NewWalletOptions(
@@ -227,7 +233,9 @@ func checkWalletBalance(blockchain *sdk.Blockchain) error {
 
 	fmt.Printf("Enter wallet address: ")
 	var address string
-	fmt.Scanln(&address)
+	if _, err := fmt.Scanln(&address); err != nil {
+		return err
+	}
 
 	balance := blockchain.GetBalance(address)
 	fmt.Printf("Balance: %.2f\n", balance)
@@ -240,11 +248,15 @@ func unlockWallet(blockchain *sdk.Blockchain) error {
 
 	fmt.Printf("Enter wallet address: ")
 	var address string
-	fmt.Scanln(&address)
+	if _, err := fmt.Scanln(&address); err != nil {
+		return err
+	}
 
 	fmt.Printf("Enter passphrase: ")
 	var passphrase string
-	fmt.Scanln(&passphrase)
+	if _, err := fmt.Scanln(&passphrase); err != nil {
+		return err
+	}
 
 	// This would need to be implemented based on wallet unlocking mechanism
 	fmt.Printf("Wallet unlocking functionality needs to be implemented.\n")
@@ -257,15 +269,21 @@ func createTransaction(blockchain *sdk.Blockchain) error {
 
 	fmt.Printf("Enter sender address: ")
 	var from string
-	fmt.Scanln(&from)
+	if _, err := fmt.Scanln(&from); err != nil {
+		return err
+	}
 
 	fmt.Printf("Enter recipient address: ")
 	var to string
-	fmt.Scanln(&to)
+	if _, err := fmt.Scanln(&to); err != nil {
+		return err
+	}
 
 	fmt.Printf("Enter amount: ")
 	var amountStr string
-	fmt.Scanln(&amountStr)
+	if _, err := fmt.Scanln(&amountStr); err != nil {
+		return err
+	}
 
 	amount, err := strconv.ParseFloat(amountStr, 64)
 	if err != nil {
@@ -301,7 +319,9 @@ func showTransactionHistory(blockchain *sdk.Blockchain) error {
 
 	fmt.Printf("Enter wallet address: ")
 	var address string
-	fmt.Scanln(&address)
+	if _, err := fmt.Scanln(&address); err != nil {
+		return err
+	}
 
 	history := blockchain.GetTransactionHistory(address)
 
@@ -335,7 +355,9 @@ func adjustMiningDifficulty(blockchain *sdk.Blockchain) error {
 	fmt.Printf("Enter new difficulty (1-10): ")
 
 	var difficultyStr string
-	fmt.Scanln(&difficultyStr)
+	if _, err := fmt.Scanln(&difficultyStr); err != nil {
+		return err
+	}
 
 	difficulty, err := strconv.Atoi(difficultyStr)
 	if err != nil || difficulty < 1 || difficulty > 10 {

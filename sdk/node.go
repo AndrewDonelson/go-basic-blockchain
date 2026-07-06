@@ -51,6 +51,7 @@ type NodeStatus struct {
 type Node struct {
 	sync.Mutex
 	initialized       bool
+	StartedAt         time.Time
 	LastSeen          time.Time
 	Status            string
 	ID                string
@@ -214,6 +215,10 @@ func LogEvent(format string, args ...interface{}) {
 // Run runs the node.
 func (n *Node) Run() {
 	LogInfof("Starting node...")
+	if n.StartedAt.IsZero() {
+		n.StartedAt = time.Now()
+	}
+	n.LastSeen = n.StartedAt
 
 	// Start progress indicator
 	if n.ProgressIndicator != nil {
@@ -228,7 +233,7 @@ func (n *Node) Run() {
 			_ = err // Suppress unused variable warning
 		}
 	}()
-	LogInfof("P2P network starting on :8101")
+	LogInfof("P2P network starting on %s", n.Config.P2PHostName)
 
 	if n.Blockchain == nil {
 		LogInfof("Error: Blockchain is not initialized")
@@ -244,53 +249,6 @@ func (n *Node) Run() {
 		n.ProgressIndicator.ShowInfo("API server started")
 	}
 
-	// Set up a channel to capture log output
-	logCh := make(chan bool, 10)
-
-	// Blockchain-themed spinner animation
-	spinnerFrames := []string{
-		"[⬛⬜⬜⬜⬛] >>",
-		"[⬛⬜⬜⬛⬜] >>",
-		"[⬛⬜⬛⬜⬜] >>",
-		"[⬛⬛⬜⬜⬜] >>",
-		"[⬜⬛⬜⬜⬛] >>",
-		"[⬜⬜⬛⬜⬛] >>",
-		"[⬜⬜⬜⬛⬛] >>",
-	}
-	frameIndex := 0
-
-	// Create a ticker for updating the spinner
-	spinnerTick := time.NewTicker(150 * time.Millisecond)
-	defer spinnerTick.Stop()
-
-	// Create a ticker for updating blockchain stats
-	statsTick := time.NewTicker(2 * time.Second)
-	defer statsTick.Stop()
-
-	// Create a ticker for network status updates
-	networkTick := time.NewTicker(5 * time.Second)
-	defer networkTick.Stop()
-
-	// Check if we're running in a terminal that supports ANSI escape sequences
-	// This is a simple check and might not work in all environments
-	_, isTerminal := os.LookupEnv("TERM")
-
-	// Spinner and status updates should only be shown if verbose is enabled
-	if n.Config.Verbose && isTerminal {
-		for {
-			select {
-			case <-spinnerTick.C:
-				frameIndex = (frameIndex + 1) % len(spinnerFrames)
-				fmt.Printf("\r%s Node: %s | Blocks: %d    | TXs: %d  ", spinnerFrames[frameIndex], n.ID[:8], n.Blockchain.GetBlockCount(), len(n.Blockchain.TransactionQueue))
-			case <-statsTick.C:
-				fmt.Printf("\r📊 Status: Blocks=%d    | TXs=%d   | Difficulty=%d  | Peers=%d  | Uptime=%s         ", n.Blockchain.GetBlockCount(), len(n.Blockchain.TransactionQueue), n.Config.Difficulty, len(n.P2P.nodes), time.Since(n.LastSeen).Truncate(time.Second))
-			case <-networkTick.C:
-				fmt.Printf("\r🌐 Network: Connected (%d  peers) - Synced", len(n.P2P.nodes))
-			case <-logCh:
-				// handle log output if needed
-			}
-		}
-	}
 	// Otherwise, just block forever
 	select {}
 }

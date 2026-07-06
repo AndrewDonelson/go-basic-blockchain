@@ -403,7 +403,7 @@ func (c *Config) promptValue(key, defaultValue string, required bool, returnType
 		fmt.Printf("Enter value for %s (<ENTER> default: %s): ", key, defaultValue)
 	}
 
-	fmt.Scanln(&value)
+	_, _ = fmt.Scanln(&value)
 
 	if required && (value == "" || value == defaultValue) {
 		fmt.Println("This is a required value and must be set")

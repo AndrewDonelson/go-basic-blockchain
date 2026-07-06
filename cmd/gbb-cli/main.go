@@ -20,13 +20,71 @@ type BlockchainClient struct {
 	apiKey     string
 }
 
+func resolveAPIURLFromValues(blockchainAPIURL, apiHostname string) string {
+	if blockchainAPIURL != "" {
+		return blockchainAPIURL
+	}
+	if apiHostname != "" {
+		if strings.HasPrefix(apiHostname, ":") {
+			return "http://localhost" + apiHostname
+		}
+		if strings.HasPrefix(apiHostname, "http://") || strings.HasPrefix(apiHostname, "https://") {
+			return apiHostname
+		}
+		return "http://" + apiHostname
+	}
+	return "http://localhost:8100"
+}
+
+func resolveAPIKeyFromValue(blockchainAPIKey string) string {
+	if blockchainAPIKey != "" {
+		return blockchainAPIKey
+	}
+	return "69a082ff3996745bd4b48bcc92d5bb40ff97115896183f1cb53a3409f818b15f"
+}
+
+func statusSummary(info map[string]interface{}, connected bool) []string {
+	lines := []string{fmt.Sprintf("  Connected: %t", connected)}
+
+	if blockCount, ok := info["block_count"].(float64); ok {
+		lines = append(lines, fmt.Sprintf("  Blocks: %.0f", blockCount))
+	}
+
+	if difficulty, ok := info["difficulty"].(float64); ok {
+		lines = append(lines, fmt.Sprintf("  Difficulty: %.0f", difficulty))
+	}
+
+	if blockTime, ok := info["block_time"].(float64); ok {
+		lines = append(lines, fmt.Sprintf("  Block Time: %.0f seconds", blockTime))
+	}
+
+	if latestBlock, ok := info["latest_block"].(map[string]interface{}); ok {
+		if hash, ok := latestBlock["hash"].(string); ok {
+			lines = append(lines, fmt.Sprintf("  Latest Hash: %s", hash))
+		}
+		if index, ok := latestBlock["index"].(float64); ok {
+			lines = append(lines, fmt.Sprintf("  Latest Block Index: %.0f", index))
+		}
+	}
+
+	return lines
+}
+
+func resolveAPIURL() string {
+	return resolveAPIURLFromValues(os.Getenv("BLOCKCHAIN_API_URL"), os.Getenv("API_HOSTNAME"))
+}
+
+func resolveAPIKey() string {
+	return resolveAPIKeyFromValue(os.Getenv("BLOCKCHAIN_API_KEY"))
+}
+
 func NewBlockchainClient() *BlockchainClient {
 	return &BlockchainClient{
-		apiURL: "http://localhost:8100",
+		apiURL: resolveAPIURL(),
 		httpClient: &http.Client{
 			Timeout: 10 * time.Second,
 		},
-		apiKey: "69a082ff3996745bd4b48bcc92d5bb40ff97115896183f1cb53a3409f818b15f",
+		apiKey: resolveAPIKey(),
 	}
 }
 
@@ -343,27 +401,8 @@ func showStatus(client *BlockchainClient) {
 		return
 	}
 
-	fmt.Printf("  Connected: %t\n", client.IsConnected())
-
-	if blockCount, ok := info["block_count"].(float64); ok {
-		fmt.Printf("  Blocks: %.0f\n", blockCount)
-	}
-
-	if difficulty, ok := info["difficulty"].(float64); ok {
-		fmt.Printf("  Difficulty: %.0f\n", difficulty)
-	}
-
-	if blockTime, ok := info["block_time"].(float64); ok {
-		fmt.Printf("  Block Time: %.0f seconds\n", blockTime)
-	}
-
-	if latestBlock, ok := info["latest_block"].(map[string]interface{}); ok {
-		if hash, ok := latestBlock["hash"].(string); ok {
-			fmt.Printf("  Latest Hash: %s\n", hash)
-		}
-		if index, ok := latestBlock["index"].(float64); ok {
-			fmt.Printf("  Latest Block Index: %.0f\n", index)
-		}
+	for _, line := range statusSummary(info, client.IsConnected()) {
+		fmt.Println(line)
 	}
 
 	fmt.Println("  ✅ Connected to running blockchain via API")

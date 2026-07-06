@@ -131,7 +131,7 @@ func (txlm *TXLookupManager) merge(blockNumber big.Int, txID string, txHash stri
 // split splits a merged string into Indexentry object contining the blockNumber, txID and txHash
 func (txlm *TXLookupManager) split(merged string) (entry *IndexEntry) {
 	entry = &IndexEntry{}
-	fmt.Sscanf(merged, "%s:%s:%s", &entry.BlockNumber, &entry.TxID, &entry.TxHash)
+	_, _ = fmt.Sscanf(merged, "%s:%s:%s", &entry.BlockNumber, &entry.TxID, &entry.TxHash)
 
 	return
 }
