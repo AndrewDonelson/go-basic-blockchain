@@ -33,7 +33,7 @@ This document provides a comprehensive overview of the Go Basic Blockchain archi
 
 ### 1. Blockchain Core
 
-**Location**: `sdk/blockchain.go`
+**Location**: `sdk/blockchain.go` (type and construction), with the rest split by concern across `sdk/blockchain_*.go` — see the file map in [development.md](development.md)
 
 **Responsibilities**:
 - Block creation and validation
@@ -62,7 +62,7 @@ type Blockchain struct {
 
 ### 2. API Layer
 
-**Location**: `sdk/api.go`, `sdk/apiEndpointsAccount.go`
+**Location**: `sdk/api.go` (type and lifecycle), `sdk/api_routes.go`, `sdk/api_handlers_*.go`, `sdk/apiEndpointsAccount.go`
 
 **Responsibilities**:
 - RESTful endpoint handling

@@ -325,7 +325,11 @@ func (bc *Blockchain) persistChainFrom(blocks []*Block, staleAbove int) error {
 		LogVerbosef("Removed stale block file %s", path)
 	}
 
-	return nil
+	// A stale file that cannot be deleted is logged, not fatal. The chain has
+	// already been reorganised in memory and the new blocks are written; failing
+	// here would report a reorganisation that in fact succeeded, and the leftover
+	// file is above the tip where nothing reads it.
+	return nil //nolint:nilerr // cleanup failure must not fail a completed reorg
 }
 
 // ReorgResult describes what a call to AcceptBlock did.

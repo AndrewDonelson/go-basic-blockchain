@@ -67,17 +67,37 @@ go-basic-blockchain/
 
 ### Key Components
 
-**Core Blockchain** (`sdk/blockchain.go`):
-- Main blockchain implementation
-- Block creation and validation
-- Transaction processing
-- Mining operations
+**Core Blockchain** (`sdk/blockchain*.go`)
 
-**API Layer** (`sdk/api.go`):
-- RESTful API endpoints
-- Request/response handling
-- Authentication middleware
-- Error handling
+`blockchain.go` was a 1,900-line file. It is split by concern — one file per
+thing a reader might be looking for, all in the same package so no import path
+changed:
+
+| File | Holds |
+|---|---|
+| `blockchain.go` | The `Blockchain` type, construction, configuration |
+| `blockchain_mining.go` | Proof of work, the mining loop, block production |
+| `blockchain_accept.go` | Block acceptance and chain validation |
+| `blockchain_persist.go` | Loading, saving, genesis creation |
+| `blockchain_state.go` | Balances, the UTXO set, funds, nonces |
+| `blockchain_query.go` | Read-only queries over blocks and transactions |
+| `blockchain_transactions.go` | Mempool submission |
+| `blockchain_events.go` | Announcements, sidechain callbacks, display state |
+
+**API Layer** (`sdk/api*.go`)
+
+`api.go` was 1,650 lines and split the same way:
+
+| File | Holds |
+|---|---|
+| `api.go` | The `API` type, lifecycle, accessors |
+| `api_routes.go` | The route table (mounted at `/v1` and unprefixed) |
+| `api_middleware.go` | Authentication, logging, public paths |
+| `api_respond.go` | The error envelope, pagination, serialisation |
+| `api_handlers_public.go` | Unauthenticated endpoints |
+| `api_handlers_chain.go` | Blocks and transactions |
+| `api_handlers_wallet.go` | Wallets and wallet transactions |
+| `api_handlers_consensus.go` | Node-to-node endpoints |
 
 **Wallet System** (`sdk/wallet.go`):
 - Wallet creation and management

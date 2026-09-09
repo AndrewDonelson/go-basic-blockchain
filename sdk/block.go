@@ -323,11 +323,20 @@ func (b *Block) CalculateMerkleRoot() []byte {
 	return tree.Root.Data
 }
 
-// AdjustDifficulty adjusts the mining difficulty based on the time taken to mine
-// recent blocks.
+// AdjustDifficulty adjusts difficulty from the gap between two blocks.
 //
-// The decrease is floored at 1. Difficulty is a uint32, so `- 1` at zero wrapped
-// to 4294967295 -- a difficulty no machine could ever satisfy.
+// This is NOT the consensus rule. Difficulty is derived from chain history by
+// Blockchain.ExpectedDifficulty, which measures a whole window and is what every
+// node validates against; this looks at a single interval and is kept as the
+// simplest illustration of a retargeting feedback loop. Nothing in block
+// production or validation calls it.
+//
+// The bounds are the difficulty bounds, not the integer ones. The ceiling used
+// to be math.MaxUint32, which is meaningless for an exponent: difficulty is the
+// exponent in 2^d, so 2^4294967295 is not a hard target but an unreachable one,
+// and the comparison could never fire usefully. The floor exists because
+// difficulty is a uint32 and `- 1` at zero wraps to 4294967295 -- a difficulty
+// no machine could ever satisfy.
 func (b *Block) AdjustDifficulty(previousBlock *Block, targetBlockTime time.Duration) uint32 {
 	if previousBlock == nil {
 		return b.Header.Difficulty
@@ -336,13 +345,13 @@ func (b *Block) AdjustDifficulty(previousBlock *Block, targetBlockTime time.Dura
 	elapsed := b.Header.Timestamp.Sub(previousBlock.Header.Timestamp)
 	switch {
 	case elapsed < targetBlockTime/2:
-		if previousBlock.Header.Difficulty >= math.MaxUint32 {
-			return previousBlock.Header.Difficulty
+		if previousBlock.Header.Difficulty >= maxAcceptableDifficulty {
+			return maxAcceptableDifficulty
 		}
 		return previousBlock.Header.Difficulty + 1
 	case elapsed > targetBlockTime*2:
-		if previousBlock.Header.Difficulty <= 1 {
-			return 1
+		if previousBlock.Header.Difficulty <= minAcceptableDifficulty {
+			return minAcceptableDifficulty
 		}
 		return previousBlock.Header.Difficulty - 1
 	default:

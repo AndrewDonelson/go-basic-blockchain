@@ -1,6 +1,7 @@
 package sdk
 
 import (
+	"context"
 	"encoding/hex"
 	"net"
 	"net/http"
@@ -80,7 +81,7 @@ func TestApiKeyMiddleware(t *testing.T) {
 	client := &http.Client{}
 
 	t.Run("Valid API Key", func(t *testing.T) {
-		req, _ := http.NewRequest("GET", testServer.URL, nil)
+		req, _ := http.NewRequestWithContext(context.Background(), "GET", testServer.URL, nil)
 		req.Header.Add("Authorization", "Bearer 69a082ff3996745bd4b48bcc92d5bb40ff97115896183f1cb53a3409f818b15f")
 
 		resp, err := client.Do(req)
@@ -89,7 +90,7 @@ func TestApiKeyMiddleware(t *testing.T) {
 	})
 
 	t.Run("Invalid API Key", func(t *testing.T) {
-		req, _ := http.NewRequest("GET", testServer.URL, nil)
+		req, _ := http.NewRequestWithContext(context.Background(), "GET", testServer.URL, nil)
 		req.Header.Add("Authorization", "Bearer invalidapikey")
 
 		resp, err := client.Do(req)
@@ -98,7 +99,7 @@ func TestApiKeyMiddleware(t *testing.T) {
 	})
 
 	t.Run("Missing API Key", func(t *testing.T) {
-		req, _ := http.NewRequest("GET", testServer.URL, nil)
+		req, _ := http.NewRequestWithContext(context.Background(), "GET", testServer.URL, nil)
 
 		resp, err := client.Do(req)
 		assert.NoError(t, err)
@@ -141,7 +142,7 @@ func TestPublicPathAccessWithMiddleware(t *testing.T) {
 	client := &http.Client{}
 
 	// Test that public paths are accessible without an API key
-	req, _ := http.NewRequest("GET", testServer.URL, nil)
+	req, _ := http.NewRequestWithContext(context.Background(), "GET", testServer.URL, nil)
 	resp, err := client.Do(req)
 	assert.NoError(t, err)
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
@@ -212,21 +213,21 @@ func TestGeneratedAPIKeysAreUnique(t *testing.T) {
 // TestBearerToken tests the bearerToken function
 func TestBearerToken(t *testing.T) {
 	// Test valid bearer token
-	req, _ := http.NewRequest("GET", "http://example.com", nil)
+	req, _ := http.NewRequestWithContext(context.Background(), "GET", "http://example.com", nil)
 	req.Header.Add("Authorization", "Bearer valid-token")
 	token, err := bearerToken(req, "Authorization")
 	assert.NoError(t, err)
 	assert.Equal(t, "valid-token", token)
 
 	// Test missing bearer prefix
-	req, _ = http.NewRequest("GET", "http://example.com", nil)
+	req, _ = http.NewRequestWithContext(context.Background(), "GET", "http://example.com", nil)
 	req.Header.Add("Authorization", "valid-token")
 	token, err = bearerToken(req, "Authorization")
 	assert.Error(t, err)
 	assert.Empty(t, token)
 
 	// Test empty header
-	req, _ = http.NewRequest("GET", "http://example.com", nil)
+	req, _ = http.NewRequestWithContext(context.Background(), "GET", "http://example.com", nil)
 	token, err = bearerToken(req, "Authorization")
 	assert.Error(t, err)
 	assert.Empty(t, token)

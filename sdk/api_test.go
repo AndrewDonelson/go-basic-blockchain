@@ -37,7 +37,7 @@ var (
 
 // createAuthorizedRequest creates an HTTP request with the API key
 func createAuthorizedRequest(method, url string, body []byte) (*http.Request, error) {
-	req, err := http.NewRequest(method, url, bytes.NewBuffer(body))
+	req, err := http.NewRequestWithContext(context.Background(), method, url, bytes.NewBuffer(body))
 	if err != nil {
 		return nil, err
 	}
@@ -205,7 +205,7 @@ func TestBlockchainAPI(t *testing.T) {
 }
 
 func testVersionEndpoint(t *testing.T) {
-	resp, err := http.Get(baseURL + "/version")
+	resp, err := httpGetCtx(baseURL + "/version")
 	if err != nil {
 		t.Fatalf("Failed to get version: %v", err)
 	}
@@ -227,7 +227,7 @@ func testVersionEndpoint(t *testing.T) {
 }
 
 func testHomeEndpoint(t *testing.T) {
-	resp, err := http.Get(baseURL + "/")
+	resp, err := httpGetCtx(baseURL + "/")
 	if err != nil {
 		t.Fatalf("Failed to get home endpoint: %v", err)
 	}
@@ -321,7 +321,7 @@ func testSecuredRouteAuthEnforcement(t *testing.T) {
 }
 
 func testInfoEndpoint(t *testing.T) {
-	resp, err := http.Get(baseURL + "/info")
+	resp, err := httpGetCtx(baseURL + "/info")
 	if err != nil {
 		t.Fatalf("Failed to get info: %v", err)
 	}
@@ -350,7 +350,7 @@ func testInfoEndpoint(t *testing.T) {
 }
 
 func testHealthEndpoint(t *testing.T) {
-	resp, err := http.Get(baseURL + "/health")
+	resp, err := httpGetCtx(baseURL + "/health")
 	if err != nil {
 		t.Fatalf("Failed to get health: %v", err)
 	}
@@ -370,7 +370,7 @@ func postJSON(t *testing.T, url string, body interface{}) *http.Response {
 	if err != nil {
 		t.Fatalf("marshal request body: %v", err)
 	}
-	resp, err := http.Post(url, "application/json", bytes.NewReader(payload))
+	resp, err := httpPostCtx(url, "application/json", bytes.NewReader(payload))
 	if err != nil {
 		t.Fatalf("POST %s: %v", url, err)
 	}
@@ -430,7 +430,7 @@ func testAccountEndpoints(t *testing.T) {
 	// Complete verification using a seeded token.
 	token := seedPendingAccount(t, email, password, time.Now().Add(30*time.Minute))
 
-	verifyResp, err := http.Get(baseURL + "/account/verify?email=" + email + "&token=" + token)
+	verifyResp, err := httpGetCtx(baseURL + "/account/verify?email=" + email + "&token=" + token)
 	if err != nil {
 		t.Fatalf("Failed to verify account: %v", err)
 	}
@@ -497,7 +497,7 @@ func testAccountTakeoverIsRefused(t *testing.T) {
 	attacker := "attacker chosen password"
 
 	token := seedPendingAccount(t, email, original, time.Now().Add(30*time.Minute))
-	verifyResp, err := http.Get(baseURL + "/account/verify?email=" + email + "&token=" + token)
+	verifyResp, err := httpGetCtx(baseURL + "/account/verify?email=" + email + "&token=" + token)
 	if err != nil {
 		t.Fatalf("verify victim account: %v", err)
 	}
@@ -556,7 +556,7 @@ func testAccountNegativePaths(t *testing.T) {
 	wrongTokenEmail := fmt.Sprintf("wrongtoken-%d@example.com", time.Now().UnixNano())
 	seedPendingAccount(t, wrongTokenEmail, "a sufficiently long password", time.Now().Add(30*time.Minute))
 
-	wrongVerifyResp, err := http.Get(baseURL + "/account/verify?email=" + wrongTokenEmail + "&token=definitely-wrong")
+	wrongVerifyResp, err := httpGetCtx(baseURL + "/account/verify?email=" + wrongTokenEmail + "&token=definitely-wrong")
 	if err != nil {
 		t.Fatalf("Failed wrong-token verify request: %v", err)
 	}
@@ -568,7 +568,7 @@ func testAccountNegativePaths(t *testing.T) {
 	expiredEmail := fmt.Sprintf("expired-%d@example.com", time.Now().UnixNano())
 	expiredToken := seedPendingAccount(t, expiredEmail, "a sufficiently long password", time.Now().Add(-1*time.Minute))
 
-	expiredVerifyResp, err := http.Get(baseURL + "/account/verify?email=" + expiredEmail + "&token=" + expiredToken)
+	expiredVerifyResp, err := httpGetCtx(baseURL + "/account/verify?email=" + expiredEmail + "&token=" + expiredToken)
 	if err != nil {
 		t.Fatalf("Failed expired-token verify request: %v", err)
 	}
@@ -900,7 +900,7 @@ func testRouteDisambiguationEndpoints(t *testing.T) {
 }
 
 func testConsensusEndpoints(t *testing.T) {
-	unauthorizedResp, err := http.Post(baseURL+"/consensus/tx", "application/json", bytes.NewBufferString(`{"id":"tx-unauth"}`))
+	unauthorizedResp, err := httpPostCtx(baseURL+"/consensus/tx", "application/json", bytes.NewBufferString(`{"id":"tx-unauth"}`))
 	if err != nil {
 		t.Fatalf("Failed to call consensus tx endpoint without auth: %v", err)
 	}
@@ -1790,4 +1790,25 @@ func buildSignedBankTransaction(t *testing.T, amount float64) *Bank {
 		t.Fatalf("sign bank transaction: %v", err)
 	}
 	return tx
+}
+
+// httpGetCtx and httpPostCtx are http.Get/http.Post with a context attached.
+//
+// A request without one cannot be cancelled, so a hung server would block a test
+// until the whole run timed out rather than the test failing on its own.
+func httpGetCtx(url string) (*http.Response, error) {
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, url, nil)
+	if err != nil {
+		return nil, err
+	}
+	return http.DefaultClient.Do(req)
+}
+
+func httpPostCtx(url, contentType string, body io.Reader) (*http.Response, error) {
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, url, body)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", contentType)
+	return http.DefaultClient.Do(req)
 }

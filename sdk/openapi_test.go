@@ -126,12 +126,14 @@ func registeredRoutes(t *testing.T) map[string]bool {
 	err := api.router.Walk(func(route *mux.Route, _ *mux.Router, _ []*mux.Route) error {
 		template, err := route.GetPathTemplate()
 		if err != nil {
-			return nil // a route with no path template, e.g. bare middleware
+			// Not every route has a path template -- a bare middleware mount has
+			// none. That is a route to skip, not a reason to abandon the walk.
+			return nil //nolint:nilerr // a template-less route is skipped, not fatal
 		}
 		// A subrouter mount point carries no methods and is not an endpoint;
 		// documenting "/consensus" would describe something nothing answers.
 		if methods, err := route.GetMethods(); err != nil || len(methods) == 0 {
-			return nil
+			return nil //nolint:nilerr // likewise: no methods means no endpoint
 		}
 		routes[template] = true
 		return nil

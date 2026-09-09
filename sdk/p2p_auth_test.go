@@ -906,6 +906,7 @@ func TestAuthenticatedPeersCanSync(t *testing.T) {
 		t.Fatalf("syncer: %v", err)
 	}
 
+	//nolint:staticcheck // SA1012: passing nil is exactly what this test covers.
 	result, err := syncer.SyncOnce(nil)
 	if err != nil {
 		t.Fatalf("sync over an authenticated session failed: %v (skipped %v)", err, result.Skipped)
@@ -965,6 +966,7 @@ func TestSyncOnceHandlesNilContext(t *testing.T) {
 	local := newFakeChain(0)
 	s := newTestSyncer(t, local, newFakeTransport(), fakePeers{}, 10)
 
+	//nolint:staticcheck // SA1012: passing nil is exactly what this test covers.
 	if _, err := s.SyncOnce(nil); err != nil && !errors.Is(err, context.Canceled) {
 		t.Fatalf("a nil context must not panic: %v", err)
 	}

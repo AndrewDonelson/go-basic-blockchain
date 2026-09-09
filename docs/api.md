@@ -1,7 +1,7 @@
 # API Reference
 
 This document describes the API **as implemented**. Every route below is
-registered in `sdk/api.go:registerRoutes`; nothing here is aspirational.
+registered in `sdk/api_routes.go`; nothing here is aspirational.
 
 > **This file was rewritten.** The previous version documented a completely
 > different API — `/api/blockchain/status`, `/api/wallet/create`,
