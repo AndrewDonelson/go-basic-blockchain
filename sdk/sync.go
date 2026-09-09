@@ -171,6 +171,9 @@ func (s *Syncer) Stats() SyncStats {
 
 // Run synchronises on a ticker until ctx is cancelled.
 func (s *Syncer) Run(ctx context.Context, interval time.Duration) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	if interval <= 0 {
 		interval = defaultSyncInterval
 	}
@@ -198,6 +201,12 @@ func (s *Syncer) Run(ctx context.Context, interval time.Duration) {
 // is rejected. An unreachable or forked peer is recorded in Skipped and does not
 // abort the pass.
 func (s *Syncer) SyncOnce(ctx context.Context) (SyncResult, error) {
+	// A nil context is a caller mistake, but panicking on it inside a library is
+	// worse than treating it as an un-cancellable background context.
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
 	result := SyncResult{
 		StartHeight: s.chain.Height(),
 		Skipped:     map[string]string{},

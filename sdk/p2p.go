@@ -125,6 +125,80 @@ type P2P struct {
 	// map entry that produced.
 	selfID      string
 	selfAddress string
+
+	// identity is this node's long-term keypair. Peers authenticate against it,
+	// and the session key is derived from it, so a node without one cannot
+	// establish a connection at all.
+	identity *PeerIdentity
+
+	// allowedPeers, when non-empty, restricts which node IDs may connect.
+	allowedPeers map[string]struct{}
+
+	// nonces rejects replayed handshakes.
+	nonces *nonceCache
+}
+
+// SetIdentity attaches this node's identity keypair.
+//
+// The node ID is derived from the key, so setting an identity also fixes the ID:
+// it can no longer be an arbitrary string the node asserts about itself.
+func (p *P2P) SetIdentity(identity *PeerIdentity) {
+	p.mutex.Lock()
+	defer p.mutex.Unlock()
+
+	p.identity = identity
+	if identity != nil {
+		p.selfID = identity.NodeID
+	}
+}
+
+// Identity returns this node's identity, if one is set.
+func (p *P2P) Identity() *PeerIdentity {
+	p.mutex.RLock()
+	defer p.mutex.RUnlock()
+	return p.identity
+}
+
+// SetAllowedPeers restricts which node IDs may connect. An empty list allows any
+// authenticated peer.
+//
+// Authentication proves a peer holds the key for the ID it claims; the allowlist
+// is the separate question of whether that particular peer is welcome.
+func (p *P2P) SetAllowedPeers(ids []string) {
+	p.mutex.Lock()
+	defer p.mutex.Unlock()
+
+	if len(ids) == 0 {
+		p.allowedPeers = nil
+		return
+	}
+
+	allowed := make(map[string]struct{}, len(ids))
+	for _, id := range ids {
+		if trimmed := strings.TrimSpace(id); trimmed != "" {
+			allowed[trimmed] = struct{}{}
+		}
+	}
+	p.allowedPeers = allowed
+}
+
+// peerAllowed reports whether a node ID may connect.
+func (p *P2P) peerAllowed(id string) bool {
+	p.mutex.RLock()
+	defer p.mutex.RUnlock()
+
+	if len(p.allowedPeers) == 0 {
+		return true
+	}
+	_, ok := p.allowedPeers[id]
+	return ok
+}
+
+// selfAddressSnapshot returns this node's advertised address.
+func (p *P2P) selfAddressSnapshot() string {
+	p.mutex.RLock()
+	defer p.mutex.RUnlock()
+	return p.selfAddress
 }
 
 // newLimitedReader bounds how many bytes may be read from a connection.
@@ -198,8 +272,9 @@ func (p *P2PTransaction) UnmarshalJSON(data []byte) error {
 // NewP2P creates a new P2P network.
 func NewP2P() *P2P {
 	return &P2P{
-		nodes: make(map[string]*Node),
-		queue: []P2PTransaction{},
+		nodes:  make(map[string]*Node),
+		queue:  []P2PTransaction{},
+		nonces: newNonceCache(2 * p2pMaxClockSkew),
 	}
 }
 
@@ -494,105 +569,57 @@ func (p *P2P) listenForConnections() {
 
 func (p *P2P) handleConnection(conn net.Conn) {
 	defer conn.Close()
-	LogInfof("New connection from %s", conn.RemoteAddr())
+	LogVerbosef("New connection from %s", conn.RemoteAddr())
 
-	// Perform handshake
-	err := p.performHandshake(conn)
+	// Authenticate before serving anything. The peer proves it holds the key its
+	// node ID hashes to, and the same exchange establishes the session key -- so
+	// every byte after this point is encrypted and attributable.
+	secure, peer, err := p.serverHandshake(conn)
 	if err != nil {
-		LogInfof("Handshake failed: %v", err)
+		LogVerbosef("Handshake with %s failed: %v", conn.RemoteAddr(), err)
 		return
 	}
 
-	// Read and process messages.
+	LogVerbosef("Authenticated peer %s from %s", peer.NodeID, conn.RemoteAddr())
+	p.rememberPeer(NodeInfo{ID: peer.NodeID, Address: peer.Address})
+
+	// Read and process messages over the encrypted session.
 	//
 	// Every read is bounded in both size and time. bufio.Reader.ReadString has no
 	// size limit, so a peer that never sent a newline could exhaust memory, and
 	// with no deadline a peer that simply stalled held a goroutine forever.
-	reader := bufio.NewReader(io.LimitReader(conn, maxP2PMessageSize))
+	reader := bufio.NewReader(io.LimitReader(secure, maxP2PMessageSize))
 	for {
 		if err := conn.SetReadDeadline(time.Now().Add(p2pReadTimeout)); err != nil {
-			LogInfof("Error setting read deadline: %v", err)
+			LogVerbosef("Error setting read deadline: %v", err)
 			return
 		}
 
 		message, err := readLimitedLine(reader)
 		if err != nil {
 			if !errors.Is(err, io.EOF) {
-				LogInfof("Error reading message: %v", err)
+				LogVerbosef("Error reading from %s: %v", peer.NodeID, err)
 			}
 			return
 		}
 
-		if err := p.processMessage(strings.TrimSpace(message), conn); err != nil {
-			LogInfof("Error processing message: %v", err)
+		if err := p.processMessage(strings.TrimSpace(message), secure); err != nil {
+			LogVerbosef("Error processing message from %s: %v", peer.NodeID, err)
 			return
 		}
 	}
 }
 
-func (p *P2P) performHandshake(conn net.Conn) error {
-	// Set a timeout for the handshake
-	if err := conn.SetDeadline(time.Now().Add(p2pHandshakeTimeout)); err != nil {
-		// Log error but continue
-		_ = err // Suppress unused variable warning
-	}
-	defer func() {
-		if err := conn.SetDeadline(time.Time{}); err != nil {
-			// Log error but continue
-			_ = err // Suppress unused variable warning
-		}
-	}() // Reset the deadline
-
-	// 1. Receive "HELLO" message
-	reader := bufio.NewReader(conn)
-	message, err := reader.ReadString('\n')
-	if err != nil {
-		return fmt.Errorf("failed to receive HELLO: %w", err)
-	}
-	if strings.TrimSpace(message) != "HELLO" {
-		return fmt.Errorf("unexpected message: %s", message)
-	}
-
-	// 2. Send "ACK" message
-	_, err = conn.Write([]byte("ACK\n"))
-	if err != nil {
-		return fmt.Errorf("failed to send ACK: %w", err)
-	}
-
-	// 3. Receive node information
-	nodeInfoJSON, err := reader.ReadString('\n')
-	if err != nil {
-		return fmt.Errorf("failed to receive node info: %w", err)
-	}
-
-	var nodeInfo NodeInfo
-	err = json.Unmarshal([]byte(nodeInfoJSON), &nodeInfo)
-	if err != nil {
-		return fmt.Errorf("failed to unmarshal node info: %w", err)
-	}
-
-	// 4. Send confirmation
-	_, err = conn.Write([]byte("OK\n"))
-	if err != nil {
-		return fmt.Errorf("failed to send confirmation: %w", err)
-	}
-
-	if nodeInfo.ID == "" {
-		return errors.New("peer did not identify itself")
-	}
-
-	// Record the peer.
-	//
-	// This used to call RegisterNode and fail the handshake on its "node already
-	// registered" error, so a peer could connect exactly once and every
-	// subsequent request from it was refused before being served.
-	p.rememberPeer(nodeInfo)
-
-	return nil
-}
-
 // rememberPeer records or refreshes a peer learned from a handshake.
+//
+// This used to call RegisterNode and fail the handshake on its "node already
+// registered" error, so a peer could connect exactly once and every subsequent
+// request from it was refused before being served.
 func (p *P2P) rememberPeer(info NodeInfo) {
+	if info.ID == "" {
+		return
+	}
+
 	p.mutex.Lock()
 	defer p.mutex.Unlock()
 
@@ -889,144 +916,42 @@ func (p *P2P) SetAsSeedNode() {
 	LogInfof("This node is set as a seed node")
 }
 
+// ConnectToSeedNode dials a seed node, authenticates, and pulls its peer list.
 func (p *P2P) ConnectToSeedNode(address string) error {
 	LogInfof("Connecting to seed node at %s", address)
 
-	conn, err := net.Dial("tcp", address)
+	// dialPeer performs the authenticated handshake and returns an encrypted
+	// session, so the seed connection is held to the same standard as any other.
+	pc, err := p.dialPeer(address)
 	if err != nil {
 		return fmt.Errorf("failed to connect to seed node: %w", err)
 	}
-	defer conn.Close()
+	defer pc.close()
 
-	// Perform handshake
-	err = p.performClientHandshake(conn)
-	if err != nil {
-		return fmt.Errorf("handshake failed: %w", err)
-	}
+	LogInfof("Seed node %s authenticated as %s", address, pc.peerID)
 
-	// Request node list
-	nodeList, err := p.requestNodeListFromSeed(conn)
+	// Record the seed itself, not just the peers it knows about.
+	p.rememberPeer(NodeInfo{ID: pc.peerID, Address: address})
+
+	response, err := pc.request(cmdGetNodes)
 	if err != nil {
 		return fmt.Errorf("failed to get node list from seed: %w", err)
 	}
 
-	// Add nodes from the received list
-	for _, nodeInfo := range nodeList {
-		newNode := &Node{
-			ID:     nodeInfo.ID,
-			Config: &Config{P2PHostName: nodeInfo.Address},
-		}
-		err := p.RegisterNode(newNode)
-		if err != nil {
-			LogInfof("Error registering node from seed: %v", err)
-		} else {
-			LogInfof("Added node from seed: %s (%s)", newNode.ID, newNode.Config.P2PHostName)
-		}
-	}
-
-	return nil
-}
-
-func (p *P2P) performClientHandshake(conn net.Conn) error {
-	// Set a timeout for the handshake
-	if err := conn.SetDeadline(time.Now().Add(p2pHandshakeTimeout)); err != nil {
-		// Log error but continue
-		_ = err // Suppress unused variable warning
-	}
-	defer func() {
-		if err := conn.SetDeadline(time.Time{}); err != nil {
-			// Log error but continue
-			_ = err // Suppress unused variable warning
-		}
-	}() // Reset the deadline
-
-	// 1. Send a "HELLO" message
-	_, err := conn.Write([]byte("HELLO\n"))
-	if err != nil {
-		return fmt.Errorf("failed to send HELLO: %w", err)
-	}
-
-	// 2. Receive an "ACK" message
-	reader := bufio.NewReader(conn)
-	response, err := reader.ReadString('\n')
-	if err != nil {
-		return fmt.Errorf("failed to receive ACK: %w", err)
-	}
-	response = strings.TrimSpace(response)
-	if response != "ACK" {
-		return fmt.Errorf("unexpected response: %s", response)
-	}
-
-	// 3. Send node information.
-	// Indexing p.nodes with an unknown ID returns nil, and the old code
-	// dereferenced that immediately.
-	selfID := p.getSelfNodeID()
-	p.mutex.RLock()
-	selfNode := p.nodes[selfID]
-	p.mutex.RUnlock()
-	if selfNode == nil || selfNode.Config == nil {
-		return errors.New("cannot handshake: this node is not registered with the P2P network")
-	}
-	nodeInfo := NodeInfo{
-		ID:      selfNode.ID,
-		Address: selfNode.Config.P2PHostName,
-	}
-	nodeInfoJSON, err := json.Marshal(nodeInfo)
-	if err != nil {
-		return fmt.Errorf("failed to marshal node info: %w", err)
-	}
-	_, err = conn.Write(append(nodeInfoJSON, '\n'))
-	if err != nil {
-		return fmt.Errorf("failed to send node info: %w", err)
-	}
-
-	// 4. Receive confirmation
-	response, err = reader.ReadString('\n')
-	if err != nil {
-		return fmt.Errorf("failed to receive confirmation: %w", err)
-	}
-	response = strings.TrimSpace(response)
-	if response != "OK" {
-		return fmt.Errorf("unexpected confirmation: %s", response)
-	}
-
-	return nil
-}
-
-func (p *P2P) requestNodeListFromSeed(conn net.Conn) ([]NodeInfo, error) {
-	// Set a timeout for the request
-	if err := conn.SetDeadline(time.Now().Add(p2pHandshakeTimeout)); err != nil {
-		// Log error but continue
-		_ = err // Suppress unused variable warning
-	}
-	defer func() {
-		if err := conn.SetDeadline(time.Time{}); err != nil {
-			// Log error but continue
-			_ = err // Suppress unused variable warning
-		}
-	}() // Reset the deadline
-
-	// 1. Send a "GET_NODES" message
-	_, err := conn.Write([]byte("GET_NODES\n"))
-	if err != nil {
-		return nil, fmt.Errorf("failed to send GET_NODES: %w", err)
-	}
-
-	// 2. Receive a list of node information
-	reader := bufio.NewReader(conn)
-	response, err := reader.ReadString('\n')
-	if err != nil {
-		return nil, fmt.Errorf("failed to receive node list: %w", err)
-	}
-
-	// 3. Parse and return the node list
 	var nodeList []NodeInfo
-	err = json.Unmarshal([]byte(response), &nodeList)
-	if err != nil {
-		return nil, fmt.Errorf("failed to unmarshal node list: %w", err)
+	if err := json.Unmarshal([]byte(response), &nodeList); err != nil {
+		return fmt.Errorf("failed to unmarshal node list: %w", err)
 	}
 
-	return nodeList, nil
+	for _, nodeInfo := range nodeList {
+		if nodeInfo.ID == "" || nodeInfo.ID == p.selfInfo().ID {
+			continue
+		}
+		p.rememberPeer(nodeInfo)
+		LogVerbosef("Added node from seed: %s (%s)", nodeInfo.ID, nodeInfo.Address)
+	}
+
+	return nil
 }
 
 func (p *P2P) getSelfNodeID() string {

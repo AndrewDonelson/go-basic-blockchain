@@ -38,12 +38,13 @@ type Config struct {
 	GMailEmail        string
 	GMailPassword     string
 	Domain            string
-	Version           string  // New field: Configuration version
-	MaxBlockSize      int     // New field: Maximum block size in bytes
-	MinTransactionFee float64 // New field: Minimum transaction fee
-	IsSeed            bool    // New field: Is this a seed node
-	SeedAddress       string  // New field: Address of the seed node to connect to
-	Verbose           bool    // Enable verbose logging
+	Version           string   // New field: Configuration version
+	MaxBlockSize      int      // New field: Maximum block size in bytes
+	MinTransactionFee float64  // New field: Minimum transaction fee
+	IsSeed            bool     // New field: Is this a seed node
+	SeedAddress       string   // New field: Address of the seed node to connect to
+	Verbose           bool     // Enable verbose logging
+	AllowedPeers      []string // If non-empty, only these node IDs may connect
 	promptUpdate      bool
 	testing           bool
 }
@@ -180,6 +181,7 @@ func (c *Config) loadFromEnv() {
 		c.MaxBlockSize = getEnvAsInt("MAX_BLOCK_SIZE", c.MaxBlockSize)
 		c.MinTransactionFee = getEnvAsFloat("MIN_TRANSACTION_FEE", c.MinTransactionFee)
 		c.Verbose = getEnvAsBool("VERBOSE", c.Verbose)
+		c.AllowedPeers = getEnvAsList("P2P_ALLOWED_PEERS", c.AllowedPeers)
 	}
 }
 
@@ -540,6 +542,23 @@ func getEnvAsFloat(key string, fallback float64) float64 {
 		return value
 	}
 	return fallback
+}
+
+// getEnvAsList reads a comma-separated environment variable.
+func getEnvAsList(key string, fallback []string) []string {
+	raw := getEnv(key, "")
+	if strings.TrimSpace(raw) == "" {
+		return fallback
+	}
+
+	parts := strings.Split(raw, ",")
+	out := make([]string, 0, len(parts))
+	for _, part := range parts {
+		if trimmed := strings.TrimSpace(part); trimmed != "" {
+			out = append(out, trimmed)
+		}
+	}
+	return out
 }
 
 func getEnvAsBool(key string, fallback bool) bool {

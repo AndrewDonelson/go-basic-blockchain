@@ -17,6 +17,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"strconv"
 	"strings"
@@ -110,17 +111,22 @@ func (p *P2P) SyncPeers() []PeerRef {
 // Client side
 // -----------------------------------------------------------------------------
 
-// peerConn is a connection that has completed the handshake.
+// peerConn is an authenticated, encrypted session with a peer.
 type peerConn struct {
 	conn   net.Conn
 	reader *bufio.Reader
+	// peerID is the authenticated node ID of the far side. It is derived from the
+	// key the peer proved it holds, not from anything the peer merely asserted.
+	peerID string
+	// raw is the underlying socket, kept so deadlines can still be set.
+	raw net.Conn
 }
 
-func (pc *peerConn) close() { _ = pc.conn.Close() }
+func (pc *peerConn) close() { _ = pc.raw.Close() }
 
 // request sends one command and reads one response line.
 func (pc *peerConn) request(command string) (string, error) {
-	if err := pc.conn.SetDeadline(time.Now().Add(p2pRequestTimeout)); err != nil {
+	if err := pc.raw.SetDeadline(time.Now().Add(p2pRequestTimeout)); err != nil {
 		return "", fmt.Errorf("set deadline: %w", err)
 	}
 
@@ -143,12 +149,14 @@ func firstWord(s string) string {
 	return s
 }
 
-// dialPeer opens a connection and completes the client handshake.
+// dialPeer opens a connection, authenticates mutually, and returns an encrypted
+// session.
 //
 // Every client path goes through this. Previously requestNodeList dialled and
 // sent GET_NODES immediately while the server's handleConnection expected HELLO
 // first, so the handshake failed and the connection was dropped -- peer discovery
-// could never have worked.
+// could never have worked. And the handshake it did perform proved nothing: a
+// node simply asserted an ID and the peer believed it.
 func (p *P2P) dialPeer(address string) (*peerConn, error) {
 	if address == "" {
 		return nil, errors.New("peer address is empty")
@@ -159,59 +167,18 @@ func (p *P2P) dialPeer(address string) (*peerConn, error) {
 		return nil, fmt.Errorf("dial %s: %w", address, err)
 	}
 
-	pc := &peerConn{
-		conn:   conn,
-		reader: bufio.NewReader(newLimitedReader(conn, maxP2PMessageSize)),
-	}
-
-	if err := p.clientHandshake(pc); err != nil {
-		pc.close()
+	secure, peer, err := p.clientHandshakeAuthenticated(conn)
+	if err != nil {
+		_ = conn.Close()
 		return nil, fmt.Errorf("handshake with %s: %w", address, err)
 	}
 
-	return pc, nil
-}
-
-// clientHandshake performs the HELLO/ACK/node-info/OK exchange.
-func (p *P2P) clientHandshake(pc *peerConn) error {
-	if err := pc.conn.SetDeadline(time.Now().Add(p2pHandshakeTimeout)); err != nil {
-		return fmt.Errorf("set handshake deadline: %w", err)
-	}
-
-	if _, err := pc.conn.Write([]byte("HELLO\n")); err != nil {
-		return fmt.Errorf("send HELLO: %w", err)
-	}
-
-	ack, err := readLimitedLine(pc.reader)
-	if err != nil {
-		return fmt.Errorf("receive ACK: %w", err)
-	}
-	if strings.TrimSpace(ack) != "ACK" {
-		return fmt.Errorf("unexpected response to HELLO: %q", strings.TrimSpace(ack))
-	}
-
-	self := p.selfInfo()
-	if self.ID == "" {
-		return errors.New("this node has no identity; call SetSelfInfo first")
-	}
-
-	infoJSON, err := json.Marshal(self)
-	if err != nil {
-		return fmt.Errorf("marshal node info: %w", err)
-	}
-	if _, err := pc.conn.Write(append(infoJSON, '\n')); err != nil {
-		return fmt.Errorf("send node info: %w", err)
-	}
-
-	confirm, err := readLimitedLine(pc.reader)
-	if err != nil {
-		return fmt.Errorf("receive confirmation: %w", err)
-	}
-	if strings.TrimSpace(confirm) != "OK" {
-		return fmt.Errorf("unexpected confirmation: %q", strings.TrimSpace(confirm))
-	}
-
-	return nil
+	return &peerConn{
+		conn:   secure,
+		raw:    conn,
+		reader: bufio.NewReader(io.LimitReader(secure, maxP2PMessageSize)),
+		peerID: peer.NodeID,
+	}, nil
 }
 
 // RequestChainStatus asks a peer to describe its chain. Implements PeerTransport.

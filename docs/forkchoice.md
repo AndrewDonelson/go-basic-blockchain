@@ -163,8 +163,10 @@ mixed-difficulty branches.
 **Side blocks are memory-only.** The block index is not persisted, so competing
 branches are forgotten on restart. Sync re-fetches them if they still matter.
 
-**No peer authentication**, so a hostile peer can feed branches freely. The depth
-limit and difficulty floor bound the damage; they do not eliminate it.
+**Peers are authenticated** ([p2p-security.md](p2p-security.md)), so branches are
+attributable to a proven identity. An allowlisted peer set bounds who can feed
+you branches at all; without one, the depth limit and difficulty floor bound the
+damage rather than eliminating it.
 
 ## 🧪 Tests
 

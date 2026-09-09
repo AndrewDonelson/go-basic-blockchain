@@ -57,19 +57,36 @@ func syncTestChain(t *testing.T, height int) *Blockchain {
 	return bc
 }
 
+// newTestP2P builds a P2P instance with a fresh identity.
+//
+// Every node needs an identity now: peers authenticate against it and the session
+// key is derived from it, so a node without one cannot connect at all.
+func newTestP2P(t *testing.T, address string) *P2P {
+	t.Helper()
+
+	identity, err := NewPeerIdentity()
+	if err != nil {
+		t.Fatalf("create identity: %v", err)
+	}
+
+	p := NewP2P()
+	p.SetIdentity(identity)
+	p.SetSelfInfo(identity.NodeID, address)
+	return p
+}
+
 // startPeer boots a P2P server on its own port, serving the given chain.
-func startPeer(t *testing.T, id string, chain *Blockchain) (*P2P, string) {
+func startPeer(t *testing.T, _ string, chain *Blockchain) (*P2P, string) {
 	t.Helper()
 
 	address := freePort(t)
 
-	p := NewP2P()
+	p := newTestP2P(t, address)
 	p.SetChain(chain)
-	p.SetSelfInfo(id, address)
 	p.SetAsSeedNode() // seed nodes listen
 
 	// Register self so the address is resolvable, then listen.
-	if err := p.RegisterNode(&Node{ID: id, Config: &Config{P2PHostName: address}}); err != nil {
+	if err := p.RegisterNode(&Node{ID: p.Identity().NodeID, Config: &Config{P2PHostName: address}}); err != nil {
 		t.Fatalf("register self: %v", err)
 	}
 	if err := p.Start(); err != nil {
@@ -100,8 +117,7 @@ func waitForListener(t *testing.T, address string) {
 func TestP2PChainStatusOverTheWire(t *testing.T) {
 	server, address := startPeer(t, "server", syncTestChain(t, 4))
 
-	client := NewP2P()
-	client.SetSelfInfo("client", "127.0.0.1:0")
+	client := newTestP2P(t, "127.0.0.1:0")
 
 	status, err := client.RequestChainStatus(address)
 	if err != nil {
@@ -123,8 +139,7 @@ func TestP2PChainStatusOverTheWire(t *testing.T) {
 func TestP2PFetchBlocksOverTheWire(t *testing.T) {
 	_, address := startPeer(t, "server", syncTestChain(t, 9))
 
-	client := NewP2P()
-	client.SetSelfInfo("client", "127.0.0.1:0")
+	client := newTestP2P(t, "127.0.0.1:0")
 
 	t.Run("a middle range", func(t *testing.T) {
 		blocks, err := client.RequestBlocks(address, 3, 4)
@@ -193,10 +208,9 @@ func TestP2PServerCapsBlockRequests(t *testing.T) {
 
 // rawHandshake opens a handshaken connection for tests that need to send
 // hand-built commands.
-func rawHandshake(t *testing.T, address, id string) *peerConn {
+func rawHandshake(t *testing.T, address, _ string) *peerConn {
 	t.Helper()
-	client := NewP2P()
-	client.SetSelfInfo(id, "127.0.0.1:0")
+	client := newTestP2P(t, "127.0.0.1:0")
 
 	pc, err := client.dialPeer(address)
 	if err != nil {
@@ -247,6 +261,7 @@ func TestP2PRequiresHandshake(t *testing.T) {
 	}
 	defer conn.Close()
 
+	// Skip the handshake entirely and issue a command.
 	if _, err := conn.Write([]byte(cmdGetStatus + "\n")); err != nil {
 		t.Fatalf("write: %v", err)
 	}
@@ -269,8 +284,7 @@ func TestNodeDiscoveryOverTheWire(t *testing.T) {
 		t.Fatalf("register peer: %v", err)
 	}
 
-	client := NewP2P()
-	client.SetSelfInfo("client", "127.0.0.1:0")
+	client := newTestP2P(t, "127.0.0.1:0")
 
 	nodes, err := client.requestNodeList(&Node{ID: "server", Config: &Config{P2PHostName: address}})
 	if err != nil {
@@ -309,8 +323,7 @@ func TestTwoNodesConvergeOverTCP(t *testing.T) {
 	behind.CurrentBlockIndex = 2
 	behind.NextBlockIndex = 3
 
-	client := NewP2P()
-	client.SetSelfInfo("behind", "127.0.0.1:0")
+	client := newTestP2P(t, "127.0.0.1:0")
 	if err := client.RegisterNode(&Node{ID: "ahead", Config: &Config{P2PHostName: aheadAddr}}); err != nil {
 		t.Fatalf("register peer: %v", err)
 	}
@@ -347,8 +360,7 @@ func TestSyncRefusesAPeerOnADifferentNetworkOverTCP(t *testing.T) {
 
 	local := syncTestChain(t, 1)
 
-	client := NewP2P()
-	client.SetSelfInfo("local", "127.0.0.1:0")
+	client := newTestP2P(t, "127.0.0.1:0")
 	if err := client.RegisterNode(&Node{ID: "stranger", Config: &Config{P2PHostName: strangerAddr}}); err != nil {
 		t.Fatalf("register peer: %v", err)
 	}
@@ -376,8 +388,7 @@ func TestBlockAnnouncementOverTCP(t *testing.T) {
 	receiver := syncTestChain(t, 3)
 	_, receiverAddr := startPeer(t, "receiver", receiver)
 
-	sender := NewP2P()
-	sender.SetSelfInfo("sender", "127.0.0.1:0")
+	sender := newTestP2P(t, "127.0.0.1:0")
 	if err := sender.RegisterNode(&Node{ID: "receiver", Config: &Config{P2PHostName: receiverAddr}}); err != nil {
 		t.Fatalf("register peer: %v", err)
 	}

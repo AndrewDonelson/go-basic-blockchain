@@ -15,6 +15,7 @@ Welcome to the comprehensive documentation for the Go Basic Blockchain project. 
 - **[Chain Synchronisation](sync.md)** - How nodes exchange blocks
 - **[Fork Choice & Reorganisation](forkchoice.md)** - How competing histories are resolved
 - **[UTXO Set](utxo.md)** - The authoritative record of who owns what
+- **[P2P Security](p2p-security.md)** - Peer authentication and session encryption
 
 ### User Guides
 - **[API Reference](api.md)** - The REST API as implemented
@@ -69,7 +70,7 @@ correctly, but does not yet form a network.
 | REST API | ✅ Working — authenticated, rate limited, paginated |
 | P2P peer discovery | ✅ Working |
 | Chain synchronisation | ✅ Working — see [sync.md](sync.md) |
-| Peer authentication | ❌ Not implemented |
+| Peer authentication | ✅ Working — mutual auth + encrypted sessions ([p2p-security.md](p2p-security.md)) |
 | Fork choice / reorg | ✅ Working — heaviest-chain, see [forkchoice.md](forkchoice.md) |
 | UTXO state model | ✅ Working — authoritative balances, double-spend prevention ([utxo.md](utxo.md)) |
 

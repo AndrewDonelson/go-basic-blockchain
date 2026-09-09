@@ -98,8 +98,9 @@ fork choice can weigh the whole thing.
 **There is no finality.** Any block within 100 of the head can be reorganised
 away.
 
-**There is no peer authentication.** Any host may claim any node ID, and the
-transport is plaintext. Do not expose a node to an untrusted network.
+**Peers are authenticated and sessions are encrypted** — see
+[P2P Security](p2p-security.md). What remains is trust on first use: identity is
+verified, but nothing says which identity to expect at a new address.
 
 ## 🔧 Configuration
 

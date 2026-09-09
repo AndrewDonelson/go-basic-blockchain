@@ -13,7 +13,6 @@ import (
 	"time"
 
 	"github.com/AndrewDonelson/go-basic-blockchain/internal/progress"
-	"github.com/pborman/uuid"
 )
 
 // envNodeWalletPassphrase names the environment variable holding the node
@@ -74,6 +73,9 @@ type Node struct {
 
 	// Syncer pulls blocks from peers with longer chains.
 	Syncer *Syncer
+
+	// Identity is this node's long-term keypair. Node.ID is derived from it.
+	Identity *PeerIdentity
 }
 
 // (Node embeds sync.Mutex, so Lock/Unlock are already promoted; the hand-written
@@ -109,8 +111,17 @@ func NewNode(opts *NodeOptions) error {
 		opts.Config.DataPath = opts.DataPath
 	}
 
+	// The node's identity keypair. Its ID is the hash of the public key, so the
+	// ID is self-certifying: it used to be a random UUID the node asserted about
+	// itself, which any host could claim.
+	identity, err := LoadOrCreatePeerIdentity(opts.Config.DataPath)
+	if err != nil {
+		return fmt.Errorf("failed to establish node identity: %w", err)
+	}
+
 	node = &Node{
-		ID:                uuid.New(),
+		Identity:          identity,
+		ID:                identity.NodeID,
 		Config:            opts.Config,
 		Status:            "initializing",
 		ProgressIndicator: progress.NewProgressIndicator(),
@@ -141,7 +152,9 @@ func NewNode(opts *NodeOptions) error {
 	node.P2P = p2p
 
 	p2p.SetChain(blockchain)
+	p2p.SetIdentity(identity)
 	p2p.SetSelfInfo(node.ID, opts.Config.P2PHostName)
+	p2p.SetAllowedPeers(opts.Config.AllowedPeers)
 	if opts.IsSeed {
 		p2p.SetAsSeedNode()
 	}

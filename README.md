@@ -73,7 +73,7 @@ specific about which is which.
 | P2P peer discovery | ✅ Working — handshake, node lists, seed connection |
 | Chain synchronisation | ✅ Working — pull from longer peers, push mined blocks ([docs](docs/sync.md)) |
 | Transaction propagation | ✅ Working — relayed transactions are signature-verified |
-| Peer authentication | ❌ Not implemented — any host may claim any node ID; transport is plaintext |
+| Peer authentication | ✅ Working — mutual auth, encrypted sessions ([docs](docs/p2p-security.md)) |
 | Fork choice / reorganisation | ✅ Working — heaviest-chain by cumulative work ([docs](docs/forkchoice.md)) |
 | UTXO state model | ✅ Working — authoritative balances, double-spend prevention ([docs](docs/utxo.md)) |
 

@@ -247,8 +247,10 @@ refused rather than compared by cumulative work. There is no orphan pool and no
 rollback, so two nodes that mine simultaneously diverge permanently. Sync closes
 gaps; it does not resolve competing histories.
 
-**Also missing: peer authentication.** Any host may claim any node ID, and the
-transport is plaintext.
+**Peer authentication and session encryption are implemented** -- see
+[P2P Security](p2p-security.md). Node IDs are the hash of a public key, peers
+prove possession of that key during a mutually authenticated handshake, and the
+session is AES-256-GCM keyed by ECDH over the same identities.
 
 ## 🔐 Security Architecture
 
