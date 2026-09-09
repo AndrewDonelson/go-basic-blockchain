@@ -318,8 +318,63 @@ func Compose(f1, f2 Form) (Form, error) {
 }
 
 // Square returns f composed with itself.
+//
+// Squaring is specialised rather than routed through Compose because the VDF does
+// almost nothing else: evaluating a delay of T is T squarings, and proving it is
+// T more. Composing a form with itself collapses most of the general algorithm --
+// with a1 == a2 and b1 == b2 the difference h is zero and s equals t, so the
+// second modular congruence becomes 0*x = 0 and disappears, leaving one solve
+// instead of two.
+//
+// Derivation, from the same formulas Compose uses, with w = gcd(a, b), s = a/w
+// and u = b/w:
+//
+//	solve   u*k = c   (mod s)
+//	A = s^2
+//	B = b - 2ks
+//	C = k^2 - w*(u*k - c)/s
+//
+// This is the same group element Compose(f, f) produces -- not an approximation
+// of it -- and TestSquareMatchesComposition checks that on every element the
+// tests can reach, including the degenerate ones. If the congruence has no
+// solution the general path runs instead, so a case this derivation does not
+// cover cannot produce a wrong answer, only a slower one.
 func Square(f Form) (Form, error) {
-	return Compose(f, f)
+	w := new(big.Int).GCD(nil, nil, new(big.Int).Abs(f.A), new(big.Int).Abs(f.B))
+	if w.Sign() == 0 {
+		return Compose(f, f)
+	}
+
+	s := new(big.Int).Div(f.A, w)
+	u := new(big.Int).Div(f.B, w)
+
+	if s.Sign() == 0 {
+		return Compose(f, f)
+	}
+
+	k, _, ok := solveMod(u, f.C, s)
+	if !ok {
+		return Compose(f, f)
+	}
+
+	// m = (u*k - c) / s, exact because u*k = c (mod s).
+	m := new(big.Int).Mul(u, k)
+	m.Sub(m, f.C)
+	quotient, remainder := new(big.Int).QuoRem(m, s, new(big.Int))
+	if remainder.Sign() != 0 {
+		return Compose(f, f)
+	}
+
+	newA := new(big.Int).Mul(s, s)
+
+	newB := new(big.Int).Mul(k, s)
+	newB.Lsh(newB, 1)
+	newB.Sub(f.B, newB)
+
+	newC := new(big.Int).Mul(k, k)
+	newC.Sub(newC, new(big.Int).Mul(w, quotient))
+
+	return Reduce(Form{A: newA, B: newB, C: newC}), nil
 }
 
 // Inverse returns the inverse of f, which is (a, -b, c).

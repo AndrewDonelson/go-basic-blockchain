@@ -474,3 +474,105 @@ func TestFormDecodingRejectsGarbage(t *testing.T) {
 		t.Fatal("decoded an unreduced form; equality would no longer be canonical")
 	}
 }
+
+// TestPublishedDiscriminantMatchesItsSeed is the audit.
+//
+// The 2048-bit discriminant is embedded as a constant because deriving it means
+// searching for a prime, which is far too slow to repeat at startup. That makes
+// the "no trusted setup" claim depend on the constant really being the output of
+// the published derivation rather than a value somebody chose -- so this
+// re-derives it and compares. If anyone ever swaps the constant for one with a
+// convenient structure, this fails.
+func TestPublishedDiscriminantMatchesItsSeed(t *testing.T) {
+	published, err := DefaultDiscriminant()
+	if err != nil {
+		t.Fatalf("published discriminant: %v", err)
+	}
+
+	derived, err := NewDiscriminant([]byte(DefaultDiscriminantSeed), DefaultDiscriminantBits)
+	if err != nil {
+		t.Fatalf("derive: %v", err)
+	}
+
+	if published.Cmp(derived) != 0 {
+		t.Fatal("the embedded discriminant is NOT what the published seed derives; " +
+			"the parameters cannot be audited and the no-trusted-setup claim fails")
+	}
+
+	if published.BitLen() != DefaultDiscriminantBits {
+		t.Fatalf("published discriminant is %d bits, want %d",
+			published.BitLen(), DefaultDiscriminantBits)
+	}
+	if err := ValidateDiscriminant(published); err != nil {
+		t.Fatalf("published discriminant is unusable: %v", err)
+	}
+	if !new(big.Int).Neg(published).ProbablyPrime(64) {
+		t.Fatal("|published discriminant| is not prime")
+	}
+}
+
+// TestSquareMatchesComposition pins the specialised squaring to the general path.
+//
+// Square is derived from Compose's formulas for the case f1 == f2, which makes it
+// faster and also makes it a second implementation of the same operation -- and a
+// second implementation is a place for a discrepancy to hide. Compose is the one
+// the group axioms were verified against, so it is the reference: every element
+// these tests can reach must square to the same thing either way.
+func TestSquareMatchesComposition(t *testing.T) {
+	d := testDiscriminant(t)
+
+	for i := 0; i < 60; i++ {
+		f := testForm(t, d, "square-vs-compose-"+string(rune('a'+i%26))+string(rune('0'+i/26)))
+
+		// Square it repeatedly: later powers reach elements a single hash never
+		// would, including ones where gcd(a, b) is not 1.
+		for depth := 0; depth < 6; depth++ {
+			viaSquare, err := Square(f)
+			if err != nil {
+				t.Fatalf("square: %v", err)
+			}
+			viaCompose, err := Compose(f, f)
+			if err != nil {
+				t.Fatalf("compose: %v", err)
+			}
+
+			if !viaSquare.Equal(viaCompose) {
+				t.Fatalf("Square and Compose(f,f) disagree at depth %d\n"+
+					"  f       = (%v, %v, %v)\n"+
+					"  square  = (%v, %v, %v)\n"+
+					"  compose = (%v, %v, %v)",
+					depth, f.A, f.B, f.C,
+					viaSquare.A, viaSquare.B, viaSquare.C,
+					viaCompose.A, viaCompose.B, viaCompose.C)
+			}
+			if viaSquare.Discriminant().Cmp(d) != 0 {
+				t.Fatalf("squaring changed the discriminant at depth %d", depth)
+			}
+
+			f = viaSquare
+		}
+	}
+}
+
+// TestSquareHandlesDegenerateElements covers the identity and small forms, where
+// gcd(a, b) equals a and the derivation's s collapses to 1.
+func TestSquareHandlesDegenerateElements(t *testing.T) {
+	d := testDiscriminant(t)
+	id := Identity(d)
+
+	squared, err := Square(id)
+	if err != nil {
+		t.Fatalf("square identity: %v", err)
+	}
+	if !squared.Equal(id) {
+		t.Fatal("identity squared is not the identity")
+	}
+
+	viaCompose, err := Compose(id, id)
+	if err != nil {
+		t.Fatalf("compose: %v", err)
+	}
+	if !squared.Equal(viaCompose) {
+		t.Fatal("Square and Compose disagree on the identity")
+	}
+}

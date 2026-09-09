@@ -94,8 +94,8 @@ func DefaultHeliosConfig() *HeliosConfig {
 		CryptoBlockSize:      16,
 		CryptoIterations:     100, // Reduced from 10000
 		EnableEnergyTracking: false,
-		VDFDiscriminantSeed:  []byte(defaultVDFSeed),
-		VDFDiscriminantBits:  512,
+		VDFDiscriminantSeed:  []byte(vdf.DefaultDiscriminantSeed),
+		VDFDiscriminantBits:  vdf.DefaultDiscriminantBits,
 		VDFIterations:        2000,
 	}
 }
@@ -117,31 +117,24 @@ func TestHeliosConfig() *HeliosConfig {
 		CryptoIterations:     10,
 		EnableEnergyTracking: false,
 		// Small but real: the VDF still runs, so tests exercise the actual
-		// evaluate-and-verify path rather than a stub.
-		VDFDiscriminantSeed: []byte(defaultVDFSeed),
+		// evaluate-and-verify path rather than a stub. A 256-bit discriminant is
+		// far below anything a chain should use -- it is here so the suite stays
+		// fast, and the size is exactly what DefaultHeliosConfig does not skimp on.
+		VDFDiscriminantSeed: []byte(vdf.DefaultDiscriminantSeed),
 		VDFDiscriminantBits: 256,
 		VDFIterations:       64,
 	}
 }
 
-// defaultVDFSeed derives the class group's discriminant.
-//
-// It is a published constant with no secret behind it -- that is the whole point.
-// An RSA-based VDF would need a modulus whose factors somebody knows, and that
-// somebody could compute the group order and skip the delay entirely. Here anyone
-// can re-derive the discriminant from this string and satisfy themselves that no
-// trapdoor was available to plant.
-const defaultVDFSeed = "gbb/helios/vdf/discriminant/v1"
-
 // vdfParameters resolves the group and delay length, filling in defaults.
 func (h *HeliosAlgorithm) vdfParameters() (*big.Int, uint64, error) {
 	seed := h.config.VDFDiscriminantSeed
 	if len(seed) == 0 {
-		seed = []byte(defaultVDFSeed)
+		seed = []byte(vdf.DefaultDiscriminantSeed)
 	}
 	bits := h.config.VDFDiscriminantBits
 	if bits <= 0 {
-		bits = 512
+		bits = vdf.DefaultDiscriminantBits
 	}
 	iterations := h.config.VDFIterations
 	if iterations == 0 {
@@ -149,6 +142,15 @@ func (h *HeliosAlgorithm) vdfParameters() (*big.Int, uint64, error) {
 	}
 
 	h.vdfOnce.Do(func() {
+		// The published group is embedded, because deriving a 2048-bit
+		// discriminant means searching for a prime -- about half a second, far
+		// too long to repeat at startup for a value that can never change.
+		// Anything else is derived on demand, which is what the small test
+		// parameters use.
+		if bits == vdf.DefaultDiscriminantBits && string(seed) == vdf.DefaultDiscriminantSeed {
+			h.vdfDiscriminant, h.vdfErr = vdf.DefaultDiscriminant()
+			return
+		}
 		h.vdfDiscriminant, h.vdfErr = vdf.NewDiscriminant(seed, bits)
 	})
 	if h.vdfErr != nil {

@@ -102,6 +102,33 @@ committing to `y`, and 128 bits puts that out of reach.
 
 ---
 
+## ⛓️ The delay is sequential across blocks, not just within one
+
+A per-block delay is not much use on its own: if every block's delay could be
+computed independently, a miner with enough cores would compute a hundred of them
+at once and the chain would gain no elapsed-time guarantee at all.
+
+It cannot, because stage 2's input is the mining header and **the header contains
+`PreviousHash`**. Block N's delay input is unknown until block N−1 is final, so
+the delays form a single chain:
+
+```
+block N-1 mined ──> its hash ──> block N's header ──> block N's VDF input
+```
+
+That is a property of what goes into the header rather than of the VDF, and
+nothing in the VDF would notice if it disappeared — so it is pinned by
+`TestVDFInputDependsOnTheParentBlock` and `TestChainOfBlocksSerialisesTheDelay`,
+which fail if the mining header ever stops committing to the parent.
+
+**Why not feed the parent's VDF output in directly?** It would give the same
+guarantee, and it was considered. Stage 2 is verified in `validateStandalone`,
+which runs *outside the chain lock* precisely so an expensive proof check does not
+stall mining and every reader — a deliberate earlier fix. Making verification
+depend on the parent block would force it back inside the lock, holding it across
+~85 ms of verification, in exchange for no additional security. The header
+dependency already serialises the delays.
+
 ## 🧱 The input is the block header, never the nonce
 
 This is the design point that is easy to get wrong, and the old code did.
@@ -134,15 +161,44 @@ prover shortcut the delay.
 | Field | Default | Meaning |
 |---|---|---|
 | `VDFDiscriminantSeed` | `gbb/helios/vdf/discriminant/v1` | Public seed the group is derived from |
-| `VDFDiscriminantBits` | 512 | Discriminant size |
+| `VDFDiscriminantBits` | **2048** | Discriminant size |
 | `VDFIterations` | 2000 | T, the delay in sequential squarings |
 
 A validator rejects a proof whose iteration count is not the one it requires, so
 a miner cannot present a cheap delay as an expensive one.
 
-> **On the discriminant size:** 512 bits keeps the educational chain fast. A
-> deployment that took the delay seriously would use 1024 or more — the class
-> number must be hard to compute, and that is what the size buys.
+### Discriminant size
+
+**2048 bits.** The security of a class group rests on the class number being hard
+to compute, and the best known algorithms for that are subexponential in the size
+of the discriminant — the same shape as factoring, so the sizing intuition
+carries over from RSA. 1024 is defensible and is what Chia runs; 2048 costs about
+4.7× per group operation and buys a margin that does not need revisiting.
+
+Measured at 2048 bits:
+
+| T | Evaluate | Verify | Ratio | Proof |
+|---|---|---|---|---|
+| 1,000 | 464 ms | 88 ms | 5.3× | 546 bytes |
+| 2,000 | 1.02 s | 83 ms | **12.3×** | 546 bytes |
+
+Verification is flat while evaluation doubles, so the advantage grows with the
+delay rather than shrinking — at T=10,000 evaluation is around five seconds and
+verification is still ~85 ms.
+
+### The discriminant is precomputed
+
+Deriving a 2048-bit discriminant means searching for a prime — roughly half a
+second, far too long to repeat at every startup for a value that can never
+change. It is embedded as a constant in
+[`parameters.go`](../internal/helios/vdf/parameters.go).
+
+That would ordinarily weaken the no-trusted-setup argument, since an embedded
+constant is exactly where a chosen value could hide. So
+`TestPublishedDiscriminantMatchesItsSeed` re-derives it from the published seed
+and fails if it differs. The claim "this was produced by public derivation, not
+selected" is therefore **checked on every test run** rather than asserted in a
+comment.
 
 ---
 
@@ -166,14 +222,17 @@ go test ./internal/helios/algorithm/ -run VDF -v
 
 ## 🚧 Limits
 
-- **Squaring is `Compose(f, f)`.** NUDUPL would be meaningfully faster; the
-  simpler form was chosen because correctness here is worth more than constant
-  factors, and the axiom tests are what give confidence in it.
-- **The delay is not yet chained between blocks.** Each block's VDF is
-  independent, so it proves sequential work *for that block* and not elapsed time
-  across the chain. Feeding each block's output into the next would give the
-  latter.
-- **512-bit discriminant by default** — see the note above.
+- **Squaring is specialised, not NUDUPL.** Composing a form with itself collapses
+  the general algorithm — h is zero and s equals t, so one of the two modular
+  congruences disappears — which is worth about 19% at 2048 bits, where the
+  bottleneck is big-integer reduction rather than the congruence solve. NUDUPL
+  would go further by keeping intermediate values smaller. It was not taken:
+  correctness here is worth more than the constant factor, and the specialised
+  square is already a second implementation of an operation the group axioms were
+  verified against, so it is pinned to `Compose(f, f)` by
+  `TestSquareMatchesComposition` and falls back to it for any case the derivation
+  does not cover.
+- **The memory phase is still not Argon2id.** Stage 1 is unchanged by this work.
 
 ---
 
