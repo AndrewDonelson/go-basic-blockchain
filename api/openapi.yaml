@@ -15,6 +15,10 @@ info:
 
     **Errors.** Every failure returns the same JSON envelope, on every path and
     for every status code.
+
+    **Versioning.** Every endpoint is served under `/v1`. The same endpoints are
+    also served unprefixed for compatibility with existing clients; that surface
+    is frozen and will not gain new endpoints. New clients should use `/v1`.
   license:
     name: See repository LICENSE
 
@@ -165,7 +169,7 @@ security:
   - ApiKeyAuth: []
 
 paths:
-  /:
+  /v1:
     get:
       tags: [Public]
       summary: HTML summary of the chain
@@ -177,7 +181,7 @@ paths:
             text/html:
               schema: { type: string }
 
-  /version:
+  /v1/version:
     get:
       tags: [Public]
       summary: Node version
@@ -189,7 +193,7 @@ paths:
             application/json:
               schema: { type: object }
 
-  /info:
+  /v1/info:
     get:
       tags: [Public]
       summary: Chain parameters as JSON
@@ -201,7 +205,7 @@ paths:
             application/json:
               schema: { type: object }
 
-  /health:
+  /v1/health:
     get:
       tags: [Public]
       summary: Liveness and basic counts
@@ -213,7 +217,7 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/Health' }
 
-  /metrics:
+  /v1/metrics:
     get:
       tags: [Public]
       summary: Prometheus metrics
@@ -229,7 +233,7 @@ paths:
             text/plain:
               schema: { type: string }
 
-  /account/register:
+  /v1/account/register:
     post:
       tags: [Public, Accounts]
       summary: Register an account
@@ -252,7 +256,7 @@ paths:
         '400': { $ref: '#/components/responses/BadRequest' }
         '429': { $ref: '#/components/responses/RateLimited' }
 
-  /account/login:
+  /v1/account/login:
     post:
       tags: [Public, Accounts]
       summary: Log in
@@ -272,7 +276,7 @@ paths:
         '401': { $ref: '#/components/responses/Unauthorized' }
         '429': { $ref: '#/components/responses/RateLimited' }
 
-  /account/verify:
+  /v1/account/verify:
     get:
       tags: [Public, Accounts]
       summary: Verify an account
@@ -281,7 +285,7 @@ paths:
         '200': { description: OK }
         '400': { $ref: '#/components/responses/BadRequest' }
 
-  /blockchain:
+  /v1/blockchain:
     get:
       tags: [Chain]
       summary: Chain status
@@ -289,7 +293,7 @@ paths:
         '200': { description: OK }
         '401': { $ref: '#/components/responses/Unauthorized' }
 
-  /blockchain/blocks:
+  /v1/blockchain/blocks:
     get:
       tags: [Chain]
       summary: List blocks
@@ -311,7 +315,7 @@ paths:
                         items: { $ref: '#/components/schemas/Block' }
         '401': { $ref: '#/components/responses/Unauthorized' }
 
-  /blockchain/blocks/{index}:
+  /v1/blockchain/blocks/{index}:
     get:
       tags: [Chain]
       summary: A block by height
@@ -326,7 +330,7 @@ paths:
         '401': { $ref: '#/components/responses/Unauthorized' }
         '404': { $ref: '#/components/responses/NotFound' }
 
-  /blockchain/blocks/{index}/transactions:
+  /v1/blockchain/blocks/{index}/transactions:
     get:
       tags: [Chain]
       summary: Transactions in a block
@@ -339,7 +343,7 @@ paths:
         '401': { $ref: '#/components/responses/Unauthorized' }
         '404': { $ref: '#/components/responses/NotFound' }
 
-  /blockchain/blocks/{index}/transactions/{id}:
+  /v1/blockchain/blocks/{index}/transactions/{id}:
     get:
       tags: [Chain]
       summary: One transaction in a block
@@ -355,7 +359,7 @@ paths:
         '401': { $ref: '#/components/responses/Unauthorized' }
         '404': { $ref: '#/components/responses/NotFound' }
 
-  /blockchain/transactions:
+  /v1/blockchain/transactions:
     get:
       tags: [Chain]
       summary: List transactions
@@ -366,7 +370,7 @@ paths:
         '200': { description: OK }
         '401': { $ref: '#/components/responses/Unauthorized' }
 
-  /blockchain/transactions/{id}:
+  /v1/blockchain/transactions/{id}:
     get:
       tags: [Chain]
       summary: A transaction by ID
@@ -381,7 +385,7 @@ paths:
         '401': { $ref: '#/components/responses/Unauthorized' }
         '404': { $ref: '#/components/responses/NotFound' }
 
-  /blockchain/wallets:
+  /v1/blockchain/wallets:
     get:
       tags: [Wallets]
       summary: List wallets
@@ -392,7 +396,7 @@ paths:
         '200': { description: OK }
         '401': { $ref: '#/components/responses/Unauthorized' }
 
-  /blockchain/wallets/new:
+  /v1/blockchain/wallets/new:
     post:
       tags: [Wallets]
       summary: Create a wallet
@@ -422,7 +426,7 @@ paths:
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
 
-  /blockchain/wallets/tx:
+  /v1/blockchain/wallets/tx:
     post:
       tags: [Wallets]
       summary: Submit a wallet transaction
@@ -443,7 +447,7 @@ paths:
         '401': { $ref: '#/components/responses/Unauthorized' }
         '422': { $ref: '#/components/responses/Unprocessable' }
 
-  /blockchain/wallets/{id}:
+  /v1/blockchain/wallets/{id}:
     get:
       tags: [Wallets]
       summary: A wallet by ID
@@ -473,7 +477,7 @@ paths:
         '401': { $ref: '#/components/responses/Unauthorized' }
         '404': { $ref: '#/components/responses/NotFound' }
 
-  /blockchain/wallets/{id}/balance:
+  /v1/blockchain/wallets/{id}/balance:
     get:
       tags: [Wallets]
       summary: A wallet's balance
@@ -488,7 +492,7 @@ paths:
         '401': { $ref: '#/components/responses/Unauthorized' }
         '404': { $ref: '#/components/responses/NotFound' }
 
-  /blockchain/wallets/{id}/transactions:
+  /v1/blockchain/wallets/{id}/transactions:
     get:
       tags: [Wallets]
       summary: A wallet's transactions
@@ -501,7 +505,7 @@ paths:
         '401': { $ref: '#/components/responses/Unauthorized' }
         '404': { $ref: '#/components/responses/NotFound' }
 
-  /blockchain/wallets/{id}/transactions/{txid}:
+  /v1/blockchain/wallets/{id}/transactions/{txid}:
     get:
       tags: [Wallets]
       summary: One transaction for a wallet
@@ -517,7 +521,7 @@ paths:
         '401': { $ref: '#/components/responses/Unauthorized' }
         '404': { $ref: '#/components/responses/NotFound' }
 
-  /consensus/p2p:
+  /v1/consensus/p2p:
     post:
       tags: [Consensus]
       summary: Receive a P2P consensus message
@@ -527,7 +531,7 @@ paths:
         '401': { $ref: '#/components/responses/Unauthorized' }
         '503': { description: Consensus authentication is not configured }
 
-  /consensus/tx:
+  /v1/consensus/tx:
     post:
       tags: [Consensus]
       summary: Receive a relayed transaction
@@ -537,7 +541,7 @@ paths:
         '401': { $ref: '#/components/responses/Unauthorized' }
         '422': { $ref: '#/components/responses/Unprocessable' }
 
-  /consensus/block:
+  /v1/consensus/block:
     post:
       tags: [Consensus]
       summary: Receive an announced block

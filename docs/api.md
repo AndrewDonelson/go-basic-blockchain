@@ -50,6 +50,19 @@ installed in `Start()`, so `api.router` on its own was an unauthenticated API an
 anything serving it directly — an embedder, or a test harness wiring it into its
 own `http.Server` — silently got no authentication at all.
 
+### Versioning
+
+Every endpoint is served under **`/v1`**. The same endpoints are also served at
+their historic unprefixed paths, so nothing that works today stops working.
+
+Versioning is additive on purpose: moving the endpoints outright would break
+every existing client the day it shipped, to buy nothing until there is a second
+version to distinguish from. The unprefixed surface is frozen — it will not gain
+new endpoints — and new clients should use `/v1`.
+
+`TestLegacyPathsMirrorTheVersionedMount` checks the two have not drifted apart,
+and `TestVersionedAndLegacyMountsBehaveIdentically` that they answer the same.
+
 ### Machine-readable specification
 
 [`api/openapi.yaml`](../api/openapi.yaml) is the contract — 25 paths, schemas and

@@ -101,6 +101,17 @@ func isHTTPMethod(s string) bool {
 	return false
 }
 
+// versionedRoutes returns the routes served under the canonical /v1 mount.
+func versionedRoutes(t *testing.T) map[string]bool {
+	versioned := map[string]bool{}
+	for route := range registeredRoutes(t) {
+		if strings.HasPrefix(route, apiVersionPrefix) {
+			versioned[route] = true
+		}
+	}
+	return versioned
+}
+
 // registeredRoutes walks the real router.
 func registeredRoutes(t *testing.T) map[string]bool {
 	t.Helper()
@@ -156,7 +167,7 @@ func TestOpenAPISpecCoversEveryRoute(t *testing.T) {
 	}
 
 	var undocumented []string
-	for route := range registeredRoutes(t) {
+	for route := range versionedRoutes(t) {
 		if !documented[normalisePath(route)] {
 			undocumented = append(undocumented, route)
 		}
@@ -173,7 +184,7 @@ func TestOpenAPISpecCoversEveryRoute(t *testing.T) {
 // endpoint that is not served sends a client after a guaranteed 404.
 func TestOpenAPISpecDescribesNoPhantomRoutes(t *testing.T) {
 	served := map[string]bool{}
-	for route := range registeredRoutes(t) {
+	for route := range versionedRoutes(t) {
 		served[normalisePath(route)] = true
 	}
 
@@ -196,7 +207,14 @@ func TestOpenAPIPublicPathsMatchTheCode(t *testing.T) {
 	paths := specPaths(t)
 
 	for _, public := range publicPaths {
-		operations, ok := paths[public]
+		// The specification is written against the canonical /v1 mount; the
+		// publicPaths list in the code is unprefixed.
+		documented := apiVersionPrefix + public
+		if public == "/" {
+			documented = apiVersionPrefix
+		}
+
+		operations, ok := paths[documented]
 		if !ok {
 			t.Fatalf("%s is a public path in the code but is absent from the specification",
 				public)
@@ -222,7 +240,11 @@ func TestOpenAPIPublicPathsMatchTheCode(t *testing.T) {
 func TestOpenAPIProtectedPathsRequireAuth(t *testing.T) {
 	public := map[string]bool{}
 	for _, path := range publicPaths {
-		public[path] = true
+		documented := apiVersionPrefix + path
+		if path == "/" {
+			documented = apiVersionPrefix
+		}
+		public[documented] = true
 	}
 
 	for path, operations := range specPaths(t) {
@@ -234,6 +256,62 @@ func TestOpenAPIProtectedPathsRequireAuth(t *testing.T) {
 				t.Fatalf("%s %s is documented as needing no credential, but it is not "+
 					"a public path in the code", op.Method, path)
 			}
+		}
+	}
+}
+
+// TestLegacyPathsMirrorTheVersionedMount.
+//
+// Versioning here is additive: moving the endpoints outright would break every
+// existing client the day it shipped, to buy nothing until there is a second
+// version to distinguish from. Each route is therefore served twice, and this
+// checks the compatibility surface has not drifted from the canonical one.
+func TestLegacyPathsMirrorTheVersionedMount(t *testing.T) {
+	all := registeredRoutes(t)
+
+	var missing []string
+	for route := range all {
+		if !strings.HasPrefix(route, apiVersionPrefix) {
+			continue
+		}
+		legacy := strings.TrimPrefix(route, apiVersionPrefix)
+		if legacy == "" {
+			legacy = "/"
+		}
+		if !all[legacy] {
+			missing = append(missing, legacy)
+		}
+	}
+
+	sort.Strings(missing)
+	if len(missing) > 0 {
+		t.Fatalf("these versioned routes have no unprefixed equivalent, so existing "+
+			"clients calling them would break: %v", missing)
+	}
+}
+
+// TestPublicPathsArePublicUnderBothMounts: matching the literal string alone
+// would leave /v1/health demanding a credential while /health did not -- the
+// same endpoint giving two different answers.
+func TestPublicPathsArePublicUnderBothMounts(t *testing.T) {
+	for _, path := range publicPaths {
+		if !isPublicPath(path) {
+			t.Fatalf("%s is listed as public but isPublicPath says otherwise", path)
+		}
+
+		versioned := apiVersionPrefix + path
+		if path == "/" {
+			versioned = apiVersionPrefix + "/"
+		}
+		if !isPublicPath(versioned) {
+			t.Fatalf("%s is public but %s is not", path, versioned)
+		}
+	}
+
+	// A protected path stays protected under both mounts.
+	for _, path := range []string{"/blockchain", apiVersionPrefix + "/blockchain"} {
+		if isPublicPath(path) {
+			t.Fatalf("%s is treated as public", path)
 		}
 	}
 }

@@ -160,3 +160,38 @@ func TestRouterIsAuthenticatedWithoutStart(t *testing.T) {
 		}
 	}
 }
+
+// TestVersionedAndLegacyMountsBehaveIdentically: an endpoint that answers
+// differently depending on which mount you call is worse than no versioning.
+func TestVersionedAndLegacyMountsBehaveIdentically(t *testing.T) {
+	bc := forkTestChain(t, 2, uint32(genesisDifficulty))
+	api := NewAPI(bc)
+	if api == nil {
+		t.Fatal("failed to create the API")
+	}
+
+	for _, path := range []string{"/health", "/metrics", "/version"} {
+		legacy := httptest.NewRecorder()
+		api.router.ServeHTTP(legacy, httptest.NewRequest(http.MethodGet, path, nil))
+
+		versioned := httptest.NewRecorder()
+		api.router.ServeHTTP(versioned, httptest.NewRequest(http.MethodGet, "/v1"+path, nil))
+
+		if legacy.Code != versioned.Code {
+			t.Fatalf("%s returned %d but /v1%s returned %d",
+				path, legacy.Code, path, versioned.Code)
+		}
+		if legacy.Code != http.StatusOK {
+			t.Fatalf("%s returned %d, want 200", path, legacy.Code)
+		}
+	}
+
+	// A protected path is protected under both.
+	for _, path := range []string{"/blockchain", "/v1/blockchain"} {
+		recorder := httptest.NewRecorder()
+		api.router.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, path, nil))
+		if recorder.Code == http.StatusOK {
+			t.Fatalf("%s answered an unauthenticated request with 200", path)
+		}
+	}
+}
