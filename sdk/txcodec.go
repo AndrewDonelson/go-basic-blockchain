@@ -53,6 +53,15 @@ type txWire struct {
 	AllowNewTokens   bool    `json:"allow_new_tokens,omitempty"`
 	SubsidyUnits     int64   `json:"subsidy_units,omitempty"`
 	BlockHeight      int64   `json:"block_height,omitempty"`
+
+	// Anchor-specific fields.
+	PublisherID     uint64 `json:"publisher_id,omitempty"`
+	GameID          uint64 `json:"game_id,omitempty"`
+	FromHeight      uint64 `json:"from_height,omitempty"`
+	ToHeight        uint64 `json:"to_height,omitempty"`
+	TipHash         string `json:"tip_hash,omitempty"`
+	AnchorPayloads  uint64 `json:"anchor_payload_count,omitempty"`
+	AnchorSignature string `json:"anchor_signature,omitempty"`
 }
 
 // toWire projects the base transaction onto the wire shape.
@@ -165,6 +174,13 @@ func DecodeTransaction(data []byte) (Transaction, error) {
 			SubsidyUnits: w.SubsidyUnits,
 			BlockHeight:  w.BlockHeight,
 		}, nil
+
+	case AnchorProtocolID:
+		anchor, signature, err := anchorFromWire(w)
+		if err != nil {
+			return nil, err
+		}
+		return &AnchorTx{Tx: base, Anchor: anchor, AnchorSignature: signature}, nil
 
 	case ChainProtocolID, P2PProtocolID:
 		return &base, nil

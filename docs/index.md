@@ -17,10 +17,11 @@ Welcome to the comprehensive documentation for the Go Basic Blockchain project. 
 - **[Dynamic Difficulty](difficulty.md)** - How the chain retargets itself
 - **[Verifiable Delay Function](vdf.md)** - Wesolowski VDF over a class group
 - **[Memory Hardness](memory-hardness.md)** - Argon2id for stage 1
+- **[Sidechains](sidechains.md)** - Per-game block space, publisher identity, and anchoring
 - **[UTXO Set](utxo.md)** - The authoritative record of who owns what
 - **[Mempool Policy](mempool.md)** - Fee ordering, replace-by-fee, eviction, block size
 - **[Nonces & Replay Protection](nonces.md)** - Per-sender sequencing
-- **[Supply & Incentives](supply.md)** - Fixed supply, genesis-only minting, fee rewards
+- **[Supply & Incentives](supply.md)** - Fixed supply, the reserve-funded block subsidy, fee rewards
 - **[Wallet Recovery](recovery.md)** - BIP-39 phrases and deterministic key derivation
 - **[Observability](metrics.md)** - The /metrics endpoint, counters and hash rate
 - **[Performance](performance.md)** - Hot-path indexes and their benchmarks
@@ -45,8 +46,7 @@ These were listed here as links, but the files were never created. They are
 recorded as gaps rather than as 404s:
 
 `fundamentals.md`, `mining.md`, `network.md`, `deployment.md`,
-`troubleshooting.md`, `sidechains.md`, `security.md`, `performance.md`,
-`extending.md`
+`troubleshooting.md`, `security.md`, `extending.md`
 
 ## 🚀 Quick Navigation
 

@@ -121,6 +121,11 @@ type BlockUndo struct {
 	// would leave its nonce recorded and the sender could never resubmit it on
 	// the new branch.
 	Nonces map[string]nonceRestore
+	// Anchors holds each sidechain's anchor as it was before this block, for the
+	// same reason: a rolled-back anchor must stop counting as committed, or the
+	// publisher's next anchor fails contiguity against a commitment that is no
+	// longer on the chain.
+	Anchors []anchorRestore
 }
 
 // nonceRestore remembers a sender's prior nonce, distinguishing "had none" from
@@ -144,6 +149,11 @@ type UTXOSet struct {
 	// applied tracks block hashes in application order, so double-application is
 	// detectable and reverts can be checked against the tip.
 	applied []string
+	// anchors is the main chain's record of what each sidechain has committed.
+	// It lives here because this is where block application and rollback already
+	// happen, and an anchor that survived a reorg would be a commitment to a
+	// history the chain no longer contains.
+	anchors *AnchorLedger
 }
 
 // NewUTXOSet creates an empty set.
@@ -153,6 +163,7 @@ func NewUTXOSet() *UTXOSet {
 		byAddress: map[string]map[Outpoint]struct{}{},
 		undo:      map[string]*BlockUndo{},
 		nonces:    map[string]uint64{},
+		anchors:   NewAnchorLedger(NewPublisherRegistry()),
 	}
 }
 
@@ -461,6 +472,34 @@ func (s *UTXOSet) applyTransactionLocked(tx Transaction, blockIndex int64, split
 		_ = spent
 		return nil
 
+	case *AnchorTx:
+		// The anchor is the whole point of the transaction, so it is recorded
+		// before the fee is taken: if the commitment is refused -- wrong
+		// publisher, or a range that does not follow what is already anchored --
+		// nothing about this transaction should take effect.
+		restore, err := s.anchors.recordForUndo(concrete.Anchor, concrete.AnchorSignature)
+		if err != nil {
+			return fmt.Errorf("anchor %s: %w", txID, err)
+		}
+		if undo != nil {
+			undo.Anchors = append(undo.Anchors, restore)
+		}
+
+		if feeUnits == 0 {
+			return nil
+		}
+
+		_, totalIn, err := s.spendLocked(sender, feeUnits, staged, undo)
+		if err != nil {
+			return err
+		}
+
+		s.emitFees(feeUnits, split, emit)
+		if change := totalIn - feeUnits; change > 0 {
+			emit(sender, change, false)
+		}
+		return nil
+
 	default:
 		// Fee-only protocols: MESSAGE, PERSIST, CHAIN, P2P.
 		if feeUnits == 0 {
@@ -563,6 +602,11 @@ func (s *UTXOSet) RevertBlock(blockHash string) error {
 		} else {
 			delete(s.nonces, address)
 		}
+	}
+	// Reverse order: a block may carry several anchors for the same sidechain,
+	// and only the earliest restore holds the state from before the block.
+	for i := len(undo.Anchors) - 1; i >= 0; i-- {
+		s.anchors.restore(undo.Anchors[i])
 	}
 
 	delete(s.undo, blockHash)
@@ -729,4 +773,15 @@ func transactionParties(tx Transaction) (sender, recipient string) {
 		recipient = w.GetAddress()
 	}
 	return sender, recipient
+}
+
+// Anchors returns the main chain's sidechain anchor ledger.
+//
+// Publishers must be registered in its registry before their anchors will be
+// accepted, which is what stops one publisher committing history under another's
+// identity.
+func (s *UTXOSet) Anchors() *AnchorLedger {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.anchors
 }

@@ -88,6 +88,10 @@ const (
 	// P2PProtocolID is used for node-to-node control messages. It was missing from
 	// AvailableProtocols, so every P2P control transaction failed validation.
 	P2PProtocolID = "P2P"
+	// AnchorProtocolID commits a publisher's sidechain history to the main chain.
+	// It is what makes a sidechain more than a private database: see
+	// sdk/sidechain_anchor.go.
+	AnchorProtocolID = "ANCHOR"
 )
 
 // AvailableProtocols is a list of all available protocols
@@ -98,4 +102,5 @@ var AvailableProtocols = []string{
 	PersistProtocolID,
 	ChainProtocolID,
 	P2PProtocolID,
+	AnchorProtocolID,
 }

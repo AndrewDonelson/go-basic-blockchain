@@ -1,7 +1,8 @@
 # Supply & Miner Incentives
 
 This chain has a **fixed supply**, minted once in the genesis block. Miners are
-paid from transaction fees, not from a block subsidy.
+paid a **block subsidy drawn from a finite emission reserve**, plus transaction
+fees. Nothing after genesis mints: the subsidy moves coins that already exist.
 
 ---
 
