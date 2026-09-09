@@ -119,6 +119,18 @@ func newNode(opts *NodeOptions) (*Node, error) {
 		opts.Config = NewConfig()
 	}
 
+	// Validate before doing anything expensive.
+	//
+	// NewConfig validates but only logs the result, so an invalid configuration
+	// used to proceed: the node generated an identity, created two wallets and
+	// mined a genesis block -- several seconds of work -- before failing deep
+	// inside API construction on a problem that was knowable at startup. And
+	// because it failed at the first point of use, each restart revealed exactly
+	// one mistake. Validate reports all of them together.
+	if err := opts.Config.Validate(); err != nil {
+		return nil, fmt.Errorf("invalid configuration: %w", err)
+	}
+
 	// Carry the seed settings onto the Config, which is what the running node
 	// actually reads. They used to be set on NodeOptions and then dropped, so
 	// --seed and --seed-address had no effect on a running node.
@@ -157,9 +169,9 @@ func newNode(opts *NodeOptions) (*Node, error) {
 
 	// Initialize API
 	if opts.Config.EnableAPI {
-		api := NewAPI(blockchain)
-		if api == nil {
-			return nil, errors.New("failed to create API")
+		api, err := NewAPIWithError(blockchain)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create API: %w", err)
 		}
 		n.API = api
 	}

@@ -4,6 +4,7 @@
 package sdk
 
 import (
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -82,10 +83,13 @@ func NewConfig() *Config {
 	// Apply command line flags (highest priority)
 	cfg.applyCommandLineFlags()
 
-	// Surface a bad configuration at startup rather than at first use. NewConfig
-	// never validated what it produced.
+	// Advisory only, and verbose: NewConfig cannot return an error, so this is a
+	// hint for anyone building a Config directly. The authority is newNode, which
+	// refuses to start on an invalid configuration and reports it once, with its
+	// line breaks intact -- logging it here as well produced the same list twice,
+	// the first copy flattened onto one line by the log sanitiser.
 	if err := cfg.Validate(); err != nil {
-		LogInfof("Configuration is invalid: %v", err)
+		LogVerbosef("Configuration is invalid: %v", err)
 	}
 
 	return cfg
@@ -228,50 +232,88 @@ func (c *Config) applyCommandLineFlags() {
 
 // Validate checks if the configuration is valid.
 func (c *Config) Validate() error {
+	var problems []string
+
 	if c.BlockchainName == "" {
-		return errors.New("blockchain name cannot be empty")
+		problems = append(problems, "blockchain name cannot be empty")
 	}
 	if c.BlockchainSymbol == "" {
-		return errors.New("blockchain symbol cannot be empty")
+		problems = append(problems, "blockchain symbol cannot be empty")
 	}
 	if c.BlockTime <= 0 {
-		return errors.New("block time must be positive")
+		problems = append(problems, "block time must be positive")
 	}
 	// Difficulty feeds a 256-bit shift in difficultyTarget; an out-of-range value
 	// there produces a nonsensical target.
 	if c.Difficulty < 1 || c.Difficulty > 255 {
-		return errors.New("difficulty must be between 1 and 255")
+		problems = append(problems, "difficulty must be between 1 and 255")
 	}
 	if c.MaxMempoolTxs < 0 {
-		return errors.New("max mempool transactions cannot be negative")
+		problems = append(problems, "max mempool transactions cannot be negative")
 	}
 
 	if c.DifficultyWindow < 0 {
-		return errors.New("difficulty window cannot be negative")
+		problems = append(problems, "difficulty window cannot be negative")
 	}
 	if c.TransactionFee < 0 {
-		return errors.New("transaction fee cannot be negative")
+		problems = append(problems, "transaction fee cannot be negative")
 	}
 	if c.MinerRewardPCT < 0 || c.MinerRewardPCT > 100 {
-		return errors.New("miner reward percentage must be between 0 and 100")
+		problems = append(problems, "miner reward percentage must be between 0 and 100")
 	}
 	if c.DevRewardPCT < 0 || c.DevRewardPCT > 100 {
-		return errors.New("developer reward percentage must be between 0 and 100")
+		problems = append(problems, "developer reward percentage must be between 0 and 100")
 	}
 	if c.FundWalletAmount < 0 {
-		return errors.New("fund wallet amount cannot be negative")
+		problems = append(problems, "fund wallet amount cannot be negative")
 	}
 	if c.TokenCount < 0 {
-		return errors.New("token count cannot be negative")
+		problems = append(problems, "token count cannot be negative")
 	}
 	if c.TokenPrice < 0 {
-		return errors.New("token price cannot be negative")
+		problems = append(problems, "token price cannot be negative")
 	}
 	if c.MaxBlockSize <= 0 {
-		return errors.New("max block size must be positive")
+		problems = append(problems, "max block size must be positive")
 	}
 	if c.MinTransactionFee < 0 {
-		return errors.New("minimum transaction fee cannot be negative")
+		problems = append(problems, "minimum transaction fee cannot be negative")
+	}
+
+	// Credentials are checked here rather than at the point of use.
+	//
+	// A bad API key used to surface only when the middleware was built, as
+	// "failed to create API" with the real reason on a separate line; a weak node
+	// wallet passphrase surfaced later still, from wallet creation. Each restart
+	// revealed exactly one problem, so a misconfigured .env took as many attempts
+	// as it had mistakes. Everything is reported together now.
+	if key := getEnv(envBlockchainAPIKey, ""); key != "" {
+		if _, err := hex.DecodeString(key); err != nil {
+			problems = append(problems,
+				fmt.Sprintf("%s must be hexadecimal (try: openssl rand -hex 32): %v",
+					envBlockchainAPIKey, err))
+		}
+	}
+	if seed := getEnv(envServerSeed, ""); seed != "" {
+		if _, err := hex.DecodeString(seed); err != nil {
+			problems = append(problems,
+				fmt.Sprintf("%s must be hexadecimal (try: openssl rand -hex 32): %v",
+					envServerSeed, err))
+		}
+	}
+	if pass := getEnv(envNodeWalletPassphrase, ""); pass != "" {
+		if err := testPasswordStrength(pass); err != nil {
+			problems = append(problems,
+				fmt.Sprintf("%s is too weak: %v", envNodeWalletPassphrase, err))
+		}
+	}
+
+	if len(problems) == 1 {
+		return errors.New(problems[0])
+	}
+	if len(problems) > 1 {
+		return fmt.Errorf("%d configuration problems:\n  - %s",
+			len(problems), strings.Join(problems, "\n  - "))
 	}
 	return nil
 }

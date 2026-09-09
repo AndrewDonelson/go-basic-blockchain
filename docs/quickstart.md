@@ -2,6 +2,54 @@
 
 Get up and running with Go Basic Blockchain in minutes! This guide will help you set up the project, run your first blockchain node, and start exploring the system.
 
+## ⚡ A working configuration
+
+Copy this into `.local.env`, substituting your own credentials. The node
+**refuses to start** on an invalid configuration and reports every problem at
+once, so a mistake here costs one restart, not one per mistake.
+
+```bash
+# Generate the two required credentials -- both must be hexadecimal.
+echo "BLOCKCHAIN_API_KEY=$(openssl rand -hex 32)"     >> .local.env
+echo "BLOCKCHAIN_SERVER_SEED=$(openssl rand -hex 32)" >> .local.env
+```
+
+```ini
+BLOCKCHAIN_NAME=Go Basic Blockchain
+BLOCKCHAIN_SYMBOL=GBB
+BLOCK_TIME=5
+DIFFICULTY=1
+API_HOSTNAME=:8100
+P2P_HOSTNAME=:8101
+ENABLE_API=true
+DATA_PATH=./data
+
+# Both required, both hexadecimal (openssl rand -hex 32).
+BLOCKCHAIN_API_KEY=<64 hex characters>
+BLOCKCHAIN_SERVER_SEED=<64 hex characters>
+
+# 12-24 characters, 2+ each of upper, lower, digit and special.
+NODE_WALLET_PASSPHRASE=Node@Wallet#Pass123
+```
+
+Then:
+
+```bash
+go build -o bin/chaind ./cmd/chaind
+./bin/chaind --env .local.env
+```
+
+Check it is alive — `/health` and `/metrics` need no credential:
+
+```bash
+curl localhost:8100/v1/health
+curl -H "Authorization: Bearer $BLOCKCHAIN_API_KEY" localhost:8100/v1/blockchain
+```
+
+> **Creating a wallet?** The `201` response carries a `mnemonic`. It is shown
+> once and stored nowhere — keep it, or that wallet cannot be recovered.
+
+
 ## 🚀 Prerequisites
 
 ### Required Software

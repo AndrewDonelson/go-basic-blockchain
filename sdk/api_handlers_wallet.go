@@ -78,6 +78,14 @@ func (api *API) loadWalletByAddress(address string) (*Wallet, error) {
 		return nil, err
 	}
 
+	// A wallet loaded from disk has no nonce counter -- it lives in memory, not
+	// in the vault -- so without this every transaction it builds is refused as
+	// a replay. The handlers that spend from a loaded wallet all come through
+	// here, so this is the one place that has to remember.
+	if api.bc != nil {
+		api.bc.SyncWalletNonce(w)
+	}
+
 	return w, nil
 }
 

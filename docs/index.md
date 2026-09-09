@@ -88,7 +88,7 @@ correctly, but does not yet form a network.
 | Hot-path performance | ✅ Indexed — network lookups no longer scan the chain ([performance.md](performance.md)) |
 | UTXO state model | ✅ Working — authoritative balances, double-spend prevention ([utxo.md](utxo.md)) |
 
-- **Test Coverage**: 78.0% (`sdk`), 85–97% across the Helios packages
+- **Test Coverage**: 78.3% (`sdk`), 85–97% across the Helios packages
 - **Test Performance**: ~17 seconds; ~85 seconds under `-race`
 - **Documentation**: ✅ Comprehensive
 

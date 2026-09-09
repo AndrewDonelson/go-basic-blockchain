@@ -7,6 +7,31 @@ import (
 	"fmt"
 )
 
+// OpenWallet loads a wallet from storage and prepares it for spending.
+//
+// Use this rather than Wallet.Open when the wallet is going to send anything.
+// A wallet holds its nonce counter in memory -- the vault cannot be written
+// while the wallet is encrypted -- so one loaded straight from disk starts at
+// zero and every transaction it builds is refused as a replay of a nonce it has
+// already used. That is a rule a caller has to remember, so this removes the
+// need to: loading and synchronising happen together.
+//
+// An empty passphrase loads the wallet locked, which is enough to read its
+// address and balance but not to sign.
+func (bc *Blockchain) OpenWallet(address, passphrase string) (*Wallet, error) {
+	if address == "" {
+		return nil, errors.New("cannot open a wallet without an address")
+	}
+
+	w := &Wallet{Address: address}
+	if err := w.Open(passphrase); err != nil {
+		return nil, err
+	}
+
+	bc.SyncWalletNonce(w)
+	return w, nil
+}
+
 // SyncWalletNonce resets a wallet's nonce counter from chain state.
 //
 // A wallet holds its counter in memory, so one loaded from disk starts at zero

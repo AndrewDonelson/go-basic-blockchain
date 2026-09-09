@@ -119,6 +119,35 @@ func NewAPI(bc *Blockchain) *API {
 	return api
 }
 
+// NewAPIWithError is NewAPI, reporting why construction failed.
+//
+// NewAPI returns a bare nil, so the caller could say no more than "failed to
+// create API" while the actual reason -- a non-hexadecimal API key, say -- went
+// to a log line somewhere above it. Anything that wants to tell a user what to
+// fix should call this.
+func NewAPIWithError(bc *Blockchain) (*API, error) {
+	if bc == nil {
+		return nil, errors.New("cannot create an API without a blockchain")
+	}
+
+	api := &API{
+		bc:                bc,
+		log:               logging.MustGetLogger("api"),
+		router:            mux.NewRouter(),
+		blockchainService: appservices.NewBlockchainService(bc),
+		accountStore:      NewFileAccountStore(bc.GetConfig().DataPath),
+		accountLimiter:    newRateLimiter(authRateLimitAttempts, authRateLimitWindow),
+	}
+
+	LogInfof("Initializing API...")
+	api.registerRoutes()
+
+	if err := api.installMiddleware(); err != nil {
+		return nil, err
+	}
+	return api, nil
+}
+
 // IsRunning returns true if the API is running.
 func (api *API) IsRunning() bool {
 	api.runningMu.RLock()

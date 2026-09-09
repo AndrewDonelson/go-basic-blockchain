@@ -68,11 +68,20 @@ The counter is held **in memory**, not in the vault, because the vault cannot be
 written while the wallet is encrypted and a transaction may be built from a
 wallet that is only being read.
 
-**This has a consequence worth knowing:** a wallet loaded from disk starts at
-zero, and its transactions will be refused as replays of nonces it already used.
-Call `Blockchain.SyncWalletNonce(w)` after loading a wallet you intend to spend
-from. `NextNonceFor` counts queued transactions too, so two built back to back do
-not claim the same number.
+**Use `Blockchain.OpenWallet` to load a wallet you intend to spend from:**
+
+```go
+w, err := bc.OpenWallet(address, passphrase)   // loads and synchronises
+```
+
+A wallet loaded any other way starts at nonce zero, and its transactions are
+refused as replays of nonces it has already used. That was a rule callers had to
+remember, which is a poor kind of rule — `OpenWallet` does both steps together,
+and the REST handlers synchronise on their own load path.
+
+`SyncWalletNonce` remains available for a wallet you obtained some other way.
+`NextNonceFor` counts queued transactions too, so two built back to back do not
+claim the same number.
 
 ---
 

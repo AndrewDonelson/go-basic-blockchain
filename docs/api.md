@@ -50,6 +50,22 @@ installed in `Start()`, so `api.router` on its own was an unauthenticated API an
 anything serving it directly — an embedder, or a test harness wiring it into its
 own `http.Server` — silently got no authentication at all.
 
+### Configuration errors
+
+The node **refuses to start** on an invalid configuration, and reports every
+problem at once rather than the first one it finds:
+
+```
+Failed to create node: invalid configuration: 3 configuration problems:
+  - BLOCKCHAIN_API_KEY must be hexadecimal (try: openssl rand -hex 32): ...
+  - BLOCKCHAIN_SERVER_SEED must be hexadecimal (try: openssl rand -hex 32): ...
+  - NODE_WALLET_PASSPHRASE is too weak: password length should be between 12 and 24 characters
+```
+
+Validation runs before the node generates an identity, creates wallets or mines
+genesis, so a bad `.env` fails in a moment rather than after several seconds of
+work — and costs one restart, not one per mistake.
+
 ### Versioning
 
 Every endpoint is served under **`/v1`**. The same endpoints are also served at
