@@ -4,6 +4,7 @@ package sdk
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"net/http"
@@ -189,19 +190,62 @@ func (api *API) Start() error {
 		MaxHeaderBytes:    apiMaxHeaderBytes,
 	}
 
+	cfg := api.GetConfig()
+	useTLS := cfg != nil && cfg.APITLSEnabled
+	if useTLS {
+		server.TLSConfig = apiTLSConfig()
+	}
+
 	api.runningMu.Lock()
 	api.server = server
 	api.running = true
 	api.runningMu.Unlock()
 
-	LogInfof("API server starting on %s", bindAddr)
-	if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+	var err error
+	if useTLS {
+		LogInfof("API server starting on %s (TLS)", bindAddr)
+		// The certificate and key were already loaded once by Config.Validate, so
+		// a failure here is a file that changed underneath us rather than a
+		// configuration mistake.
+		err = server.ListenAndServeTLS(cfg.APITLSCertFile, cfg.APITLSKeyFile)
+	} else {
+		LogInfof("API server starting on %s (plaintext HTTP -- set API_TLS_ENABLED "+
+			"to serve HTTPS, or terminate TLS at a proxy)", bindAddr)
+		err = server.ListenAndServe()
+	}
+
+	if err != nil && !errors.Is(err, http.ErrServerClosed) {
 		api.setRunning(false)
 		return fmt.Errorf("api server stopped: %w", err)
 	}
 
 	api.setRunning(false)
 	return nil
+}
+
+// apiTLSConfig returns the TLS settings the API server is served with.
+//
+// TLS 1.2 is the floor: 1.0 and 1.1 have been deprecated for years and Go still
+// permits them unless a minimum is set. The cipher suites are the AEAD suites
+// with forward secrecy -- the same property the P2P handshake provides through
+// ephemeral ECDH. CBC and RSA key-exchange suites are left out: the first has a
+// long history of padding-oracle attacks, and the second offers no forward
+// secrecy, so recording traffic today and stealing the key later decrypts it.
+//
+// Go chooses TLS 1.3 cipher suites itself and ignores the list below for them,
+// which is why only the 1.2 suites are named.
+func apiTLSConfig() *tls.Config {
+	return &tls.Config{
+		MinVersion: tls.VersionTLS12,
+		CipherSuites: []uint16{
+			tls.TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256,
+			tls.TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,
+			tls.TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384,
+			tls.TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384,
+			tls.TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305,
+			tls.TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305,
+		},
+	}
 }
 
 // Stop gracefully shuts the API server down.

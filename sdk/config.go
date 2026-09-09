@@ -4,6 +4,7 @@
 package sdk
 
 import (
+	"crypto/tls"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -19,18 +20,23 @@ import (
 
 // Config is the configuration for the blockchain.
 type Config struct {
-	BlockchainName    string
-	BlockchainSymbol  string
-	BlockTime         int
-	Difficulty        int
-	TransactionFee    float64
-	MinerRewardPCT    float64
-	MinerAddress      string
-	DevRewardPCT      float64
-	DevAddress        string
-	APIHostName       string
-	P2PHostName       string
-	EnableAPI         bool
+	BlockchainName   string
+	BlockchainSymbol string
+	BlockTime        int
+	Difficulty       int
+	TransactionFee   float64
+	MinerRewardPCT   float64
+	MinerAddress     string
+	DevRewardPCT     float64
+	DevAddress       string
+	APIHostName      string
+	P2PHostName      string
+	EnableAPI        bool
+	// TLS for the REST API. The P2P layer has its own authenticated encryption
+	// and is unaffected by these.
+	APITLSEnabled     bool   // Serve HTTPS instead of HTTP
+	APITLSCertFile    string // PEM certificate chain
+	APITLSKeyFile     string // PEM private key
 	FundWalletAmount  float64
 	TokenCount        int64
 	TokenPrice        float64
@@ -113,6 +119,9 @@ func (c *Config) setDefaultValues() {
 	c.APIHostName = apiHostname
 	c.P2PHostName = p2pHostname
 	c.EnableAPI = EnableAPI
+	c.APITLSEnabled = false
+	c.APITLSCertFile = ""
+	c.APITLSKeyFile = ""
 	c.FundWalletAmount = fundWalletAmount
 	c.TokenCount = tokenCount
 	c.TokenPrice = tokenPrice
@@ -178,6 +187,9 @@ func (c *Config) loadFromEnv() {
 		c.APIHostName = getEnv("API_HOSTNAME", c.APIHostName)
 		c.P2PHostName = getEnv("P2P_HOSTNAME", c.P2PHostName)
 		c.EnableAPI = getEnvAsBool("ENABLE_API", c.EnableAPI)
+		c.APITLSEnabled = getEnvAsBool("API_TLS_ENABLED", c.APITLSEnabled)
+		c.APITLSCertFile = getEnv("API_TLS_CERT_FILE", c.APITLSCertFile)
+		c.APITLSKeyFile = getEnv("API_TLS_KEY_FILE", c.APITLSKeyFile)
 		c.FundWalletAmount = getEnvAsFloat("FUND_WALLET_AMOUNT", c.FundWalletAmount)
 		c.TokenCount = getEnvAsInt64("TOKEN_COUNT", c.TokenCount)
 		c.TokenPrice = getEnvAsFloat("TOKEN_PRICE", c.TokenPrice)
@@ -301,6 +313,21 @@ func (c *Config) Validate() error {
 					envServerSeed, err))
 		}
 	}
+	// TLS material is checked here so a bad certificate fails at startup with the
+	// other configuration problems, rather than when the listener comes up.
+	if c.APITLSEnabled {
+		switch {
+		case c.APITLSCertFile == "" || c.APITLSKeyFile == "":
+			problems = append(problems,
+				"API_TLS_ENABLED is set but API_TLS_CERT_FILE and API_TLS_KEY_FILE are not both configured")
+		default:
+			if _, err := tls.LoadX509KeyPair(c.APITLSCertFile, c.APITLSKeyFile); err != nil {
+				problems = append(problems,
+					fmt.Sprintf("API TLS certificate and key cannot be loaded: %v", err))
+			}
+		}
+	}
+
 	if pass := getEnv(envNodeWalletPassphrase, ""); pass != "" {
 		if err := testPasswordStrength(pass); err != nil {
 			problems = append(problems,
@@ -333,6 +360,7 @@ func (c *Config) Show() {
 	log.Printf("- API Hostname: %s\n", c.APIHostName)
 	log.Printf("- P2P Hostname: %s\n", c.P2PHostName)
 	log.Printf("- Enable API: %v\n", c.EnableAPI)
+	log.Printf("- API TLS: %v\n", c.APITLSEnabled)
 	log.Printf("- Fund Wallet Amount: %.2f\n", c.FundWalletAmount)
 	log.Printf("- Token Count: %d\n", c.TokenCount)
 	log.Printf("- Token Price: %.2f\n", c.TokenPrice)

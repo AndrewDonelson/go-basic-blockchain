@@ -23,8 +23,10 @@ info:
     name: See repository LICENSE
 
 servers:
+  - url: https://localhost:8100
+    description: Local node with API_TLS_ENABLED=true
   - url: http://localhost:8100
-    description: Default local node
+    description: Local node serving plaintext (the default; terminate TLS at a proxy)
 
 tags:
   - name: Public

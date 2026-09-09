@@ -225,3 +225,37 @@ func TestPrettyPrintMap(t *testing.T) {
 		}
 	}
 }
+
+// TestResolveAPIURLFollowsTLSSetting.
+//
+// The CLI built an http:// URL unconditionally, so turning API_TLS_ENABLED on
+// left it talking plaintext to a TLS listener. That fails as a bare 400, which
+// says nothing about the cause.
+func TestResolveAPIURLFollowsTLSSetting(t *testing.T) {
+	cases := []struct {
+		name       string
+		explicit   string
+		hostname   string
+		tlsEnabled bool
+		want       string
+	}{
+		{"plaintext port only", "", ":8100", false, "http://localhost:8100"},
+		{"TLS port only", "", ":8100", true, "https://localhost:8100"},
+		{"plaintext host", "", "node.example:8100", false, "http://node.example:8100"},
+		{"TLS host", "", "node.example:8100", true, "https://node.example:8100"},
+		{"default with TLS", "", "", true, "https://localhost:8100"},
+		{"default without TLS", "", "", false, "http://localhost:8100"},
+		// An explicit URL wins, scheme included, whatever the TLS flag says.
+		{"explicit URL wins", "http://other:9000", ":8100", true, "http://other:9000"},
+		{"scheme in hostname preserved", "", "https://already:8100", false, "https://already:8100"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := resolveAPIURLWithScheme(tc.explicit, tc.hostname, tc.tlsEnabled)
+			if got != tc.want {
+				t.Fatalf("got %q, want %q", got, tc.want)
+			}
+		})
+	}
+}

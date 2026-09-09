@@ -54,7 +54,7 @@ sdk/
 
 **Performance Metrics**:
 - **Total Execution Time**: ~17 seconds; ~85 seconds under `-race`
-- **Coverage**: 78.3% (`sdk`), 85–97% across the Helios packages
+- **Coverage**: 78.2% (`sdk`), 85–97% across the Helios packages
 - **Race Detector**: the full suite runs clean
 
 **Optimization Features**:
@@ -112,7 +112,7 @@ func TestWallet_Create(t *testing.T) {
 | `internal/helios/algorithm` | 89.8% |
 | `internal/helios/sidechain` | 85.2% |
 | `internal/progress` | 77.9% |
-| `sdk` | 78.3% |
+| `sdk` | 78.2% |
 | `cmd/gbb-cli` | 33.6% |
 | `internal/menu` | 28.0% |
 | `cmd/chaind` | 12.8% |
@@ -140,7 +140,7 @@ go tool cover -func=coverage.out
 **Coverage Output**:
 ```
 PASS
-coverage: 78.3% of statements
+coverage: 78.2% of statements
 ok      github.com/yourusername/go-basic-blockchain/sdk 9.5s
 ```
 
@@ -524,7 +524,7 @@ const (
 - **Race Conditions**: 0
 
 **Coverage Quality**:
-- **Line Coverage**: 78.3% (`sdk`)
+- **Line Coverage**: 78.2% (`sdk`)
 - **Function Coverage**: 85%
 - **Branch Coverage**: 70%
 - **Statement Coverage**: 40%

@@ -22,19 +22,36 @@ type BlockchainClient struct {
 }
 
 func resolveAPIURLFromValues(blockchainAPIURL, apiHostname string) string {
+	return resolveAPIURLWithScheme(blockchainAPIURL, apiHostname, false)
+}
+
+// resolveAPIURLWithScheme picks the base URL, choosing https when the node it is
+// talking to serves TLS.
+//
+// Without this the CLI built an http:// URL unconditionally, so turning
+// API_TLS_ENABLED on left it talking plaintext to a TLS listener -- which fails
+// as a 400, an error that says nothing about the actual cause. An explicit
+// BLOCKCHAIN_API_URL still wins, scheme included.
+func resolveAPIURLWithScheme(blockchainAPIURL, apiHostname string, tlsEnabled bool) string {
 	if blockchainAPIURL != "" {
 		return blockchainAPIURL
 	}
+
+	scheme := "http://"
+	if tlsEnabled {
+		scheme = "https://"
+	}
+
 	if apiHostname != "" {
 		if strings.HasPrefix(apiHostname, ":") {
-			return "http://localhost" + apiHostname
+			return scheme + "localhost" + apiHostname
 		}
 		if strings.HasPrefix(apiHostname, "http://") || strings.HasPrefix(apiHostname, "https://") {
 			return apiHostname
 		}
-		return "http://" + apiHostname
+		return scheme + apiHostname
 	}
-	return "http://localhost:8100"
+	return scheme + "localhost:8100"
 }
 
 func resolveAPIKeyFromValue(blockchainAPIKey string) string {
@@ -72,7 +89,9 @@ func statusSummary(info map[string]interface{}, connected bool) []string {
 }
 
 func resolveAPIURL() string {
-	return resolveAPIURLFromValues(os.Getenv("BLOCKCHAIN_API_URL"), os.Getenv("API_HOSTNAME"))
+	tlsEnabled := strings.EqualFold(os.Getenv("API_TLS_ENABLED"), "true")
+	return resolveAPIURLWithScheme(
+		os.Getenv("BLOCKCHAIN_API_URL"), os.Getenv("API_HOSTNAME"), tlsEnabled)
 }
 
 func resolveAPIKey() string {
