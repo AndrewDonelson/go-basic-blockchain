@@ -250,7 +250,8 @@ gaps; it does not resolve competing histories.
 **Peer authentication and session encryption are implemented** -- see
 [P2P Security](p2p-security.md). Node IDs are the hash of a public key, peers
 prove possession of that key during a mutually authenticated handshake, and the
-session is AES-256-GCM keyed by ECDH over the same identities.
+session is AES-256-GCM keyed by *ephemeral* ECDH, so compromising a node's
+long-term identity key later does not expose sessions recorded earlier.
 
 ## 🔐 Security Architecture
 

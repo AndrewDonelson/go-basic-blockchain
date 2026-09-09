@@ -31,6 +31,7 @@ import (
 	"bufio"
 	"crypto/aes"
 	"crypto/cipher"
+	"crypto/ecdh"
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
@@ -86,7 +87,7 @@ func hkdfSHA256(secret, salt, info []byte, length int) ([]byte, error) {
 const (
 	// p2pProtocolVersion is the handshake version. A peer speaking a different
 	// version is refused rather than half-understood.
-	p2pProtocolVersion = "gbb/2"
+	p2pProtocolVersion = "gbb/3"
 
 	// p2pAuthContext domain-separates handshake signatures, so a signature made
 	// here can never be replayed as a transaction signature or vice versa.
@@ -123,9 +124,17 @@ type authenticatedPeer struct {
 
 // handshakeTranscript builds the bytes both sides sign.
 //
-// Including both nonces and both IDs is what prevents a captured signature being
-// replayed against a different peer, or reflected back at its own author.
-func handshakeTranscript(signerID, peerID string, signerNonce, peerNonce []byte) []byte {
+// Including both nonces and both IDs prevents a captured signature being replayed
+// against a different peer, or reflected back at its own author.
+//
+// Including both EPHEMERAL PUBLIC KEYS is what makes the ephemeral exchange safe.
+// The session key comes from an anonymous Diffie-Hellman between two ephemeral
+// keys; on its own that is wide open to a machine-in-the-middle, who can relay
+// the identity handshake untouched while substituting its own ephemeral key on
+// each side. Signing the ephemeral keys with the long-term identity key binds
+// them to an authenticated identity, so a substituted key invalidates the
+// signature. See TestEphemeralKeyIsBoundToIdentity.
+func handshakeTranscript(signerID, peerID string, signerNonce, peerNonce, signerEphemeral, peerEphemeral []byte) []byte {
 	var buf []byte
 	buf = append(buf, p2pAuthContext...)
 	buf = append(buf, 0)
@@ -136,36 +145,79 @@ func handshakeTranscript(signerID, peerID string, signerNonce, peerNonce []byte)
 	buf = append(buf, signerNonce...)
 	buf = append(buf, 0)
 	buf = append(buf, peerNonce...)
+	buf = append(buf, 0)
+	buf = append(buf, signerEphemeral...)
+	buf = append(buf, 0)
+	buf = append(buf, peerEphemeral...)
 	return buf
 }
 
-// deriveSessionKey performs ECDH over the identity keys and stretches the result.
+// ephemeralKeyPair is a single-use ECDH keypair.
 //
-// The nonces go in as salt, so every session gets a distinct key even between the
-// same pair of peers -- without that, a recorded session could be replayed and
-// decrypted later.
-func deriveSessionKey(identity *PeerIdentity, peerPublicPEM string, clientNonce, serverNonce []byte) ([]byte, error) {
-	if identity == nil || identity.privateKey == nil {
-		return nil, errors.New("no node identity")
+// A fresh pair is generated for every handshake and the private half is dropped
+// as soon as the session key is derived. That is what gives forward secrecy:
+// the session key is not recoverable from the long-term identity keys, so an
+// attacker who later compromises a node's identity key cannot decrypt sessions
+// they recorded earlier.
+type ephemeralKeyPair struct {
+	private *ecdh.PrivateKey
+	public  []byte
+}
+
+// newEphemeralKeyPair generates a per-handshake ECDH keypair on P-256.
+func newEphemeralKeyPair() (*ephemeralKeyPair, error) {
+	private, err := ecdh.P256().GenerateKey(rand.Reader)
+	if err != nil {
+		return nil, fmt.Errorf("failed to generate ephemeral key: %w", err)
+	}
+	return &ephemeralKeyPair{private: private, public: private.PublicKey().Bytes()}, nil
+}
+
+// parseEphemeralPublicKey decodes and validates a peer's ephemeral public key.
+//
+// ecdh.NewPublicKey rejects points that are not on the curve and the identity
+// point, which is what closes off invalid-curve and small-subgroup attacks --
+// feeding a crafted "public key" to ECDH can otherwise leak private key bits.
+func parseEphemeralPublicKey(raw []byte) (*ecdh.PublicKey, error) {
+	if len(raw) == 0 {
+		return nil, errors.New("peer sent no ephemeral key")
 	}
 
-	peerPub, err := parsePeerPublicKey(peerPublicPEM)
+	pub, err := ecdh.P256().NewPublicKey(raw)
+	if err != nil {
+		return nil, fmt.Errorf("peer ephemeral key is not a valid P-256 point: %w", err)
+	}
+	return pub, nil
+}
+
+// deriveSessionKey performs ECDH between the two EPHEMERAL keys.
+//
+// The long-term identity keys are deliberately not an input. They authenticate
+// the exchange -- each side signs a transcript covering both ephemeral public
+// keys -- but they never contribute to the key itself.
+//
+// That separation is the whole point of forward secrecy. The previous version
+// derived the key from the identity keys directly, so anyone who later obtained a
+// node's identity key could decrypt every session it had ever had, including ones
+// recorded months earlier. Now the only material that can produce the key is a
+// pair of private values that existed for the length of one handshake and were
+// never transmitted.
+//
+// The nonces go in as salt, so two handshakes never collide even in the
+// vanishingly unlikely event of an ephemeral key repeating.
+func deriveSessionKey(local *ephemeralKeyPair, peerEphemeralPublic []byte, clientNonce, serverNonce []byte) ([]byte, error) {
+	if local == nil || local.private == nil {
+		return nil, errors.New("no ephemeral key for this handshake")
+	}
+
+	peerPub, err := parseEphemeralPublicKey(peerEphemeralPublic)
 	if err != nil {
 		return nil, err
 	}
 
-	privECDH, err := identity.privateKey.ECDH()
+	shared, err := local.private.ECDH(peerPub)
 	if err != nil {
-		return nil, fmt.Errorf("identity key cannot perform ECDH: %w", err)
-	}
-	peerECDH, err := peerPub.ECDH()
-	if err != nil {
-		return nil, fmt.Errorf("peer key cannot perform ECDH: %w", err)
-	}
-
-	shared, err := privECDH.ECDH(peerECDH)
-	if err != nil {
-		return nil, fmt.Errorf("ECDH failed: %w", err)
+		return nil, fmt.Errorf("ephemeral ECDH failed: %w", err)
 	}
 
 	// Order the salt consistently on both sides.
@@ -390,13 +442,18 @@ func (p *P2P) serverHandshake(conn net.Conn) (*secureConn, *authenticatedPeer, e
 		return nil, nil, fmt.Errorf("peer speaks protocol %s, this node speaks %s", version, p2pProtocolVersion)
 	}
 
-	// 2. ACK with our identity and challenge.
+	// 2. ACK with our identity, a fresh ephemeral key, and a challenge.
 	serverNonce, err := randomNonce()
 	if err != nil {
 		return nil, nil, err
 	}
-	if err := writeLine(conn, "ACK %s %s %s %d",
-		identity.NodeID, b64([]byte(identity.PublicPEM)), b64(serverNonce), time.Now().Unix()); err != nil {
+	serverEphemeral, err := newEphemeralKeyPair()
+	if err != nil {
+		return nil, nil, err
+	}
+	if err := writeLine(conn, "ACK %s %s %s %s %d",
+		identity.NodeID, b64([]byte(identity.PublicPEM)), b64(serverEphemeral.public),
+		b64(serverNonce), time.Now().Unix()); err != nil {
 		return nil, nil, fmt.Errorf("send ACK: %w", err)
 	}
 
@@ -406,7 +463,7 @@ func (p *P2P) serverHandshake(conn net.Conn) (*secureConn, *authenticatedPeer, e
 		return nil, nil, fmt.Errorf("receive AUTH: %w", err)
 	}
 	authFields := strings.Fields(strings.TrimSpace(authLine))
-	if len(authFields) < 5 || authFields[0] != "AUTH" {
+	if len(authFields) < 6 || authFields[0] != "AUTH" {
 		return nil, nil, fmt.Errorf("malformed AUTH from peer")
 	}
 
@@ -415,19 +472,29 @@ func (p *P2P) serverHandshake(conn net.Conn) (*secureConn, *authenticatedPeer, e
 	if err != nil {
 		return nil, nil, err
 	}
-	clientNonce, err := decodeB64Bytes(authFields[3], "nonce")
+	clientEphemeral, err := decodeB64Bytes(authFields[3], "ephemeral key")
 	if err != nil {
 		return nil, nil, err
 	}
-	signature, err := decodeB64Bytes(authFields[4], "signature")
+	clientNonce, err := decodeB64Bytes(authFields[4], "nonce")
+	if err != nil {
+		return nil, nil, err
+	}
+	signature, err := decodeB64Bytes(authFields[5], "signature")
 	if err != nil {
 		return nil, nil, err
 	}
 	peerAddress := ""
-	if len(authFields) > 5 {
-		if decoded, err := decodeB64Field(authFields[5], "address"); err == nil {
+	if len(authFields) > 6 {
+		if decoded, err := decodeB64Field(authFields[6], "address"); err == nil {
 			peerAddress = decoded
 		}
+	}
+
+	// Validate the point before it reaches ECDH, and before spending a signature
+	// verification on it.
+	if _, err := parseEphemeralPublicKey(clientEphemeral); err != nil {
+		return nil, nil, err
 	}
 
 	if len(clientNonce) != p2pNonceSize {
@@ -441,13 +508,17 @@ func (p *P2P) serverHandshake(conn net.Conn) (*secureConn, *authenticatedPeer, e
 		return nil, nil, err
 	}
 
-	transcript := handshakeTranscript(peerID, identity.NodeID, clientNonce, serverNonce)
+	// The transcript covers the ephemeral keys, so a machine-in-the-middle cannot
+	// substitute its own without invalidating this signature.
+	transcript := handshakeTranscript(peerID, identity.NodeID, clientNonce, serverNonce,
+		clientEphemeral, serverEphemeral.public)
 	if err := VerifyPeerSignature(peerPublicPEM, transcript, signature); err != nil {
 		return nil, nil, fmt.Errorf("peer %s failed authentication: %w", peerID, err)
 	}
 
 	// 4. Prove our own identity in return, so the client knows who it reached.
-	ourTranscript := handshakeTranscript(identity.NodeID, peerID, serverNonce, clientNonce)
+	ourTranscript := handshakeTranscript(identity.NodeID, peerID, serverNonce, clientNonce,
+		serverEphemeral.public, clientEphemeral)
 	ourSignature, err := identity.Sign(ourTranscript)
 	if err != nil {
 		return nil, nil, err
@@ -456,10 +527,14 @@ func (p *P2P) serverHandshake(conn net.Conn) (*secureConn, *authenticatedPeer, e
 		return nil, nil, fmt.Errorf("send OK: %w", err)
 	}
 
-	key, err := deriveSessionKey(identity, peerPublicPEM, clientNonce, serverNonce)
+	key, err := deriveSessionKey(serverEphemeral, clientEphemeral, clientNonce, serverNonce)
 	if err != nil {
 		return nil, nil, err
 	}
+	// Drop the ephemeral private key. Nothing else may derive this session key
+	// from here on, which is what forward secrecy means in practice.
+	serverEphemeral.private = nil
+
 	secure, err := newSecureConn(conn, key)
 	if err != nil {
 		return nil, nil, err
@@ -500,7 +575,7 @@ func (p *P2P) clientHandshakeAuthenticated(conn net.Conn) (*secureConn, *authent
 		return nil, nil, fmt.Errorf("receive ACK: %w", err)
 	}
 	ackFields := strings.Fields(strings.TrimSpace(ackLine))
-	if len(ackFields) < 5 || ackFields[0] != "ACK" {
+	if len(ackFields) < 6 || ackFields[0] != "ACK" {
 		return nil, nil, fmt.Errorf("malformed ACK from peer")
 	}
 
@@ -509,13 +584,21 @@ func (p *P2P) clientHandshakeAuthenticated(conn net.Conn) (*secureConn, *authent
 	if err != nil {
 		return nil, nil, err
 	}
-	serverNonce, err := decodeB64Bytes(ackFields[3], "nonce")
+	serverEphemeral, err := decodeB64Bytes(ackFields[3], "ephemeral key")
 	if err != nil {
 		return nil, nil, err
 	}
-	timestamp, err := strconv.ParseInt(ackFields[4], 10, 64)
+	serverNonce, err := decodeB64Bytes(ackFields[4], "nonce")
+	if err != nil {
+		return nil, nil, err
+	}
+	timestamp, err := strconv.ParseInt(ackFields[5], 10, 64)
 	if err != nil {
 		return nil, nil, fmt.Errorf("malformed handshake timestamp: %w", err)
+	}
+
+	if _, err := parseEphemeralPublicKey(serverEphemeral); err != nil {
+		return nil, nil, err
 	}
 
 	// Freshness: an old recorded ACK must not be usable to impersonate a server.
@@ -533,20 +616,26 @@ func (p *P2P) clientHandshakeAuthenticated(conn net.Conn) (*secureConn, *authent
 		return nil, nil, err
 	}
 
-	// 3. AUTH: prove who we are.
+	// 3. AUTH: prove who we are, and bind our ephemeral key to that identity.
 	clientNonce, err := randomNonce()
 	if err != nil {
 		return nil, nil, err
 	}
-	transcript := handshakeTranscript(identity.NodeID, serverID, clientNonce, serverNonce)
+	clientEphemeral, err := newEphemeralKeyPair()
+	if err != nil {
+		return nil, nil, err
+	}
+
+	transcript := handshakeTranscript(identity.NodeID, serverID, clientNonce, serverNonce,
+		clientEphemeral.public, serverEphemeral)
 	signature, err := identity.Sign(transcript)
 	if err != nil {
 		return nil, nil, err
 	}
 
-	if err := writeLine(conn, "AUTH %s %s %s %s %s",
-		identity.NodeID, b64([]byte(identity.PublicPEM)), b64(clientNonce),
-		b64(signature), b64([]byte(p.selfAddressSnapshot()))); err != nil {
+	if err := writeLine(conn, "AUTH %s %s %s %s %s %s",
+		identity.NodeID, b64([]byte(identity.PublicPEM)), b64(clientEphemeral.public),
+		b64(clientNonce), b64(signature), b64([]byte(p.selfAddressSnapshot()))); err != nil {
 		return nil, nil, fmt.Errorf("send AUTH: %w", err)
 	}
 
@@ -564,15 +653,20 @@ func (p *P2P) clientHandshakeAuthenticated(conn net.Conn) (*secureConn, *authent
 		return nil, nil, err
 	}
 
-	serverTranscript := handshakeTranscript(serverID, identity.NodeID, serverNonce, clientNonce)
+	serverTranscript := handshakeTranscript(serverID, identity.NodeID, serverNonce, clientNonce,
+		serverEphemeral, clientEphemeral.public)
 	if err := VerifyPeerSignature(serverPublicPEM, serverTranscript, serverSignature); err != nil {
 		return nil, nil, fmt.Errorf("peer %s failed authentication: %w", serverID, err)
 	}
 
-	key, err := deriveSessionKey(identity, serverPublicPEM, clientNonce, serverNonce)
+	key, err := deriveSessionKey(clientEphemeral, serverEphemeral, clientNonce, serverNonce)
 	if err != nil {
 		return nil, nil, err
 	}
+	// Drop the ephemeral private key: from here on nothing can re-derive this
+	// session key, including this node's own identity key.
+	clientEphemeral.private = nil
+
 	secure, err := newSecureConn(conn, key)
 	if err != nil {
 		return nil, nil, err

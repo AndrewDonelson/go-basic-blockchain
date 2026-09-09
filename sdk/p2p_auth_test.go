@@ -151,15 +151,21 @@ func TestSignAndVerifyRoundTrip(t *testing.T) {
 func TestTranscriptBindsBothPartiesAndBothNonces(t *testing.T) {
 	nonceA := []byte("nonce-a")
 	nonceB := []byte("nonce-b")
+	ephA := []byte("ephemeral-a")
+	ephB := []byte("ephemeral-b")
 
-	base := handshakeTranscript("alice", "bob", nonceA, nonceB)
+	base := handshakeTranscript("alice", "bob", nonceA, nonceB, ephA, ephB)
 
 	variations := map[string][]byte{
-		"different signer":     handshakeTranscript("mallory", "bob", nonceA, nonceB),
-		"different peer":       handshakeTranscript("alice", "mallory", nonceA, nonceB),
-		"different own nonce":  handshakeTranscript("alice", "bob", []byte("other"), nonceB),
-		"different peer nonce": handshakeTranscript("alice", "bob", nonceA, []byte("other")),
-		"reflected":            handshakeTranscript("bob", "alice", nonceB, nonceA),
+		"different signer":     handshakeTranscript("mallory", "bob", nonceA, nonceB, ephA, ephB),
+		"different peer":       handshakeTranscript("alice", "mallory", nonceA, nonceB, ephA, ephB),
+		"different own nonce":  handshakeTranscript("alice", "bob", []byte("other"), nonceB, ephA, ephB),
+		"different peer nonce": handshakeTranscript("alice", "bob", nonceA, []byte("other"), ephA, ephB),
+		"reflected":            handshakeTranscript("bob", "alice", nonceB, nonceA, ephB, ephA),
+		// The ephemeral keys must be covered, or a machine-in-the-middle could
+		// substitute its own and reuse the identity signature unchanged.
+		"different own ephemeral":  handshakeTranscript("alice", "bob", nonceA, nonceB, []byte("swapped"), ephB),
+		"different peer ephemeral": handshakeTranscript("alice", "bob", nonceA, nonceB, ephA, []byte("swapped")),
 	}
 
 	for name, variant := range variations {
@@ -174,8 +180,8 @@ func TestTranscriptBindsBothPartiesAndBothNonces(t *testing.T) {
 func TestTranscriptFieldsCannotBeShifted(t *testing.T) {
 	n := []byte("n")
 	if bytes.Equal(
-		handshakeTranscript("ab", "c", n, n),
-		handshakeTranscript("a", "bc", n, n),
+		handshakeTranscript("ab", "c", n, n, n, n),
+		handshakeTranscript("a", "bc", n, n, n, n),
 	) {
 		t.Fatal("transcript fields are ambiguous: shifting a byte between them " +
 			"produces the same signed bytes")
@@ -189,47 +195,86 @@ func TestTranscriptFieldsCannotBeShifted(t *testing.T) {
 // TestSessionKeysAgreeAndAreUnique: both sides must derive the same key, and no
 // two sessions may share one.
 func TestSessionKeysAgreeAndAreUnique(t *testing.T) {
-	alice, _ := NewPeerIdentity()
-	bob, _ := NewPeerIdentity()
+	clientEph, err := newEphemeralKeyPair()
+	if err != nil {
+		t.Fatalf("ephemeral: %v", err)
+	}
+	serverEph, err := newEphemeralKeyPair()
+	if err != nil {
+		t.Fatalf("ephemeral: %v", err)
+	}
 
 	clientNonce, _ := randomNonce()
 	serverNonce, _ := randomNonce()
 
-	aliceKey, err := deriveSessionKey(alice, bob.PublicPEM, clientNonce, serverNonce)
+	clientKey, err := deriveSessionKey(clientEph, serverEph.public, clientNonce, serverNonce)
 	if err != nil {
-		t.Fatalf("alice derive: %v", err)
+		t.Fatalf("client derive: %v", err)
 	}
-	bobKey, err := deriveSessionKey(bob, alice.PublicPEM, clientNonce, serverNonce)
+	serverKey, err := deriveSessionKey(serverEph, clientEph.public, clientNonce, serverNonce)
 	if err != nil {
-		t.Fatalf("bob derive: %v", err)
+		t.Fatalf("server derive: %v", err)
 	}
 
-	if !bytes.Equal(aliceKey, bobKey) {
+	if !bytes.Equal(clientKey, serverKey) {
 		t.Fatal("the two sides derived different session keys")
 	}
-	if len(aliceKey) != 32 {
-		t.Fatalf("expected a 32-byte key, got %d", len(aliceKey))
+	if len(clientKey) != 32 {
+		t.Fatalf("expected a 32-byte key, got %d", len(clientKey))
 	}
 
-	// Different nonces must give a different key, or a recorded session could be
-	// replayed and decrypted later.
+	// Different nonces must give a different key.
 	otherNonce, _ := randomNonce()
-	rekeyed, err := deriveSessionKey(alice, bob.PublicPEM, clientNonce, otherNonce)
+	rekeyed, err := deriveSessionKey(clientEph, serverEph.public, clientNonce, otherNonce)
 	if err != nil {
 		t.Fatalf("derive: %v", err)
 	}
-	if bytes.Equal(aliceKey, rekeyed) {
+	if bytes.Equal(clientKey, rekeyed) {
 		t.Fatal("changing a nonce did not change the session key")
 	}
 
-	// A third party must not be able to derive the key.
-	mallory, _ := NewPeerIdentity()
-	malloryKey, err := deriveSessionKey(mallory, alice.PublicPEM, clientNonce, serverNonce)
+	// A third party's ephemeral key must not derive the same secret.
+	mallory, _ := newEphemeralKeyPair()
+	malloryKey, err := deriveSessionKey(mallory, serverEph.public, clientNonce, serverNonce)
 	if err != nil {
 		t.Fatalf("derive: %v", err)
 	}
-	if bytes.Equal(malloryKey, aliceKey) {
-		t.Fatal("an unrelated key derived the same session key")
+	if bytes.Equal(malloryKey, clientKey) {
+		t.Fatal("an unrelated ephemeral key derived the same session key")
+	}
+}
+
+// TestDeriveSessionKeyRejectsInvalidPoints guards invalid-curve and
+// small-subgroup attacks: feeding a crafted "public key" into ECDH can leak bits
+// of the private key, so the point is validated before it is ever used.
+func TestDeriveSessionKeyRejectsInvalidPoints(t *testing.T) {
+	local, err := newEphemeralKeyPair()
+	if err != nil {
+		t.Fatalf("ephemeral: %v", err)
+	}
+	nonce, _ := randomNonce()
+
+	cases := []struct {
+		name string
+		raw  []byte
+	}{
+		{"empty", nil},
+		{"too short", []byte{0x04, 0x01, 0x02}},
+		{"identity point", make([]byte, 65)},
+		{"not on the curve", append([]byte{0x04}, bytes.Repeat([]byte{0xff}, 64)...)},
+		{"wrong length", bytes.Repeat([]byte{0x04}, 100)},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := deriveSessionKey(local, tc.raw, nonce, nonce); err == nil {
+				t.Fatalf("a %s ephemeral key was accepted", tc.name)
+			}
+		})
+	}
+
+	if _, err := deriveSessionKey(nil, local.public, nonce, nonce); err == nil {
+		t.Fatal("deriving with no local ephemeral key must fail")
 	}
 }
 
@@ -516,18 +561,24 @@ func TestSpoofedNodeIDIsRefused(t *testing.T) {
 		t.Fatalf("ack: %v", err)
 	}
 	ackFields := strings.Fields(strings.TrimSpace(ack))
-	if len(ackFields) < 4 {
+	if len(ackFields) < 6 {
 		t.Fatalf("malformed ACK: %q", ack)
 	}
 	serverID := ackFields[1]
-	serverNonce, err := base64.StdEncoding.DecodeString(ackFields[3])
+	serverEphemeral, err := base64.StdEncoding.DecodeString(ackFields[3])
+	if err != nil {
+		t.Fatalf("ephemeral: %v", err)
+	}
+	serverNonce, err := base64.StdEncoding.DecodeString(ackFields[4])
 	if err != nil {
 		t.Fatalf("nonce: %v", err)
 	}
 
 	// Claim the victim's ID while holding only the attacker's key.
 	clientNonce, _ := randomNonce()
-	transcript := handshakeTranscript(victim.NodeID, serverID, clientNonce, serverNonce)
+	clientEph, _ := newEphemeralKeyPair()
+	transcript := handshakeTranscript(victim.NodeID, serverID, clientNonce, serverNonce,
+		clientEph.public, serverEphemeral)
 	signature, err := attacker.Sign(transcript)
 	if err != nil {
 		t.Fatalf("sign: %v", err)
@@ -537,6 +588,7 @@ func TestSpoofedNodeIDIsRefused(t *testing.T) {
 		"AUTH",
 		victim.NodeID, // the claim
 		base64.StdEncoding.EncodeToString([]byte(attacker.PublicPEM)), // the actual key
+		base64.StdEncoding.EncodeToString(clientEph.public),
 		base64.StdEncoding.EncodeToString(clientNonce),
 		base64.StdEncoding.EncodeToString(signature),
 		base64.StdEncoding.EncodeToString([]byte("127.0.0.1:1")),
@@ -576,16 +628,20 @@ func TestHandshakeWithAWrongSignatureIsRefused(t *testing.T) {
 		t.Fatalf("ack: %v", err)
 	}
 	ackFields := strings.Fields(strings.TrimSpace(ack))
-	serverNonce, _ := base64.StdEncoding.DecodeString(ackFields[3])
+	serverEphemeral, _ := base64.StdEncoding.DecodeString(ackFields[3])
+	serverNonce, _ := base64.StdEncoding.DecodeString(ackFields[4])
 
 	clientNonce, _ := randomNonce()
+	clientEph, _ := newEphemeralKeyPair()
 	// Signed by a key the attacker is not presenting.
-	transcript := handshakeTranscript(attacker.NodeID, ackFields[1], clientNonce, serverNonce)
+	transcript := handshakeTranscript(attacker.NodeID, ackFields[1], clientNonce, serverNonce,
+		clientEph.public, serverEphemeral)
 	signature, _ := unrelated.Sign(transcript)
 
 	_, _ = conn.Write([]byte(strings.Join([]string{
 		"AUTH", attacker.NodeID,
 		base64.StdEncoding.EncodeToString([]byte(attacker.PublicPEM)),
+		base64.StdEncoding.EncodeToString(clientEph.public),
 		base64.StdEncoding.EncodeToString(clientNonce),
 		base64.StdEncoding.EncodeToString(signature),
 		base64.StdEncoding.EncodeToString([]byte("127.0.0.1:1")),
@@ -603,7 +659,7 @@ func TestHandshakeWithAWrongSignatureIsRefused(t *testing.T) {
 func TestProtocolVersionMismatchIsRefused(t *testing.T) {
 	_, address := startPeer(t, "server", syncTestChain(t, 1))
 
-	for _, greeting := range []string{"HELLO", "HELLO gbb/1", "HELLO nonsense", "GARBAGE"} {
+	for _, greeting := range []string{"HELLO", "HELLO gbb/1", "HELLO gbb/2", "HELLO nonsense", "GARBAGE"} {
 		conn, err := net.DialTimeout("tcp", address, 3*time.Second)
 		if err != nil {
 			t.Fatalf("dial: %v", err)
@@ -682,9 +738,11 @@ func TestStaleHandshakeIsRefused(t *testing.T) {
 			return
 		}
 		nonce, _ := randomNonce()
+		eph, _ := newEphemeralKeyPair()
 		_, _ = conn.Write([]byte(strings.Join([]string{
 			"ACK", identity.NodeID,
 			base64.StdEncoding.EncodeToString([]byte(identity.PublicPEM)),
+			base64.StdEncoding.EncodeToString(eph.public),
 			base64.StdEncoding.EncodeToString(nonce),
 			time.Unix(staleTimestamp, 0).UTC().Format("20060102"),
 		}, " ") + "\n"))
@@ -909,5 +967,395 @@ func TestSyncOnceHandlesNilContext(t *testing.T) {
 
 	if _, err := s.SyncOnce(nil); err != nil && !errors.Is(err, context.Canceled) {
 		t.Fatalf("a nil context must not panic: %v", err)
+	}
+}
+
+// -----------------------------------------------------------------------------
+// Forward secrecy
+// -----------------------------------------------------------------------------
+
+// TestSessionKeyDoesNotDependOnIdentityKeys is the structural heart of forward
+// secrecy: identity keys are not an input to the session key at all.
+//
+// The previous design derived the key from the long-term identity keys directly,
+// so anyone who later obtained a node's identity key could decrypt every session
+// it had ever had, including ones recorded months earlier.
+func TestSessionKeyDoesNotDependOnIdentityKeys(t *testing.T) {
+	clientEph, err := newEphemeralKeyPair()
+	if err != nil {
+		t.Fatalf("ephemeral: %v", err)
+	}
+	serverEph, err := newEphemeralKeyPair()
+	if err != nil {
+		t.Fatalf("ephemeral: %v", err)
+	}
+
+	clientNonce, _ := randomNonce()
+	serverNonce, _ := randomNonce()
+
+	key, err := deriveSessionKey(clientEph, serverEph.public, clientNonce, serverNonce)
+	if err != nil {
+		t.Fatalf("derive: %v", err)
+	}
+
+	// Deriving again with the same ephemeral material gives the same key,
+	// regardless of which identities are involved -- there is nowhere for an
+	// identity key to enter the computation.
+	again, err := deriveSessionKey(clientEph, serverEph.public, clientNonce, serverNonce)
+	if err != nil {
+		t.Fatalf("derive: %v", err)
+	}
+	if !bytes.Equal(key, again) {
+		t.Fatal("derivation is not deterministic in its ephemeral inputs")
+	}
+}
+
+// TestEveryHandshakeUsesFreshEphemeralKeys: two connections between the same pair
+// of nodes must not reuse key material. If they did, compromising one session
+// would compromise the other.
+func TestEveryHandshakeUsesFreshEphemeralKeys(t *testing.T) {
+	_, address := startPeer(t, "server", syncTestChain(t, 1))
+	client := newTestP2P(t, "127.0.0.1:0")
+
+	seenClient := map[string]struct{}{}
+	seenServer := map[string]struct{}{}
+
+	for i := 0; i < 5; i++ {
+		clientEph, serverEph := observeHandshakeEphemerals(t, client, address)
+
+		if _, dup := seenClient[string(clientEph)]; dup {
+			t.Fatal("the client reused an ephemeral key across handshakes")
+		}
+		if _, dup := seenServer[string(serverEph)]; dup {
+			t.Fatal("the server reused an ephemeral key across handshakes")
+		}
+		seenClient[string(clientEph)] = struct{}{}
+		seenServer[string(serverEph)] = struct{}{}
+	}
+}
+
+// observeHandshakeEphemerals performs one handshake by hand and returns both
+// ephemeral public keys as they appeared on the wire.
+func observeHandshakeEphemerals(t *testing.T, client *P2P, address string) (clientEph, serverEph []byte) {
+	t.Helper()
+
+	conn, err := net.DialTimeout("tcp", address, 3*time.Second)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer conn.Close()
+
+	identity := client.Identity()
+	reader := bufio.NewReader(conn)
+
+	if _, err := conn.Write([]byte("HELLO " + p2pProtocolVersion + "\n")); err != nil {
+		t.Fatalf("hello: %v", err)
+	}
+	ack, err := reader.ReadString('\n')
+	if err != nil {
+		t.Fatalf("ack: %v", err)
+	}
+	fields := strings.Fields(strings.TrimSpace(ack))
+	if len(fields) < 6 {
+		t.Fatalf("malformed ACK: %q", ack)
+	}
+
+	serverEph, err = base64.StdEncoding.DecodeString(fields[3])
+	if err != nil {
+		t.Fatalf("server ephemeral: %v", err)
+	}
+	serverNonce, err := base64.StdEncoding.DecodeString(fields[4])
+	if err != nil {
+		t.Fatalf("server nonce: %v", err)
+	}
+
+	pair, err := newEphemeralKeyPair()
+	if err != nil {
+		t.Fatalf("ephemeral: %v", err)
+	}
+	clientNonce, _ := randomNonce()
+
+	transcript := handshakeTranscript(identity.NodeID, fields[1], clientNonce, serverNonce,
+		pair.public, serverEph)
+	signature, err := identity.Sign(transcript)
+	if err != nil {
+		t.Fatalf("sign: %v", err)
+	}
+
+	_, err = conn.Write([]byte(strings.Join([]string{
+		"AUTH", identity.NodeID,
+		base64.StdEncoding.EncodeToString([]byte(identity.PublicPEM)),
+		base64.StdEncoding.EncodeToString(pair.public),
+		base64.StdEncoding.EncodeToString(clientNonce),
+		base64.StdEncoding.EncodeToString(signature),
+		base64.StdEncoding.EncodeToString([]byte("127.0.0.1:1")),
+	}, " ") + "\n"))
+	if err != nil {
+		t.Fatalf("auth: %v", err)
+	}
+
+	if _, err := reader.ReadString('\n'); err != nil {
+		t.Fatalf("ok: %v", err)
+	}
+	return pair.public, serverEph
+}
+
+// TestCompromisedIdentityKeysCannotDecryptARecordedSession is the property in its
+// operational form.
+//
+// It records a real session's wire bytes, then hands an attacker *both* nodes'
+// long-term identity private keys -- total compromise, after the fact -- and
+// confirms the recorded traffic still cannot be decrypted. The ephemeral private
+// keys were never transmitted and were dropped when the handshake finished, so
+// there is nothing left that reconstructs the session key.
+func TestCompromisedIdentityKeysCannotDecryptARecordedSession(t *testing.T) {
+	chain := syncTestChain(t, 2)
+	server, serverAddress := startPeer(t, "server", chain)
+
+	// Record everything crossing the wire.
+	proxy, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer proxy.Close()
+
+	var (
+		mu       sync.Mutex
+		recorded bytes.Buffer
+	)
+
+	go func() {
+		downstream, err := proxy.Accept()
+		if err != nil {
+			return
+		}
+		defer downstream.Close()
+
+		upstream, err := net.Dial("tcp", serverAddress)
+		if err != nil {
+			return
+		}
+		defer upstream.Close()
+
+		record := func(dst io.Writer, src io.Reader) {
+			buf := make([]byte, 4096)
+			for {
+				n, err := src.Read(buf)
+				if n > 0 {
+					mu.Lock()
+					recorded.Write(buf[:n])
+					mu.Unlock()
+					if _, werr := dst.Write(buf[:n]); werr != nil {
+						return
+					}
+				}
+				if err != nil {
+					return
+				}
+			}
+		}
+		go record(upstream, downstream)
+		record(downstream, upstream)
+	}()
+
+	client := newTestP2P(t, "127.0.0.1:0")
+	pc, err := client.dialPeer(proxy.Addr().String())
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+
+	if _, err := pc.request(cmdGetStatus); err != nil {
+		t.Fatalf("request: %v", err)
+	}
+	pc.close()
+
+	time.Sleep(100 * time.Millisecond)
+
+	mu.Lock()
+	wire := recorded.Bytes()
+	mu.Unlock()
+
+	if len(wire) == 0 {
+		t.Fatal("nothing was recorded; the test is not measuring anything")
+	}
+	if bytes.Contains(wire, []byte(cmdGetStatus)) {
+		t.Fatal("the request was in plaintext on the wire")
+	}
+
+	// The attacker now holds BOTH long-term identity private keys.
+	clientIdentity := client.Identity()
+	serverIdentity := server.Identity()
+
+	// The best they can do is a static-static ECDH between the two identity keys
+	// -- which is exactly what the previous design used as the session key.
+	clientECDH, err := clientIdentity.privateKey.ECDH()
+	if err != nil {
+		t.Fatalf("ecdh: %v", err)
+	}
+	serverPub, err := parsePeerPublicKey(serverIdentity.PublicPEM)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	serverECDH, err := serverPub.ECDH()
+	if err != nil {
+		t.Fatalf("ecdh: %v", err)
+	}
+	staticShared, err := clientECDH.ECDH(serverECDH)
+	if err != nil {
+		t.Fatalf("ecdh: %v", err)
+	}
+
+	// Try every nonce ordering they could recover from the recorded handshake.
+	nonces := extractHandshakeNonces(t, wire)
+	for _, salt := range nonces {
+		guessed, err := hkdfSHA256(staticShared, salt, []byte(p2pSessionContext), 32)
+		if err != nil {
+			t.Fatalf("hkdf: %v", err)
+		}
+		if decryptsRecordedSession(wire, guessed) {
+			t.Fatal("the recorded session was decrypted using only the long-term " +
+				"identity keys -- there is no forward secrecy")
+		}
+	}
+}
+
+// extractHandshakeNonces pulls candidate nonce salts out of a recorded handshake.
+func extractHandshakeNonces(t *testing.T, wire []byte) [][]byte {
+	t.Helper()
+
+	var candidates [][]byte
+
+	// The handshake lines are plaintext, so an attacker can read the nonces.
+	lines := strings.Split(string(wire), "\n")
+	var nonces [][]byte
+	for _, line := range lines {
+		fields := strings.Fields(line)
+		switch {
+		case len(fields) >= 6 && fields[0] == "ACK":
+			if n, err := base64.StdEncoding.DecodeString(fields[4]); err == nil {
+				nonces = append(nonces, n)
+			}
+		case len(fields) >= 6 && fields[0] == "AUTH":
+			if n, err := base64.StdEncoding.DecodeString(fields[4]); err == nil {
+				nonces = append(nonces, n)
+			}
+		}
+	}
+
+	// Both orderings, plus each alone.
+	for _, a := range nonces {
+		candidates = append(candidates, a)
+		for _, b := range nonces {
+			candidates = append(candidates, append(append([]byte{}, a...), b...))
+		}
+	}
+	return candidates
+}
+
+// decryptsRecordedSession reports whether a candidate key opens any record in the
+// recorded traffic.
+func decryptsRecordedSession(wire, key []byte) bool {
+	conn, err := newSecureConn(&bufferConn{Buffer: bytes.NewBuffer(nil)}, key)
+	if err != nil {
+		return false
+	}
+
+	// Walk the stream looking for a record this key can open.
+	for offset := 0; offset+4 < len(wire); offset++ {
+		length := int(wire[offset])<<24 | int(wire[offset+1])<<16 |
+			int(wire[offset+2])<<8 | int(wire[offset+3])
+		if length <= 0 || length > 4096 || offset+4+length > len(wire) {
+			continue
+		}
+		sealed := wire[offset+4 : offset+4+length]
+		for seq := uint64(0); seq < 4; seq++ {
+			if _, err := conn.aead.Open(nil, recordNonce(conn.aead, seq), sealed, nil); err == nil {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// TestEphemeralKeyIsBoundToIdentity is the machine-in-the-middle case.
+//
+// An anonymous Diffie-Hellman exchange is wide open to a MITM: relay the identity
+// handshake untouched, substitute your own ephemeral key on each side, and you
+// hold both session keys. Signing the transcript that covers the ephemeral keys
+// is what closes that, and this test substitutes a key to prove the signature
+// actually catches it.
+func TestEphemeralKeyIsBoundToIdentity(t *testing.T) {
+	_, address := startPeer(t, "server", syncTestChain(t, 1))
+
+	client := newTestP2P(t, "127.0.0.1:0")
+	identity := client.Identity()
+
+	conn, err := net.DialTimeout("tcp", address, 3*time.Second)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer conn.Close()
+
+	reader := bufio.NewReader(conn)
+	if _, err := conn.Write([]byte("HELLO " + p2pProtocolVersion + "\n")); err != nil {
+		t.Fatalf("hello: %v", err)
+	}
+	ack, err := reader.ReadString('\n')
+	if err != nil {
+		t.Fatalf("ack: %v", err)
+	}
+	fields := strings.Fields(strings.TrimSpace(ack))
+	if len(fields) < 6 {
+		t.Fatalf("malformed ACK: %q", ack)
+	}
+	serverEph, _ := base64.StdEncoding.DecodeString(fields[3])
+	serverNonce, _ := base64.StdEncoding.DecodeString(fields[4])
+
+	// Sign a transcript committing to one ephemeral key...
+	honest, _ := newEphemeralKeyPair()
+	clientNonce, _ := randomNonce()
+	transcript := handshakeTranscript(identity.NodeID, fields[1], clientNonce, serverNonce,
+		honest.public, serverEph)
+	signature, err := identity.Sign(transcript)
+	if err != nil {
+		t.Fatalf("sign: %v", err)
+	}
+
+	// ...then send a different one, as a MITM would.
+	substituted, _ := newEphemeralKeyPair()
+	_, err = conn.Write([]byte(strings.Join([]string{
+		"AUTH", identity.NodeID,
+		base64.StdEncoding.EncodeToString([]byte(identity.PublicPEM)),
+		base64.StdEncoding.EncodeToString(substituted.public), // swapped
+		base64.StdEncoding.EncodeToString(clientNonce),
+		base64.StdEncoding.EncodeToString(signature),
+		base64.StdEncoding.EncodeToString([]byte("127.0.0.1:1")),
+	}, " ") + "\n"))
+	if err != nil {
+		t.Fatalf("auth: %v", err)
+	}
+
+	_ = conn.SetReadDeadline(time.Now().Add(3 * time.Second))
+	line, err := reader.ReadString('\n')
+	if err == nil && strings.HasPrefix(strings.TrimSpace(line), "OK") {
+		t.Fatal("the server accepted an ephemeral key the signature did not cover: " +
+			"a machine-in-the-middle could substitute its own key and hold the session")
+	}
+}
+
+// TestTwoSessionsBetweenTheSamePeersUseDifferentKeys is forward secrecy's
+// practical consequence: breaking one session must not break another.
+func TestTwoSessionsBetweenTheSamePeersUseDifferentKeys(t *testing.T) {
+	_, address := startPeer(t, "server", syncTestChain(t, 1))
+	client := newTestP2P(t, "127.0.0.1:0")
+
+	firstClientEph, firstServerEph := observeHandshakeEphemerals(t, client, address)
+	secondClientEph, secondServerEph := observeHandshakeEphemerals(t, client, address)
+
+	if bytes.Equal(firstClientEph, secondClientEph) {
+		t.Fatal("the client reused its ephemeral key between two sessions")
+	}
+	if bytes.Equal(firstServerEph, secondServerEph) {
+		t.Fatal("the server reused its ephemeral key between two sessions")
 	}
 }

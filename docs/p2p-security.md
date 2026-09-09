@@ -45,16 +45,19 @@ change the node's identity without telling anyone.
 
 ```
 client → HELLO <version>
-server → ACK   <serverID> <serverPubPEM> <serverNonce> <unixSeconds>
-client → AUTH  <clientID> <clientPubPEM> <clientNonce> <signature> <address>
+server → ACK   <serverID> <serverPubPEM> <serverEphPub> <serverNonce> <unixSeconds>
+client → AUTH  <clientID> <clientPubPEM> <clientEphPub> <clientNonce> <signature> <address>
 server → OK    <signature>
                         ... both sides switch to an encrypted stream ...
 ```
 
-Both sides sign a transcript covering **both nonces and both node IDs**:
+Both sides sign a transcript covering **both nonces, both node IDs, and both
+ephemeral public keys**:
 
 ```
-"gbb-p2p-auth-v1" ‖ 0 ‖ signerID ‖ 0 ‖ peerID ‖ 0 ‖ signerNonce ‖ 0 ‖ peerNonce
+"gbb-p2p-auth-v1" ‖ 0 ‖ signerID ‖ 0 ‖ peerID
+                  ‖ 0 ‖ signerNonce ‖ 0 ‖ peerNonce
+                  ‖ 0 ‖ signerEphemeral ‖ 0 ‖ peerEphemeral
 ```
 
 Every part of that earns its place:
@@ -64,11 +67,13 @@ Every part of that earns its place:
 | Context string | A handshake signature being replayed as a transaction signature |
 | Both node IDs | A captured signature being replayed against a *different* peer |
 | Both nonces | Replay of an earlier session between the same peers |
+| **Both ephemeral keys** | **A machine-in-the-middle substituting its own key** |
 | Asymmetric ordering | A signature being reflected back at its own author |
 | `0` separators | Field-shifting: `("ab","c")` and `("a","bc")` producing the same bytes |
 
-`TestTranscriptBindsBothPartiesAndBothNonces` and
-`TestTranscriptFieldsCannotBeShifted` pin all of these.
+`TestTranscriptBindsBothPartiesAndBothNonces`,
+`TestTranscriptFieldsCannotBeShifted` and `TestEphemeralKeyIsBoundToIdentity` pin
+all of these.
 
 ### Replay protection
 
@@ -78,29 +83,59 @@ so a peer opening endless connections cannot exhaust memory.
 
 ### Protocol version
 
-`HELLO gbb/2`. A peer speaking anything else is refused rather than
-half-understood. **This is a breaking change** — nodes running the previous
-protocol cannot connect.
+`HELLO gbb/3`. A peer speaking anything else is refused rather than
+half-understood. **This is a breaking change** — nodes running `gbb/2` or earlier
+cannot connect, because the handshake now carries ephemeral keys.
 
-## 🔒 Session encryption
+## 🔒 Session encryption and forward secrecy
 
 Authentication alone would not be enough. On a plaintext channel an active
 attacker can let a valid handshake through and then rewrite everything after it,
 so authentication and confidentiality have to stand or fall together.
 
-The session key is derived by **ECDH over the same identity keys**, with both
-nonces as salt:
+The session key comes from **ephemeral ECDH**. Each side generates a fresh P-256
+keypair per handshake, exchanges the public half, and discards the private half
+as soon as the key is derived:
 
 ```
-shared = ECDH(myIdentityKey, peerIdentityKey)
+shared = ECDH(myEphemeralKey, peerEphemeralKey)     ← single-use, never transmitted
 key    = HKDF-SHA256(shared, salt = clientNonce ‖ serverNonce,
                      info = "gbb-p2p-session-v1", 32 bytes)
 ```
 
-Binding the key to the authenticated identities is the point: an attacker who
-cannot produce a valid signature also cannot derive the key. And because both
-nonces are salt, every session gets a distinct key — without that, a recorded
-session could be decrypted later by replaying the handshake.
+**Long-term identity keys are deliberately not an input.** They authenticate the
+exchange — each side signs a transcript covering both ephemeral public keys — but
+they never contribute to the key itself.
+
+That separation is what forward secrecy means. An earlier version derived the key
+from the identity keys directly (`ECDH(myIdentityKey, peerIdentityKey)`), so
+anyone who later obtained a node's identity key could decrypt **every session it
+had ever had**, including traffic recorded months earlier. Now the only material
+that can produce the key is a pair of private values that existed for the length
+of one handshake and were never sent anywhere.
+
+`TestCompromisedIdentityKeysCannotDecryptARecordedSession` demonstrates this
+operationally: it records a real session's wire bytes, hands an attacker **both**
+nodes' identity private keys, and confirms the traffic still cannot be decrypted.
+
+### Why the ephemeral keys must be signed
+
+An anonymous Diffie-Hellman exchange is wide open to a machine-in-the-middle:
+relay the identity handshake untouched, substitute your own ephemeral key on each
+side, and you hold both session keys while both peers believe they authenticated
+each other.
+
+Signing a transcript that covers the ephemeral keys closes that — a substituted
+key invalidates the signature. `TestEphemeralKeyIsBoundToIdentity` performs
+exactly that substitution and asserts the server refuses it.
+
+### Point validation
+
+`ecdh.P256().NewPublicKey()` rejects points that are not on the curve and the
+identity point, and the check runs **before** the point reaches ECDH. Feeding a
+crafted "public key" into a Diffie-Hellman computation can otherwise leak bits of
+the private key — the invalid-curve and small-subgroup attacks.
+`TestDeriveSessionKeyRejectsInvalidPoints` covers the cases.
 
 Traffic is then **AES-256-GCM** in length-prefixed records, with the record
 sequence number as the nonce. That is safe because the key is fresh per session,
@@ -131,7 +166,8 @@ a misconfigured list cannot accidentally create an empty-ID allowance.
 | Setting | Value |
 |---|---|
 | Identity key | `{DATA_PATH}/node_identity.pem`, mode `0600` |
-| Curve | ECDSA P-256 (signatures and ECDH) |
+| Identity key | ECDSA P-256 (signatures) |
+| Session key exchange | Ephemeral ECDH P-256, fresh per handshake |
 | KDF | HKDF-SHA256 |
 | Cipher | AES-256-GCM |
 | Nonce size | 32 bytes |
@@ -154,9 +190,11 @@ peer's word for its key. Use `P2P_ALLOWED_PEERS` where the peer set is known.
 **No revocation.** A compromised key is only excluded by removing it from an
 allowlist; there is no revocation list or key rotation protocol.
 
-**No forward secrecy.** The session key comes from long-term identity keys, so
-someone who later obtains a node's identity key can decrypt recorded sessions. An
-ephemeral ECDH exchange would fix this and is the natural next step.
+**Ephemeral private keys are dropped, not wiped.** The reference is released once
+the session key is derived, but Go gives no way to zero the underlying memory, so
+a key could survive in a heap dump or swap file until it is collected. This
+weakens forward secrecy against an attacker with live memory access, though not
+against one who compromises the identity key later.
 
 **The handshake is in the clear.** It carries public keys and nonces, which is
 harmless for confidentiality, but a passive observer can see which node IDs are
@@ -184,6 +222,12 @@ a flood of connections is a plausible denial-of-service vector.
 | `TestStaleHandshakeIsRefused` | Freshness window |
 | `TestProtocolVersionMismatchIsRefused` | No half-understood peers |
 | `TestSessionKeysAgreeAndAreUnique` | Both sides agree; third parties cannot |
+| `TestSessionKeyDoesNotDependOnIdentityKeys` | Identity keys are not an input |
+| `TestCompromisedIdentityKeysCannotDecryptARecordedSession` | **Forward secrecy, with both identity keys handed to the attacker** |
+| `TestEphemeralKeyIsBoundToIdentity` | **A substituted ephemeral key is refused** |
+| `TestEveryHandshakeUsesFreshEphemeralKeys` | No key reuse across sessions |
+| `TestTwoSessionsBetweenTheSamePeersUseDifferentKeys` | Breaking one session does not break another |
+| `TestDeriveSessionKeyRejectsInvalidPoints` | No invalid-curve attack |
 | `TestHKDFMatchesRFC5869` | The local HKDF is correct |
 | `TestSecureConnActuallyEncrypts` | Plaintext never hits the wire |
 | `TestSecureConnRejectsTamperedRecords` | GCM detects modification |

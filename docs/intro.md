@@ -78,7 +78,7 @@ Go Basic Blockchain is an educational blockchain implementation written in Go th
 | UTXO state model | ✅ Working — authoritative balances, double-spend prevention |
 | API layer | ✅ Working — fails closed, rate limited, paginated |
 | Chain synchronisation | ✅ Working — pull from longer peers, push mined blocks |
-| Peer authentication | ✅ Working — mutual auth, encrypted sessions |
+| Peer authentication | ✅ Working — mutual auth, forward-secret sessions |
 | Fork choice / reorganisation | ✅ Working — heaviest-chain by cumulative work |
 
 ### Performance Metrics
@@ -98,8 +98,8 @@ broken:
 - **Explicit transaction inputs.** The UTXO set selects inputs deterministically
   at apply time, so a transaction cannot be validated in isolation — you need the
   set as of its block.
-- **Forward secrecy in P2P sessions.** Session keys come from long-term identity
-  keys, so a later key compromise would expose recorded sessions.
+- **Wiping ephemeral keys from memory.** They are dropped once the session key is
+  derived, but Go cannot zero the underlying memory.
 
 ## 🎓 Learning Path
 
