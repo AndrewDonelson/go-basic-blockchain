@@ -50,6 +50,10 @@ func TestBlockchainStructure_BlockWithTransactions(t *testing.T) {
 	t.Logf("Wallet1 balance: %f", wallet1.GetBalance())
 	t.Logf("Wallet2 balance: %f", wallet2.GetBalance())
 
+	// Wallets no longer self-fund at creation, so seed the sender.
+	if err := wallet1.SetData("balance", 10.0+100.0); err != nil {
+		t.Fatalf("failed to fund wallet1: %v", err)
+	}
 	bankTx, err := NewBankTransaction(wallet1, wallet2, 10.0)
 	if err != nil {
 		t.Fatalf("Failed to create bank transaction: %v", err)
@@ -95,6 +99,10 @@ func TestBlockchainStructure_BlockValidation(t *testing.T) {
 	}
 
 	var bankTx *Bank
+	// Wallets no longer self-fund at creation, so seed the sender.
+	if err := wallet1.SetData("balance", 10.0+100.0); err != nil {
+		t.Fatalf("failed to fund wallet1: %v", err)
+	}
 	bankTx, err = NewBankTransaction(wallet1, wallet2, 10.0)
 	if err != nil {
 		t.Fatalf("Failed to create bank transaction: %v", err)
@@ -206,9 +214,17 @@ func TestBlockchainStructure_MerkleRootCalculation(t *testing.T) {
 	}
 
 	// Create multiple transactions
+	// Wallets no longer self-fund at creation, so seed the sender.
+	if err := wallet1.SetData("balance", 10.0+100.0); err != nil {
+		t.Fatalf("failed to fund wallet1: %v", err)
+	}
 	bankTx1, err := NewBankTransaction(wallet1, wallet2, 10.0)
 	if err != nil {
 		t.Fatalf("Failed to create bank transaction 1: %v", err)
+	}
+	// Wallets no longer self-fund at creation, so seed the sender.
+	if err := wallet2.SetData("balance", 5.0+100.0); err != nil {
+		t.Fatalf("failed to fund wallet2: %v", err)
 	}
 	bankTx2, err := NewBankTransaction(wallet2, wallet1, 5.0)
 	if err != nil {
@@ -380,22 +396,23 @@ func TestBlockchainStructure_BlockMining(t *testing.T) {
 	difficulty := 1 // Reduced difficulty for faster test execution
 
 	// Act - add timeout to prevent hanging
-	done := make(chan bool, 1)
+	done := make(chan error, 1)
 	go func() {
-		block.Mine(uint(difficulty))
-		done <- true
+		done <- block.Mine(uint(difficulty))
 	}()
 
 	select {
-	case <-done:
-		// Mining completed successfully
+	case err := <-done:
+		assert.NoError(t, err)
 	case <-time.After(10 * time.Second):
 		t.Fatal("Mining test timed out after 10 seconds")
 	}
 
 	// Assert
 	assert.True(t, strings.HasPrefix(block.Hash, strings.Repeat("0", difficulty)))
-	assert.Greater(t, block.Header.Nonce, uint32(0))
+	// Nonce 0 is a perfectly valid solution -- at difficulty 1 it satisfies the
+	// target about one time in sixteen -- so asserting Nonce > 0 was flaky.
+	assert.Equal(t, block.Hash, block.CalculateHash())
 }
 
 // TestBlockchainStructure_BlockMining_ZeroDifficulty tests mining with zero difficulty
@@ -409,7 +426,9 @@ func TestBlockchainStructure_BlockMining_ZeroDifficulty(t *testing.T) {
 	// Act - add timeout to prevent hanging
 	done := make(chan bool, 1)
 	go func() {
-		block.Mine(uint(difficulty))
+		if err := block.Mine(uint(difficulty)); err != nil {
+			t.Errorf("mine: %v", err)
+		}
 		done <- true
 	}()
 
@@ -437,7 +456,9 @@ func TestBlockchainStructure_BlockMining_HighDifficulty(t *testing.T) {
 	startTime := time.Now()
 	done := make(chan bool, 1)
 	go func() {
-		block.Mine(uint(difficulty))
+		if err := block.Mine(uint(difficulty)); err != nil {
+			t.Errorf("mine: %v", err)
+		}
 		done <- true
 	}()
 
@@ -530,6 +551,10 @@ func TestBlockchainStructure_BloomFilter(t *testing.T) {
 		t.Fatalf("Failed to unlock wallet2: %v", err)
 	}
 
+	// Wallets no longer self-fund at creation, so seed the sender.
+	if err := wallet1.SetData("balance", 10.0+100.0); err != nil {
+		t.Fatalf("failed to fund wallet1: %v", err)
+	}
 	bankTx, err := NewBankTransaction(wallet1, wallet2, 10.0)
 	if err != nil {
 		t.Fatalf("Failed to create bank transaction: %v", err)
@@ -583,6 +608,10 @@ func TestBlockchainStructure_BlockGetTransactions(t *testing.T) {
 		t.Fatalf("Failed to unlock wallet2: %v", err)
 	}
 
+	// Wallets no longer self-fund at creation, so seed the sender.
+	if err := wallet1.SetData("balance", 10.0+100.0); err != nil {
+		t.Fatalf("failed to fund wallet1: %v", err)
+	}
 	bankTx, err := NewBankTransaction(wallet1, wallet2, 10.0)
 	if err != nil {
 		t.Fatalf("Failed to create bank transaction: %v", err)

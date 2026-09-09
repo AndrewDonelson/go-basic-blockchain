@@ -4,6 +4,7 @@ package sdk
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 )
 
@@ -27,60 +28,46 @@ type Coinbase struct {
 	AllowNewTokens   bool
 }
 
-// MarshalJSON implements custom JSON marshaling for Coinbase transaction
+// MarshalJSON encodes the Coinbase transaction in the canonical wire form.
 func (c *Coinbase) MarshalJSON() ([]byte, error) {
-	// First marshal the base Tx
-	baseTx, err := json.Marshal(&c.Tx)
-	if err != nil {
-		return nil, err
+	w := c.Tx.toWire()
+	w.BlockchainName = c.BlockchainName
+	w.BlockchainSymbol = c.BlockchainSymbol
+	w.BlockTime = c.BlockTime
+	w.Difficulty = c.Difficulty
+	w.TransactionFee = c.TransactionFee
+	w.MinerRewardPCT = c.MinerRewardPCT
+	w.MinerAddress = c.MinerAddress
+	w.DevRewardPCT = c.DevRewardPCT
+	w.DevAddress = c.DevAddress
+	w.FundWalletAmount = c.FundWalletAmount
+	w.TokenCount = c.TokenCount
+	w.TokenPrice = c.TokenPrice
+	w.AllowNewTokens = c.AllowNewTokens
+	return json.Marshal(w)
+}
+
+// UnmarshalJSON decodes a Coinbase transaction from the canonical wire form.
+func (c *Coinbase) UnmarshalJSON(data []byte) error {
+	var w txWire
+	if err := json.Unmarshal(data, &w); err != nil {
+		return err
 	}
-
-	// Create a map to hold the base transaction data
-	var baseMap map[string]interface{}
-	err = json.Unmarshal(baseTx, &baseMap)
-	if err != nil {
-		return nil, err
-	}
-
-	// Add the coinbase-specific data
-	baseMap["blockchainName"] = c.BlockchainName
-	baseMap["blockchainSymbol"] = c.BlockchainSymbol
-	baseMap["blockTime"] = c.BlockTime
-	baseMap["difficulty"] = c.Difficulty
-	baseMap["transactionFee"] = c.TransactionFee
-	baseMap["minerRewardPCT"] = c.MinerRewardPCT
-	baseMap["minerAddress"] = c.MinerAddress
-	baseMap["devRewardPCT"] = c.DevRewardPCT
-	baseMap["devAddress"] = c.DevAddress
-	baseMap["fundWalletAmount"] = c.FundWalletAmount
-	baseMap["tokenCount"] = c.TokenCount
-	baseMap["tokenPrice"] = c.TokenPrice
-	baseMap["allowNewTokens"] = c.AllowNewTokens
-
-	// Serialize the protocol data to the Data field
-	protocolData := map[string]interface{}{
-		"blockchainName":   c.BlockchainName,
-		"blockchainSymbol": c.BlockchainSymbol,
-		"blockTime":        c.BlockTime,
-		"difficulty":       c.Difficulty,
-		"transactionFee":   c.TransactionFee,
-		"minerRewardPCT":   c.MinerRewardPCT,
-		"minerAddress":     c.MinerAddress,
-		"devRewardPCT":     c.DevRewardPCT,
-		"devAddress":       c.DevAddress,
-		"fundWalletAmount": c.FundWalletAmount,
-		"tokenCount":       c.TokenCount,
-		"tokenPrice":       c.TokenPrice,
-		"allowNewTokens":   c.AllowNewTokens,
-	}
-
-	protocolDataBytes, err := json.Marshal(protocolData)
-	if err != nil {
-		return nil, err
-	}
-	baseMap["data"] = protocolDataBytes
-
-	return json.Marshal(baseMap)
+	c.Tx.applyWire(w)
+	c.BlockchainName = w.BlockchainName
+	c.BlockchainSymbol = w.BlockchainSymbol
+	c.BlockTime = w.BlockTime
+	c.Difficulty = w.Difficulty
+	c.TransactionFee = w.TransactionFee
+	c.MinerRewardPCT = w.MinerRewardPCT
+	c.MinerAddress = w.MinerAddress
+	c.DevRewardPCT = w.DevRewardPCT
+	c.DevAddress = w.DevAddress
+	c.FundWalletAmount = w.FundWalletAmount
+	c.TokenCount = w.TokenCount
+	c.TokenPrice = w.TokenPrice
+	c.AllowNewTokens = w.AllowNewTokens
+	return nil
 }
 
 // NewCoinbaseTransaction creates a new coinbase transaction. It takes a from wallet, a to wallet, and a configuration object as input.
@@ -113,12 +100,98 @@ func NewCoinbaseTransaction(from *Wallet, to *Wallet, cfg *Config) (*Coinbase, e
 // Process updates the wallet balance with the token count and returns a string
 // describing the transfer of the transaction fee.
 func (c *Coinbase) Process() string {
-	err := c.From.SetData("balance", c.TokenCount)
-	if err != nil {
-		return fmt.Sprintf("Error updating wallet %s balance: %s", c.From.GetAddress(), err.Error())
+	if c.To == nil {
+		return "coinbase transaction has no recipient"
 	}
+	// Previously this *set* the balance to TokenCount on every call, minting the
+	// entire supply again each time. A coinbase credits its recipient exactly once,
+	// which the genesis path enforces by only ever processing it in block 0.
+	if err := c.To.SetData("balance", c.To.GetBalance()+float64(c.TokenCount)); err != nil {
+		return fmt.Sprintf("Error updating wallet %s balance: %s", c.To.GetAddress(), err.Error())
+	}
+	c.Status = StatusConfirmed
+	return fmt.Sprintf("Minted %d tokens to %s", c.TokenCount, c.To.Address)
+}
 
-	return fmt.Sprintf("Transferred %f from %s to %s", c.TransactionFee, c.From.Address, c.To.Address)
+// SigningBytes includes the chain parameters a coinbase commits to.
+func (c *Coinbase) SigningBytes() ([]byte, error) {
+	fields := c.Tx.signingFields()
+	fields["token_count"] = c.TokenCount
+	fields["token_price"] = c.TokenPrice
+	fields["miner_address"] = c.MinerAddress
+	fields["dev_address"] = c.DevAddress
+	fields["miner_reward_pct"] = c.MinerRewardPCT
+	fields["dev_reward_pct"] = c.DevRewardPCT
+	fields["blockchain_name"] = c.BlockchainName
+	fields["blockchain_symbol"] = c.BlockchainSymbol
+	fields["difficulty"] = c.Difficulty
+	fields["block_time"] = c.BlockTime
+	fields["allow_new_tokens"] = c.AllowNewTokens
+	return json.Marshal(fields)
+}
+
+// Sign signs the full Coinbase transaction, including its chain parameters.
+func (c *Coinbase) Sign(privPEM []byte) (string, error) {
+	payload, err := c.SigningBytes()
+	if err != nil {
+		return "", fmt.Errorf("error marshaling transaction: %v", err)
+	}
+	return signPayload(payload, privPEM)
+}
+
+// Verify verifies a signature over the full Coinbase transaction.
+func (c *Coinbase) Verify(pubKey []byte, sign string) (bool, error) {
+	payload, err := c.SigningBytes()
+	if err != nil {
+		return false, fmt.Errorf("error marshaling transaction: %v", err)
+	}
+	return verifyPayload(payload, pubKey, sign)
+}
+
+// Hash covers the chain parameters as well as the base fields.
+func (c *Coinbase) Hash() string {
+	c.Tx.hash = hashTransaction(c)
+	return c.Tx.hash
+}
+
+// Bytes returns the canonical encoding of the full transaction.
+func (c *Coinbase) Bytes() []byte {
+	payload, err := c.SigningBytes()
+	if err != nil {
+		return nil
+	}
+	return payload
+}
+
+// Size reports the size of the full transaction.
+func (c *Coinbase) Size() int { return len(c.Bytes()) }
+
+// EstimateFee is derived from the full transaction size.
+func (c *Coinbase) EstimateFee(feePerByte float64) float64 {
+	return float64(c.Size()) * feePerByte
+}
+
+// Send queues the Coinbase transaction itself rather than its base transaction.
+func (c *Coinbase) Send(bc *Blockchain) error {
+	if err := c.Validate(); err != nil {
+		return fmt.Errorf("invalid transaction: %v", err)
+	}
+	bc.AddTransaction(c)
+	return nil
+}
+
+// Validate checks the base transaction plus Coinbase-specific invariants.
+func (c *Coinbase) Validate() error {
+	if err := c.Tx.Validate(); err != nil {
+		return err
+	}
+	if c.TokenCount < 0 {
+		return errors.New("coinbase token count cannot be negative")
+	}
+	if c.Tx.Protocol != CoinbaseProtocolID {
+		return fmt.Errorf("coinbase transaction has wrong protocol: %s", c.Tx.Protocol)
+	}
+	return nil
 }
 
 // // String returns a string representation of the bank transaction.

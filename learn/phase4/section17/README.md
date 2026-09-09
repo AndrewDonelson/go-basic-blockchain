@@ -1022,4 +1022,4 @@ blockchain/
 
 **Ready to build professional deployment systems? Let's start implementing robust build and deployment strategies! 🚀**
 
-Next: [Section 18: Production Readiness](./section18/README.md)
+Next: [Section 18: Production Readiness](../section18/README.md)

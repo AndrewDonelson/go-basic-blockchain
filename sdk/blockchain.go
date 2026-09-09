@@ -4,9 +4,9 @@
 package sdk
 
 import (
-	"crypto/sha512"
-	"encoding/hex"
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"math/big"
@@ -171,8 +171,6 @@ func (bc *Blockchain) DisplayStatus() {
 	bc.mux.Lock()
 	defer bc.mux.Unlock()
 
-	staticBlocksLen := len(bc.Blocks)
-	staticTransactionQueueLen := len(bc.TransactionQueue)
 	currentAction := ""
 	peerCount := 0
 	uptime := time.Duration(0)
@@ -186,10 +184,8 @@ func (bc *Blockchain) DisplayStatus() {
 		}
 	}
 
-	if staticBlocksLen != len(bc.Blocks) || staticTransactionQueueLen != len(bc.TransactionQueue) {
-		log.Printf("Blockchain Activity: Blocks: %d, Transaction Queue: %d\n",
-			len(bc.Blocks), len(bc.TransactionQueue))
-	}
+	// (A comparison of len(bc.Blocks) against a copy taken two lines earlier used
+	// to live here. It could never be true.)
 
 	// Update progress indicator only if not paused
 	if bc.progressIndicator != nil {
@@ -379,11 +375,15 @@ func (bc *Blockchain) GenerateGenesisBlock(txs []Transaction) {
 
 		genesisBlock := NewBlock(txs, "")
 		genesisBlock.Index = *big.NewInt(0)
-		genesisBlock.Hash = bc.generateHash(genesisBlock)
 
-		bc.Mine(genesisBlock, 1)
+		mined, err := bc.Mine(genesisBlock, 1)
+		if err != nil {
+			LogInfof("Failed to mine genesis block: %v", err)
+			return
+		}
+		genesisBlock = mined
 
-		err := genesisBlock.save()
+		err = genesisBlock.save()
 		if err != nil {
 			log.Printf("Error saving genesis block: %v\n", err)
 		}
@@ -426,9 +426,15 @@ func (bc *Blockchain) HasTransaction(id *PUID) bool {
 	return false
 }
 
-// LoadExistingBlocks loads any existing blocks from disk and appends them to the blockchain.
+// LoadExistingBlocks loads any existing blocks from disk and appends them to the
+// blockchain, in block-index order, verifying the hash chain as it goes.
+//
+// Two problems with the previous version: it ordered files with sort.Strings, so
+// "10.json" sorted before "2.json" and blocks were appended in lexical order --
+// bc.Blocks[i] was not block i, and the previousHash chain was scrambled. And it
+// logged and skipped every decode failure, which (given Block could not be
+// decoded at all) silently discarded the entire history on every restart.
 func (bc *Blockchain) LoadExistingBlocks() error {
-	// Use the configured data path instead of the relative blockFolder
 	blocksPath := filepath.Join(bc.cfg.DataPath, "blocks")
 
 	// Look for both .json and .jso files (in case of truncated names)
@@ -436,121 +442,168 @@ func (bc *Blockchain) LoadExistingBlocks() error {
 	jsoFiles, _ := filepath.Glob(filepath.Join(blocksPath, "*.jso"))
 	files := append(jsonFiles, jsoFiles...)
 	if len(files) == 0 {
-		log.Printf("No existing blocks found in %s\n", blocksPath)
+		LogVerbosef("No existing blocks found in %s", blocksPath)
 		return nil
 	}
 
-	log.Printf("Loading %d existing blocks...", len(files))
+	LogInfof("Loading %d existing blocks...", len(files))
 
-	// Sort files by block index to load them in order
-	sort.Strings(files)
+	type blockFile struct {
+		index int
+		path  string
+	}
 
+	ordered := make([]blockFile, 0, len(files))
 	for _, file := range files {
-		log.Printf("Processing block file: %s", file)
-		// Extract block index from filename (e.g., "0.json" -> 0)
 		filename := filepath.Base(file)
-		if !strings.HasSuffix(filename, ".json") && !strings.HasSuffix(filename, ".jso") {
-			log.Printf("Skipping file (not .json/.jso): %s", filename)
-			continue
-		}
-
 		blockIndexStr := strings.TrimSuffix(strings.TrimSuffix(filename, ".json"), ".jso")
 		blockIndex, err := strconv.Atoi(blockIndexStr)
 		if err != nil {
-			log.Printf("Invalid block filename: %s", filename)
+			LogInfof("Skipping file with non-numeric block index: %s", filename)
 			continue
 		}
+		ordered = append(ordered, blockFile{index: blockIndex, path: file})
+	}
 
-		// Read the JSON file directly
-		fileData, err := os.ReadFile(file)
+	// Sort numerically, not lexically.
+	sort.Slice(ordered, func(i, j int) bool { return ordered[i].index < ordered[j].index })
+
+	loaded := make([]*Block, 0, len(ordered))
+	for _, bf := range ordered {
+		fileData, err := os.ReadFile(bf.path)
 		if err != nil {
-			log.Printf("Error reading block file %s: %v", file, err)
-			continue
+			return fmt.Errorf("error reading block file %s: %w", bf.path, err)
 		}
 
-		// Parse the JSON into a Block
 		block := &Block{}
-		err = json.Unmarshal(fileData, block)
-		if err != nil {
-			log.Printf("Error parsing block JSON %s: %v", file, err)
-			continue
+		if err := json.Unmarshal(fileData, block); err != nil {
+			// A corrupt block is fatal, not skippable: continuing would silently
+			// serve a chain with a hole in it.
+			return fmt.Errorf("error parsing block %d (%s): %w", bf.index, bf.path, err)
 		}
 
-		// Add block to blockchain
-		bc.Blocks = append(bc.Blocks, block)
-		log.Printf("Successfully loaded block %d: %s", blockIndex, block.Hash)
+		if got := int(block.Index.Int64()); got != bf.index {
+			return fmt.Errorf("block file %s contains block %d", bf.path, got)
+		}
 
-		// Add block to TXLookup
-		err = bc.TXLookup.Add(block)
-		if err != nil {
-			log.Printf("Error adding block %d to TXLookup: %v", blockIndex, err)
+		// Verify the chain links as we load, so a gap or a tampered block is
+		// detected at startup rather than at some arbitrary later point.
+		if len(loaded) > 0 {
+			previous := loaded[len(loaded)-1]
+			if block.Header.PreviousHash != previous.Hash {
+				return fmt.Errorf("block %d does not link to block %d (previous hash mismatch)",
+					bf.index, int(previous.Index.Int64()))
+			}
+		}
+
+		loaded = append(loaded, block)
+		if err := bc.TXLookup.Add(block); err != nil {
+			LogInfof("Error adding block %d to TXLookup: %v", bf.index, err)
 		}
 	}
 
-	log.Printf("Successfully loaded %d blocks", len(bc.Blocks))
+	bc.mux.Lock()
+	defer bc.mux.Unlock()
 
-	// Update blockchain state to reflect loaded blocks
+	bc.Blocks = loaded
+	LogInfof("Successfully loaded %d blocks", len(bc.Blocks))
+
 	if len(bc.Blocks) > 0 {
 		lastBlockIndex := int(bc.Blocks[len(bc.Blocks)-1].Index.Int64())
 		bc.CurrentBlockIndex = lastBlockIndex
 		bc.NextBlockIndex = lastBlockIndex + 1
-		log.Printf("Updated blockchain state: current_block_index=%d, next_block_index=%d", bc.CurrentBlockIndex, bc.NextBlockIndex)
+		LogVerbosef("Updated blockchain state: current_block_index=%d, next_block_index=%d",
+			bc.CurrentBlockIndex, bc.NextBlockIndex)
 	}
 
 	return nil
 }
 
 // AddTransaction adds a transaction to the blockchain's transaction queue.
+//
+// The mempool is the single source of truth. Previously a BANK or MESSAGE
+// transaction was handed to the sidechain router and *not* queued, and the router
+// output was later reconstituted by convertToBankTransaction /
+// convertToMessageTransaction -- placeholder builders that hardcoded
+// `Amount: 0.0` and `Message: "Rollup message"` around wallet stubs with no keys.
+// Every routed transfer therefore reached its block with its value zeroed and its
+// signature unverifiable. The router now observes transactions for its rollup
+// accounting while the mempool keeps the real thing.
 func (bc *Blockchain) AddTransaction(transaction Transaction) {
-	bc.mux.Lock()
-	defer bc.mux.Unlock()
+	if transaction == nil {
+		return
+	}
 
-	// Show transaction progress
+	bc.mux.Lock()
+	bc.TransactionQueue = append(bc.TransactionQueue, transaction)
+	bc.mux.Unlock()
+
 	if bc.progressIndicator != nil {
+		// "pending" is accurate here. Reporting "confirmed" immediately after
+		// queueing, as this used to, told the caller a transaction was final while
+		// it was still sitting in the mempool.
 		bc.progressIndicator.ShowTransactionProgress(transaction.GetID(), "pending")
 	}
 
-	// Route transaction through sidechain router if it's a supported protocol
-	protocol := transaction.GetProtocol()
-	if protocol == BankProtocolID || protocol == MessageProtocolID {
-		// Convert transaction to sidechain format
-		txData, err := json.Marshal(transaction)
-		if err != nil {
-			log.Printf("Failed to marshal transaction for sidechain: %v", err)
-			// Fall back to direct addition
-			bc.TransactionQueue = append(bc.TransactionQueue, transaction)
-			return
-		}
-
-		// Route through sidechain router
-		_, err = bc.sidechainRouter.RouteTransaction(
-			protocol,
-			txData,
-			transaction.GetSenderWallet().GetAddress(),
-			transaction.GetRecipientWallet().GetAddress(),
-		)
-		if err != nil {
-			log.Printf("Failed to route transaction through sidechain: %v", err)
-			// Fall back to direct addition
-			bc.TransactionQueue = append(bc.TransactionQueue, transaction)
-			return
-		}
-
-		log.Printf("Transaction routed through sidechain: %s (protocol: %s)",
-			transaction.GetID(), protocol)
-	} else {
-		// For other protocols, add directly to queue
-		bc.TransactionQueue = append(bc.TransactionQueue, transaction)
-	}
-
-	// Show transaction confirmed
-	if bc.progressIndicator != nil {
-		bc.progressIndicator.ShowTransactionProgress(transaction.GetID(), "confirmed")
-	}
+	bc.routeToSidechain(transaction)
 }
 
-// Mine attempts to mine a new block for the blockchain.
-func (bc *Blockchain) Mine(block *Block, difficulty int) *Block {
+// routeToSidechain mirrors a transaction into the protocol router for rollup
+// accounting. A routing failure never loses the transaction: it is already in the
+// mempool.
+func (bc *Blockchain) routeToSidechain(transaction Transaction) {
+	protocol := transaction.GetProtocol()
+	if protocol != BankProtocolID && protocol != MessageProtocolID {
+		return
+	}
+	if bc.sidechainRouter == nil {
+		return
+	}
+
+	txData, err := json.Marshal(transaction)
+	if err != nil {
+		LogVerbosef("Failed to marshal transaction for sidechain: %v", err)
+		return
+	}
+
+	sender, recipient := "", ""
+	if w := transaction.GetSenderWallet(); w != nil {
+		sender = w.GetAddress()
+	}
+	if w := transaction.GetRecipientWallet(); w != nil {
+		recipient = w.GetAddress()
+	}
+
+	if _, err := bc.sidechainRouter.RouteTransaction(protocol, txData, sender, recipient); err != nil {
+		LogVerbosef("Failed to route transaction through sidechain: %v", err)
+		return
+	}
+
+	LogVerbosef("Transaction mirrored to sidechain: %s (protocol: %s)", transaction.GetID(), protocol)
+}
+
+// difficultyTarget converts an integer difficulty into a 256-bit target.
+//
+// A hash is valid when it is <= target, so a larger difficulty means a smaller
+// target. The bounds matter: uint(256-difficulty) underflows for difficulty > 256
+// and produces an astronomically large shift.
+func difficultyTarget(difficulty int) *big.Int {
+	if difficulty < 1 {
+		difficulty = 1
+	}
+	if difficulty > 255 {
+		difficulty = 255
+	}
+	return new(big.Int).Lsh(big.NewInt(1), uint(256-difficulty))
+}
+
+// Mine attempts to mine a block, returning an error if no valid proof was found.
+//
+// Mine no longer mutates chain state. The simple-PoW path used to append to
+// bc.Blocks and clear bc.TransactionQueue itself, without holding bc.mux and in
+// addition to the append its caller already performed -- so every block was added
+// twice and the mempool was cleared from an unsynchronised goroutine.
+func (bc *Blockchain) Mine(block *Block, difficulty int) (*Block, error) {
 	if bc.useHeliosMining {
 		return bc.mineWithHelios(block, difficulty)
 	}
@@ -558,11 +611,10 @@ func (bc *Blockchain) Mine(block *Block, difficulty int) *Block {
 }
 
 // mineWithHelios mines a block using the Helios three-stage algorithm
-func (bc *Blockchain) mineWithHelios(block *Block, difficulty int) *Block {
-	LogInfof("Mining block [#%s] with Helios algorithm...", block.Index.String())
+func (bc *Blockchain) mineWithHelios(block *Block, difficulty int) (*Block, error) {
+	LogVerbosef("Mining block [#%s] with Helios algorithm...", block.Index.String())
 
-	// Convert difficulty to big.Int target
-	targetDifficulty := new(big.Int).Lsh(big.NewInt(1), uint(256-difficulty))
+	targetDifficulty := difficultyTarget(difficulty)
 
 	// Create block header for mining
 	blockHeader := block.createBlockHeaderForMining()
@@ -580,15 +632,10 @@ func (bc *Blockchain) mineWithHelios(block *Block, difficulty int) *Block {
 	// Mine using Helios algorithm
 	proof, err := bc.heliosAlgorithm.Mine(blockHeader, targetDifficulty)
 	if err != nil {
-		// Only log if menu is not active
-		bc.menuMutex.RLock()
-		menuActive := bc.menuActive
-		bc.menuMutex.RUnlock()
-
-		if !menuActive {
-			log.Printf("Helios mining failed: %v", err)
-		}
-		return block
+		// A mining failure (including the timeout) must abandon the block. The old
+		// code logged the error and returned the *unmined* block, which the caller
+		// then appended to the chain and persisted.
+		return nil, fmt.Errorf("helios mining failed: %w", err)
 	}
 
 	// Show Helios Stage 2: Sidechain Routing
@@ -604,63 +651,69 @@ func (bc *Blockchain) mineWithHelios(block *Block, difficulty int) *Block {
 	// Update block with Helios proof
 	block.updateWithHeliosProof(proof)
 
-	// Only log if menu is not active
-	bc.menuMutex.RLock()
-	menuActive := bc.menuActive
-	bc.menuMutex.RUnlock()
-
-	if !menuActive {
-		log.Printf("Helios mining successful: nonce=%d, hash=%s", proof.Nonce, proof.FinalHash)
+	// Verify our own work before publishing it. bc.heliosValidator was constructed
+	// and then never called anywhere, so nothing ever checked a proof.
+	if err := bc.verifyHeliosProof(block, difficulty); err != nil {
+		return nil, fmt.Errorf("self-verification of freshly mined block failed: %w", err)
 	}
-	return block
+
+	LogVerbosef("Helios mining successful: nonce=%d, hash=%s", proof.Nonce, proof.FinalHash)
+	return block, nil
 }
 
-// mineWithSimplePoW mines a block using the original simple proof-of-work
-func (bc *Blockchain) mineWithSimplePoW(block *Block, difficulty int) *Block {
+// verifyHeliosProof checks a block's stored Helios proof against its header and
+// the target difficulty.
+func (bc *Blockchain) verifyHeliosProof(block *Block, difficulty int) error {
+	if block.HeliosProof == nil {
+		return errors.New("block carries no Helios proof")
+	}
+	if bc.heliosAlgorithm == nil {
+		return errors.New("helios algorithm is not initialized")
+	}
+
+	target := difficultyTarget(difficulty)
+
+	// Recompute the proof hash from the block header: this is what makes the
+	// proof binding rather than self-asserted.
+	if err := bc.heliosAlgorithm.ValidateProof(block.HeliosProof, block.createBlockHeaderForMining(), target); err != nil {
+		return err
+	}
+
+	if bc.heliosValidator != nil {
+		if err := bc.heliosValidator.ValidateFullProof(block.HeliosProof, target); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// mineWithSimplePoW mines a block using the original simple proof-of-work.
+//
+// It searches the nonce space and returns an error when it is exhausted. It does
+// not touch chain state: appending the block and clearing the mempool is the
+// caller's job, done once, under the lock.
+func (bc *Blockchain) mineWithSimplePoW(block *Block, difficulty int) (*Block, error) {
 	prefix := strings.Repeat("0", difficulty)
 
-	// Only log if menu is not active
-	bc.menuMutex.RLock()
-	menuActive := bc.menuActive
-	bc.menuMutex.RUnlock()
-
-	if !menuActive {
-		log.Printf("Mining a new Block [#%s] with [%d] Txs...", block.Index.String(), len(block.Transactions))
-	}
+	LogVerbosef("Mining a new Block [#%s] with [%d] Txs...", block.Index.String(), len(block.Transactions))
 
 	// Show mining progress
 	if bc.progressIndicator != nil {
 		bc.progressIndicator.ShowMiningProgress(int(block.Index.Int64()), difficulty, block.Hash)
 	}
 
-	for i := 0; i < maxNonce; i++ {
+	for i := 0; i < maxMiningNonce; i++ {
 		block.Header.Nonce = uint32(i)
 		block.Hash = block.CalculateHash()
 
 		if strings.HasPrefix(block.Hash, prefix) {
-			err := block.save()
-			if err != nil {
-				log.Printf("Error saving block: %v\n", err)
-			}
-			bc.Blocks = append(bc.Blocks, block)
-			bc.TransactionQueue = []Transaction{}
-
-			// Only log if menu is not active
-			bc.menuMutex.RLock()
-			menuActive := bc.menuActive
-			bc.menuMutex.RUnlock()
-
-			if !menuActive {
-				log.Printf("Mined a new Block [#%s] with [%d] TXs & Hash [%s]\n",
-					block.Index.String(),
-					len(block.Transactions),
-					block.Hash)
-			}
-			break
+			LogVerbosef("Mined a new Block [#%s] with [%d] TXs & Hash [%s]",
+				block.Index.String(), len(block.Transactions), block.Hash)
+			return block, nil
 		}
 	}
 
-	return block
+	return nil, fmt.Errorf("exhausted the nonce space without finding a proof at difficulty %d", difficulty)
 }
 
 // VerifySignature verifies the signature of the given transaction.
@@ -670,39 +723,61 @@ func (bc *Blockchain) VerifySignature(tx Transaction) error {
 }
 
 // Run is a long-running function that manages the blockchain.
+//
+// It is a thin wrapper over RunContext for callers that do not manage a context.
 func (bc *Blockchain) Run(difficulty int) {
-	log.Println("Blockchain.Run started")
+	bc.RunContext(context.Background(), difficulty)
+}
+
+// RunContext starts the mining and status loops, stopping when ctx is cancelled.
+//
+// Both tickers used to run in goroutines with no exit path at all: they were
+// never stopped, so every Blockchain leaked two goroutines and two tickers for
+// the life of the process, and there was no way to shut mining down cleanly.
+func (bc *Blockchain) RunContext(ctx context.Context, difficulty int) {
+	LogInfof("Blockchain.Run started")
 
 	// Start progress indicator
 	if bc.progressIndicator != nil {
 		bc.progressIndicator.Start()
 	}
 
-	statusTicker := time.NewTicker(time.Second)
-	blockTicker := time.NewTicker(time.Duration(bc.cfg.BlockTime) * time.Second)
+	blockTime := bc.cfg.BlockTime
+	if blockTime <= 0 {
+		blockTime = blockTimeInSec
+	}
 
 	go func() {
-		for range statusTicker.C {
-			bc.DisplayStatus()
+		statusTicker := time.NewTicker(time.Second)
+		defer statusTicker.Stop()
+
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-statusTicker.C:
+				bc.DisplayStatus()
+			}
 		}
 	}()
 
 	go func() {
-		for range blockTicker.C {
-			// Check if menu is active - if so, skip block creation and logging
-			bc.menuMutex.RLock()
-			menuActive := bc.menuActive
-			bc.menuMutex.RUnlock()
+		blockTicker := time.NewTicker(time.Duration(blockTime) * time.Second)
+		defer blockTicker.Stop()
 
-			if menuActive {
-				continue // Skip block creation when menu is active
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-blockTicker.C:
+				if bc.IsMenuActive() {
+					continue // Skip block creation when the menu is open
+				}
+
+				LogVerbosef("Block ticker fired, creating new block (current=%d next=%d total=%d)",
+					bc.CurrentBlockIndex, bc.NextBlockIndex, bc.GetBlockCount())
+				bc.createNewBlock(difficulty)
 			}
-
-			now := time.Now()
-			log.Printf("Block ticker fired at %s, creating new block...", now.Format("15:04:05"))
-			log.Printf("Current blockchain state before creating new block: CurrentBlockIndex=%d, NextBlockIndex=%d, TotalBlocks=%d",
-				bc.CurrentBlockIndex, bc.NextBlockIndex, len(bc.Blocks))
-			bc.createNewBlock(difficulty)
 		}
 	}()
 }
@@ -714,16 +789,14 @@ func (bc *Blockchain) createNewBlock(difficulty int) {
 		previousHash = bc.Blocks[len(bc.Blocks)-1].Hash
 	}
 
-	// Collect sidechain rollup transactions
-	sidechainTxs := bc.collectSidechainRollups()
-
 	queuedTransactions := append([]Transaction(nil), bc.TransactionQueue...)
 	bc.TransactionQueue = []Transaction{}
 	nextBlockIndex := bc.NextBlockIndex
 	bc.mux.Unlock()
 
-	// Combine main chain and sidechain transactions
-	allTransactions := append(queuedTransactions, sidechainTxs...)
+	// The mempool already holds the real transactions, including the ones mirrored
+	// to the sidechain, so there is nothing to merge in from the router.
+	allTransactions := queuedTransactions
 
 	newBlock := NewBlock(allTransactions, previousHash)
 	newBlock.Index = *big.NewInt(int64(nextBlockIndex))
@@ -733,16 +806,23 @@ func (bc *Blockchain) createNewBlock(difficulty int) {
 		bc.progressIndicator.ShowBlockProgress(int(newBlock.Index.Int64()), len(allTransactions))
 	}
 
-	bc.Mine(newBlock, difficulty)
-
-	err := bc.TXLookup.Add(newBlock)
+	minedBlock, err := bc.Mine(newBlock, difficulty)
 	if err != nil {
-		log.Printf("Error adding block to TXLookup: %v\n", err)
+		// Mining failed, so there is no block. Return the transactions to the
+		// mempool rather than losing them: previously the unmined block was
+		// appended and persisted regardless.
+		LogInfof("Failed to mine block #%d: %v", nextBlockIndex, err)
+		bc.requeueTransactions(queuedTransactions)
+		return
+	}
+	newBlock = minedBlock
+
+	if err := bc.TXLookup.Add(newBlock); err != nil {
+		LogInfof("Error adding block to TXLookup: %v", err)
 	}
 
-	err = newBlock.save()
-	if err != nil {
-		log.Printf("Error saving block: %v\n", err)
+	if err := newBlock.save(); err != nil {
+		LogInfof("Error saving block: %v", err)
 	}
 
 	bc.mux.Lock()
@@ -752,104 +832,105 @@ func (bc *Blockchain) createNewBlock(difficulty int) {
 	bc.CurrentBlockIndex = int(newBlock.Index.Int64())
 	bc.NextBlockIndex = bc.CurrentBlockIndex + 1
 
-	err = bc.saveLocked()
-	if err != nil {
-		log.Printf("Error saving blockchain state: %v\n", err)
+	if err := bc.saveLocked(); err != nil {
+		LogInfof("Error saving blockchain state: %v", err)
 	}
 
-	// Only log if menu is not active
-	bc.menuMutex.RLock()
-	menuActive := bc.menuActive
-	bc.menuMutex.RUnlock()
-
-	if !menuActive {
-		log.Printf("New block created: [#%s] Hash: %s with %d main chain + %d sidechain transactions",
-			newBlock.Index.String(), newBlock.Hash, len(queuedTransactions), len(sidechainTxs))
-		log.Printf("Blockchain state updated: CurrentBlockIndex=%d, NextBlockIndex=%d", bc.CurrentBlockIndex, bc.NextBlockIndex)
-	}
+	LogVerbosef("New block created: [#%s] Hash: %s with %d transactions",
+		newBlock.Index.String(), newBlock.Hash, len(queuedTransactions))
+	LogVerbosef("Blockchain state updated: CurrentBlockIndex=%d, NextBlockIndex=%d",
+		bc.CurrentBlockIndex, bc.NextBlockIndex)
 }
 
-// collectSidechainRollups collects validated sidechain transactions for inclusion in the main block
-func (bc *Blockchain) collectSidechainRollups() []Transaction {
-	var rollupTxs []Transaction
+// requeueTransactions puts transactions back at the front of the mempool after a
+// failed block, preserving their original ordering.
+func (bc *Blockchain) requeueTransactions(txs []Transaction) {
+	if len(txs) == 0 {
+		return
+	}
 
-	// Get validated transactions from sidechain router
-	if bc.sidechainRouter != nil {
-		// Get bank protocol rollups
-		bankTxs := bc.sidechainRouter.GetValidatedTransactions("BANK")
-		for _, tx := range bankTxs {
-			// Convert ProtocolTransaction back to Bank transaction
-			if bankTx, err := bc.convertToBankTransaction(tx); err == nil {
-				rollupTxs = append(rollupTxs, bankTx)
+	bc.mux.Lock()
+	defer bc.mux.Unlock()
+	bc.TransactionQueue = append(txs, bc.TransactionQueue...)
+}
+
+// HasTransactionID reports whether a transaction ID is already known, in the
+// mempool or in any block.
+func (bc *Blockchain) HasTransactionID(id string) bool {
+	if id == "" {
+		return false
+	}
+
+	bc.mux.Lock()
+	defer bc.mux.Unlock()
+
+	for _, tx := range bc.TransactionQueue {
+		if tx.GetID() == id {
+			return true
+		}
+	}
+	for _, block := range bc.Blocks {
+		for _, tx := range block.Transactions {
+			if tx.GetID() == id {
+				return true
 			}
 		}
+	}
+	return false
+}
 
-		// Get message protocol rollups
-		messageTxs := bc.sidechainRouter.GetValidatedTransactions("MESSAGE")
-		for _, tx := range messageTxs {
-			// Convert ProtocolTransaction back to Message transaction
-			if messageTx, err := bc.convertToMessageTransaction(tx); err == nil {
-				rollupTxs = append(rollupTxs, messageTx)
-			}
+// AcceptBlock validates a block received from a peer and appends it if it extends
+// the current head.
+//
+// Fork choice and reorganisation are deliberately out of scope here: a block that
+// does not extend the current head is refused rather than silently accepted. The
+// /consensus/block endpoint previously answered {"accepted":true} for any payload
+// at all, without inspecting it.
+func (bc *Blockchain) AcceptBlock(block *Block) error {
+	if block == nil {
+		return errors.New("block is nil")
+	}
+
+	bc.mux.Lock()
+	head := (*Block)(nil)
+	if len(bc.Blocks) > 0 {
+		head = bc.Blocks[len(bc.Blocks)-1]
+	}
+	expectedIndex := int64(bc.NextBlockIndex)
+	bc.mux.Unlock()
+
+	if head == nil {
+		return errors.New("cannot accept a block before the genesis block exists")
+	}
+
+	if block.Index.Int64() != expectedIndex {
+		return fmt.Errorf("block index %s does not extend the current head (expected %d)",
+			block.Index.String(), expectedIndex)
+	}
+
+	if err := block.Validate(head); err != nil {
+		return fmt.Errorf("block validation failed: %w", err)
+	}
+
+	if bc.useHeliosMining {
+		if err := bc.verifyHeliosProof(block, bc.cfg.Difficulty); err != nil {
+			return fmt.Errorf("proof-of-work validation failed: %w", err)
 		}
-
-		// Only log if menu is not active
-		bc.menuMutex.RLock()
-		menuActive := bc.menuActive
-		bc.menuMutex.RUnlock()
-
-		if !menuActive {
-			log.Printf("Collected %d sidechain rollup transactions (%d bank, %d message)",
-				len(rollupTxs), len(bankTxs), len(messageTxs))
-		}
 	}
 
-	return rollupTxs
-}
-
-// convertToBankTransaction converts a ProtocolTransaction back to a Bank transaction
-func (bc *Blockchain) convertToBankTransaction(ptx *sidechain.ProtocolTransaction) (*Bank, error) {
-	// This is a simplified conversion - in a real implementation, you'd properly deserialize
-	// For now, we'll create a placeholder transaction
-	fromWallet := &Wallet{Address: ptx.Sender}
-	toWallet := &Wallet{Address: ptx.Recipient}
-
-	bankTx := &Bank{
-		Tx: Tx{
-			From: fromWallet,
-			To:   toWallet,
-			Fee:  0.05,
-		},
-		Amount: 0.0, // Would be extracted from ptx.Data
+	if err := bc.TXLookup.Add(block); err != nil {
+		LogInfof("Error adding accepted block to TXLookup: %v", err)
 	}
-	return bankTx, nil
-}
-
-// convertToMessageTransaction converts a ProtocolTransaction back to a Message transaction
-func (bc *Blockchain) convertToMessageTransaction(ptx *sidechain.ProtocolTransaction) (*Message, error) {
-	// This is a simplified conversion - in a real implementation, you'd properly deserialize
-	// For now, we'll create a placeholder transaction
-	fromWallet := &Wallet{Address: ptx.Sender}
-	toWallet := &Wallet{Address: ptx.Recipient}
-
-	messageTx := &Message{
-		Tx: Tx{
-			From: fromWallet,
-			To:   toWallet,
-			Fee:  0.01,
-		},
-		Message: "Rollup message", // Would be extracted from ptx.Data
+	if err := block.save(); err != nil {
+		return fmt.Errorf("failed to persist accepted block: %w", err)
 	}
-	return messageTx, nil
-}
 
-// generateHash generates a SHA-512 hash for the given block.
-func (bc *Blockchain) generateHash(block *Block) string {
-	record := block.Index.Text(10) + block.Header.Timestamp.String() + strconv.FormatUint(uint64(block.Header.Nonce), 10) + block.Header.PreviousHash
-	h := sha512.New()
-	h.Write([]byte(record))
-	hashed := h.Sum(nil)
-	return hex.EncodeToString(hashed)
+	bc.mux.Lock()
+	defer bc.mux.Unlock()
+	bc.Blocks = append(bc.Blocks, block)
+	bc.CurrentBlockIndex = int(block.Index.Int64())
+	bc.NextBlockIndex = bc.CurrentBlockIndex + 1
+	return bc.saveLocked()
 }
 
 // GetLatestBlock returns the latest block in the blockchain.
@@ -878,10 +959,16 @@ func (bc *Blockchain) GetBlockByHash(hash string) *Block {
 func (bc *Blockchain) GetBlockByIndex(index int64) *Block {
 	bc.mux.Lock()
 	defer bc.mux.Unlock()
-	if index < 0 || int(index) >= len(bc.Blocks) {
-		return nil
+
+	// Match on the block's own Index rather than its slice position: the two
+	// diverge as soon as blocks are loaded from disk out of order, or a block is
+	// ever pruned.
+	for _, block := range bc.Blocks {
+		if block.Index.Int64() == index {
+			return block
+		}
 	}
-	return bc.Blocks[index]
+	return nil
 }
 
 // GetTransactionByID returns a transaction with the given ID.
@@ -916,22 +1003,62 @@ func (bc *Blockchain) GetBalance(address string) float64 {
 	balance := 0.0
 	for _, block := range bc.Blocks {
 		for _, tx := range block.Transactions {
-			if tx.GetSenderWallet().GetAddress() == address {
-				balance -= tx.GetFee()
-				if bankTx, ok := tx.(*Bank); ok {
-					balance -= bankTx.Amount
+			sender := ""
+			if w := tx.GetSenderWallet(); w != nil {
+				sender = w.GetAddress()
+			}
+			recipient := ""
+			if w := tx.GetRecipientWallet(); w != nil {
+				recipient = w.GetAddress()
+			}
+
+			switch concrete := tx.(type) {
+			case *Coinbase:
+				// Coinbase output was never credited to anyone, so the minted
+				// supply existed in CalculateTotalSupply but in nobody's balance.
+				if recipient == address {
+					balance += float64(concrete.TokenCount)
+				}
+			case *Bank:
+				if sender == address {
+					balance -= concrete.Amount + concrete.GetFee()
+				}
+				if recipient == address {
+					balance += concrete.Amount
+				}
+			default:
+				if sender == address {
+					balance -= tx.GetFee()
 				}
 			}
-			if tx.GetProtocol() == BankProtocolID {
-				if bankTx, ok := tx.(*Bank); ok {
-					if bankTx.To.GetAddress() == address {
-						balance += bankTx.Amount
-					}
-				}
-			}
+
+			// Fees are paid out rather than destroyed.
+			balance += bc.feeCreditFor(tx, address)
 		}
 	}
 	return balance
+}
+
+// feeCreditFor returns the share of a transaction's fee credited to address.
+//
+// Fees used to be subtracted from the sender and credited to nobody, so every
+// transaction quietly destroyed value. They are now split between the miner and
+// the developer per MinerRewardPCT / DevRewardPCT, which the config has always
+// described but nothing implemented.
+func (bc *Blockchain) feeCreditFor(tx Transaction, address string) float64 {
+	fee := tx.GetFee()
+	if fee <= 0 || bc.cfg == nil {
+		return 0
+	}
+
+	credit := 0.0
+	if bc.cfg.MinerAddress == address {
+		credit += fee * bc.cfg.MinerRewardPCT / 100.0
+	}
+	if bc.cfg.DevAddress == address {
+		credit += fee * bc.cfg.DevRewardPCT / 100.0
+	}
+	return credit
 }
 
 // CalculateTotalSupply calculates the total supply of tokens in the blockchain.
@@ -973,6 +1100,14 @@ func (bc *Blockchain) ValidateChain() error {
 			return fmt.Errorf("invalid block at index %d: %v", i, err)
 		}
 
+		// Verify the proof of work. ValidateChain previously checked hash linkage
+		// and transaction validity but never that any work had been done.
+		if bc.useHeliosMining {
+			if err := bc.verifyHeliosProof(currentBlock, bc.cfg.Difficulty); err != nil {
+				return fmt.Errorf("invalid proof of work at block %d: %v", i, err)
+			}
+		}
+
 		for _, tx := range currentBlock.Transactions {
 			if err := tx.Validate(); err != nil {
 				return fmt.Errorf("invalid transaction %s in block %d: %v", tx.GetID(), i, err)
@@ -1006,7 +1141,11 @@ func (bc *Blockchain) GetPendingTransactions() []Transaction {
 	bc.mux.Lock()
 	defer bc.mux.Unlock()
 
-	return bc.TransactionQueue
+	// Return a copy. Handing out the live slice let callers read (and append to)
+	// mutex-guarded state after the lock was released.
+	out := make([]Transaction, len(bc.TransactionQueue))
+	copy(out, bc.TransactionQueue)
+	return out
 }
 
 // RemoveTransaction removes a transaction from the pending queue.
@@ -1037,8 +1176,10 @@ func (bc *Blockchain) UpdateConfig(newConfig *Config) error {
 	// Update the configuration
 	bc.cfg = newConfig
 
-	// Save the updated configuration
-	return bc.Save()
+	// Save the updated configuration. This must be saveLocked: bc.Save() takes
+	// bc.mux, which we already hold, and sync.Mutex is not reentrant -- calling
+	// Save() here deadlocked the caller permanently.
+	return bc.saveLocked()
 }
 
 // GetBlockchainInfo returns general information about the blockchain.
@@ -1062,6 +1203,42 @@ func (bc *Blockchain) GetMempoolSize() int {
 	defer bc.mux.Unlock()
 
 	return len(bc.TransactionQueue)
+}
+
+// GetBlockRange returns a copy of the blocks in [start, end).
+//
+// Callers (notably the API handlers) used to index bc.Blocks directly while the
+// mining goroutine appended to it. Returning a copy taken under the lock removes
+// that race without handing out a reference into guarded state.
+func (bc *Blockchain) GetBlockRange(start, end int) []*Block {
+	bc.mux.Lock()
+	defer bc.mux.Unlock()
+
+	if start < 0 {
+		start = 0
+	}
+	if end > len(bc.Blocks) {
+		end = len(bc.Blocks)
+	}
+	if start >= end {
+		return []*Block{}
+	}
+
+	out := make([]*Block, end-start)
+	copy(out, bc.Blocks[start:end])
+	return out
+}
+
+// GetAllTransactions returns every transaction in the chain plus the mempool.
+func (bc *Blockchain) GetAllTransactions() []Transaction {
+	bc.mux.Lock()
+	defer bc.mux.Unlock()
+
+	all := make([]Transaction, 0, len(bc.TransactionQueue))
+	for _, block := range bc.Blocks {
+		all = append(all, block.Transactions...)
+	}
+	return append(all, bc.TransactionQueue...)
 }
 
 // GetBlockCount returns the number of blocks in the blockchain.
@@ -1107,7 +1284,19 @@ func (bc *Blockchain) IsMenuActive() bool {
 	return bc.menuActive
 }
 
-// Cleanup performs any necessary cleanup
+// Cleanup releases the blockchain's resources and flushes state to disk.
+//
+// This used to be an empty function with the comment "No cleanup needed", so
+// SIGINT left the sidechain rollup goroutine running and the blockchain state
+// unflushed -- the last block's index was lost on every shutdown.
 func (bc *Blockchain) Cleanup() {
-	// No cleanup needed for menu state
+	if bc.sidechainRouter != nil {
+		bc.sidechainRouter.Stop()
+	}
+	if bc.progressIndicator != nil {
+		bc.progressIndicator.Stop()
+	}
+	if err := bc.Save(); err != nil {
+		LogInfof("Error saving blockchain state during shutdown: %v", err)
+	}
 }

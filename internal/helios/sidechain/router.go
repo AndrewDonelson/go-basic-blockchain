@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -61,12 +62,21 @@ type ProtocolRouter struct {
 
 	// Statistics
 	stats *RouterStats
+
+	// done stops the rollup timer. Without it NewProtocolRouter leaked a goroutine
+	// and a ticker per router, for the lifetime of the process -- including one per
+	// Blockchain constructed in the test suite.
+	done     chan struct{}
+	stopOnce sync.Once
 }
 
-// RouterStats holds router statistics
+// RouterStats holds router statistics.
+//
+// It no longer carries its own mutex. Every increment happened under
+// ProtocolRouter.mu while GetStats read under RouterStats.mu -- two different
+// locks guarding the same words, which is a data race regardless of the comment
+// claiming the copy avoided one. All access is now under ProtocolRouter.mu.
 type RouterStats struct {
-	mu sync.RWMutex
-
 	TotalTransactions     int64 `json:"total_transactions"`
 	ValidatedTransactions int64 `json:"validated_transactions"`
 	FailedTransactions    int64 `json:"failed_transactions"`
@@ -85,12 +95,20 @@ func NewProtocolRouter() *ProtocolRouter {
 		rollupInterval: 20 * time.Second,
 		lastRollup:     make(map[string]time.Time),
 		stats:          &RouterStats{},
+		done:           make(chan struct{}),
 	}
 
 	// Start rollup timer
 	go router.startRollupTimer()
 
 	return router
+}
+
+// Stop halts the rollup timer. It is safe to call more than once.
+func (pr *ProtocolRouter) Stop() {
+	pr.stopOnce.Do(func() {
+		close(pr.done)
+	})
 }
 
 // RouteTransaction routes a transaction to the appropriate protocol
@@ -135,13 +153,22 @@ func (pr *ProtocolRouter) RouteTransaction(
 	return tx, nil
 }
 
-// validateTransaction validates a transaction
+// validateTransaction validates a transaction.
+//
+// The previous implementation slept 100ms and then marked *everything*
+// StatusValidated -- it inspected nothing at all. The checks below are structural
+// (the router does not hold keys, so signature verification stays with the
+// blockchain), but they are real: an empty payload, a missing party or an unknown
+// protocol is now rejected instead of silently approved.
 func (pr *ProtocolRouter) validateTransaction(tx *ProtocolTransaction) {
 	startTime := time.Now()
 
-	// Simulate validation (in real implementation, this would validate the transaction)
-	// For now, we'll just mark it as validated after a short delay
-	time.Sleep(100 * time.Millisecond)
+	if err := validateProtocolTransaction(tx); err != nil {
+		pr.mu.Lock()
+		defer pr.mu.Unlock()
+		pr.markTransactionFailed(tx, err.Error())
+		return
+	}
 
 	pr.mu.Lock()
 	defer pr.mu.Unlock()
@@ -161,6 +188,29 @@ func (pr *ProtocolRouter) validateTransaction(tx *ProtocolTransaction) {
 			pr.markTransactionFailed(tx, err.Error())
 		}
 	}
+}
+
+// validateProtocolTransaction applies the structural checks the router can make.
+func validateProtocolTransaction(tx *ProtocolTransaction) error {
+	if tx == nil {
+		return fmt.Errorf("transaction is nil")
+	}
+	if len(tx.Data) == 0 {
+		return fmt.Errorf("transaction carries no payload")
+	}
+	if tx.Sender == "" {
+		return fmt.Errorf("transaction has no sender")
+	}
+	if tx.Recipient == "" {
+		return fmt.Errorf("transaction has no recipient")
+	}
+	if tx.Protocol != "BANK" && tx.Protocol != "MESSAGE" {
+		return fmt.Errorf("unsupported protocol: %s", tx.Protocol)
+	}
+	// Data is deliberately treated as opaque: the router routes, it does not parse
+	// payloads. Signature and balance checks belong to the blockchain, which holds
+	// the keys and the state.
+	return nil
 }
 
 // markTransactionFailed marks a transaction as failed
@@ -187,8 +237,13 @@ func (pr *ProtocolRouter) startRollupTimer() {
 	ticker := time.NewTicker(pr.rollupInterval)
 	defer ticker.Stop()
 
-	for range ticker.C {
-		pr.processRollups()
+	for {
+		select {
+		case <-pr.done:
+			return
+		case <-ticker.C:
+			pr.processRollups()
+		}
 	}
 }
 
@@ -270,7 +325,11 @@ func (pr *ProtocolRouter) calculateMerkleRoot(transactions []*ProtocolTransactio
 		var newHashes [][]byte
 		for i := 0; i < len(hashes); i += 2 {
 			if i+1 < len(hashes) {
-				combined := append(hashes[i], hashes[i+1]...)
+				// Build in a fresh buffer: appending to hashes[i] can write into
+				// its backing array.
+				combined := make([]byte, 0, len(hashes[i])+len(hashes[i+1]))
+				combined = append(combined, hashes[i]...)
+				combined = append(combined, hashes[i+1]...)
 				hash := sha256.Sum256(combined)
 				newHashes = append(newHashes, hash[:])
 			} else {
@@ -299,21 +358,12 @@ func (pr *ProtocolRouter) SetCallbacks(
 
 // GetStats returns router statistics
 func (pr *ProtocolRouter) GetStats() *RouterStats {
-	pr.stats.mu.RLock()
-	defer pr.stats.mu.RUnlock()
+	pr.mu.RLock()
+	defer pr.mu.RUnlock()
 
-	// Create a copy to avoid race conditions
-	stats := &RouterStats{}
-	// Copy stats without copying the mutex
-	stats.TotalTransactions = pr.stats.TotalTransactions
-	stats.ValidatedTransactions = pr.stats.ValidatedTransactions
-	stats.FailedTransactions = pr.stats.FailedTransactions
-	stats.RollupBlocksCreated = pr.stats.RollupBlocksCreated
-	stats.BankTransactions = pr.stats.BankTransactions
-	stats.MessageTransactions = pr.stats.MessageTransactions
-	stats.AverageValidationTime = pr.stats.AverageValidationTime
-	stats.AverageRollupTime = pr.stats.AverageRollupTime
-	return stats
+	// Return a copy so callers cannot mutate guarded state.
+	stats := *pr.stats
+	return &stats
 }
 
 // GetQueueStatus returns the current queue status
@@ -365,11 +415,20 @@ func (pr *ProtocolRouter) GetValidatedTransactions(protocol string) []*ProtocolT
 }
 
 // Helper functions
+// generateTransactionID derives a unique ID for a routed transaction.
+//
+// A monotonic counter is mixed in: hashing only (data, sender, recipient) meant
+// two identical transfers produced the same ID, so the second was
+// indistinguishable from a replay of the first.
 func generateTransactionID(data []byte, sender, recipient string) string {
-	input := fmt.Sprintf("%s:%s:%s", string(data), sender, recipient)
+	seq := atomic.AddUint64(&protocolTxSequence, 1)
+	input := fmt.Sprintf("%s:%s:%s:%d:%d", string(data), sender, recipient, time.Now().UnixNano(), seq)
 	hash := sha256.Sum256([]byte(input))
 	return hex.EncodeToString(hash[:])
 }
+
+// protocolTxSequence guarantees distinct IDs for otherwise identical transactions.
+var protocolTxSequence uint64
 
 func generateRollupID(protocol string, timestamp time.Time) string {
 	input := fmt.Sprintf("%s:%d", protocol, timestamp.UnixNano())

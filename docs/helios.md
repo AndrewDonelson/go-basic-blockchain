@@ -1,395 +1,225 @@
 # Helios Consensus Algorithm
 
-The Helios consensus algorithm is an advanced three-stage consensus mechanism that provides enhanced security, scalability, and transaction processing capabilities for the Go Basic Blockchain.
+Helios is the proof-of-work algorithm used by this blockchain. It is a
+**three-phase mining function**: each nonce attempt runs a memory-hard phase, a
+sequential phase and a cipher phase, and the three results are folded into a
+final SHA-256 hash that must fall below the target.
 
-## 🎯 Overview
+> **This file was rewritten.** The previous version described a design that was
+> never implemented — a `HeliosConsensus` type generating per-transaction proofs
+> across "Proof Generation / Sidechain Routing / Block Finalization" stages. The
+> real implementation is in `internal/helios/algorithm/helios.go`, and what it
+> does is documented below.
 
-Helios represents a significant advancement over traditional proof-of-work consensus by introducing:
-- **Three-stage validation process**
-- **Sidechain routing capabilities**
-- **Dynamic difficulty adjustment**
-- **Cryptographic proof validation**
-- **Rollup block processing**
+## 🎯 What Helios actually is
 
-## 🏗️ Architecture
-
-### Three-Stage Process
+A nonce search, like Bitcoin's, with a deliberately expensive per-attempt
+function instead of a single hash:
 
 ```
-┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
-│   Stage 1       │    │   Stage 2       │    │   Stage 3       │
-│   Proof         │───►│   Sidechain     │───►│   Block         │
-│   Generation    │    │   Routing       │    │   Finalization  │
-└─────────────────┘    └─────────────────┘    └─────────────────┘
+for nonce = 0, 1, 2, …
+    stage1 = MemoryPhase(blockHeader, nonce)      # memory-hard
+    stage2 = TimeLockPhase(stage1)                # sequential, un-parallelisable
+    stage3 = CryptoPhase(stage2)                  # iterated AES-GCM
+    hash   = SHA256(blockHeader ‖ nonce ‖ stage1 ‖ stage2 ‖ stage3)
+    if hash <= target: done
 ```
 
-### Stage 1: Proof Generation
+The intent is to make mining costly along three different axes (memory
+bandwidth, sequential latency, cipher throughput) rather than raw hash rate.
 
-**Purpose**: Create cryptographic proofs for transaction validation
+## 🔑 The property that makes it work: determinism
 
-**Process**:
-1. **Transaction Validation**: Verify transaction format and signatures
-2. **Proof Creation**: Generate cryptographic proofs for each transaction
-3. **Difficulty Check**: Validate proof meets current difficulty requirements
-4. **Proof Aggregation**: Combine individual proofs into block proof
+**Every phase must be reproducible from the block header and the nonce alone.**
+This is not a stylistic preference — it is the entire basis of the algorithm's
+security, and it is worth understanding why.
 
-**Implementation**:
+A verifier is given a block and a proof. To check that work was done, it must be
+able to **recompute** each phase and compare. If any phase depends on something
+the verifier cannot reproduce, it has no choice but to accept the miner's claimed
+output — and at that point the phase constrains nothing.
+
+An earlier version of this code derived the stage-3 AES key and nonce from
+`crypto/rand`:
+
 ```go
-func (h *HeliosConsensus) GenerateProofs(transactions []Transaction) ([]Proof, error) {
-    var proofs []Proof
-    
-    for _, tx := range transactions {
-        proof := h.createTransactionProof(tx)
-        if h.validateProof(proof) {
-            proofs = append(proofs, proof)
-        }
-    }
-    
-    return proofs, nil
-}
+// WRONG -- this is what the code used to do
+key   := make([]byte, h.config.CryptoKeySize)
+nonce := make([]byte, 12)
+rand.Read(key)      // non-deterministic
+rand.Read(nonce)    // non-deterministic
 ```
 
-### Stage 2: Sidechain Routing
+Because stage 3 could not be recomputed, `ValidateProof` re-hashed the stage
+outputs *stored in the proof* rather than recomputing them. The consequence:
 
-**Purpose**: Route transactions through specialized protocols
+> A miner could invent arbitrary bytes for all three stage results and
+> brute-force only the final SHA-256. The memory-hard phase, the sequential phase
+> and the cipher phase were all skippable at zero cost. The "three-stage proof of
+> work" reduced to a plain SHA-256 grind over attacker-chosen input.
 
-**Process**:
-1. **Protocol Detection**: Identify transaction type and target protocol
-2. **Sidechain Selection**: Choose appropriate sidechain for processing
-3. **Transaction Routing**: Route transaction to specialized handler
-4. **Protocol Processing**: Execute protocol-specific logic
-5. **Result Validation**: Verify protocol processing results
+The key and nonce are now derived from the stage-2 result with domain separation:
 
-**Supported Protocols**:
-- **BANK**: Traditional cryptocurrency transfers
-- **MESSAGE**: Encrypted messaging system
-- **COINBASE**: Mining reward transactions
-- **PERSIST**: Data persistence transactions
-
-**Implementation**:
 ```go
-func (h *HeliosConsensus) RouteTransactions(transactions []Transaction) error {
-    for _, tx := range transactions {
-        protocol := h.detectProtocol(tx)
-        sidechain := h.getSidechain(protocol)
-        
-        if err := sidechain.ProcessTransaction(tx); err != nil {
-            return err
-        }
-    }
-    return nil
-}
+keyDigest   := sha256.Sum256(append([]byte("helios/stage3/key"), stage2Result...))
+nonceDigest := sha256.Sum256(append([]byte("helios/stage3/nonce"), stage2Result...))
 ```
 
-### Stage 3: Block Finalization
+and `ValidateProof` recomputes every phase from the header. `TestValidateProofRejectsFabricatedStages`
+covers this directly, including the strongest form of the attack: all three
+stages invented *and* the final hash recomputed to match them, so the proof is
+internally consistent. Only recomputation from the header catches that.
 
-**Purpose**: Finalize blocks with proof verification
+## 🏗️ The three phases
 
-**Process**:
-1. **Proof Verification**: Validate all cryptographic proofs
-2. **Block Assembly**: Create final block structure
-3. **Chain Validation**: Verify block fits in current chain
-4. **State Update**: Update blockchain state
-5. **Network Broadcast**: Propagate block to network
+### Phase 1 — Memory (weight 40)
 
-**Implementation**:
-```go
-func (h *HeliosConsensus) FinalizeBlock(block *Block, proofs []Proof) error {
-    // Verify all proofs
-    if err := h.verifyProofs(proofs); err != nil {
-        return err
-    }
-    
-    // Validate block structure
-    if err := h.validateBlock(block); err != nil {
-        return err
-    }
-    
-    // Update blockchain state
-    return h.updateChainState(block)
-}
-```
+Allocates `MemoryBaseSize` bytes, seeds the first 32 bytes with
+`SHA256(blockHeader ‖ nonce)`, then fills and mixes the buffer. Returns
+`SHA256(memory)`.
 
-## 🔧 Implementation Details
+The cost is memory bandwidth, which is harder to scale with special-purpose
+hardware than raw hashing.
 
-### Core Structures
+### Phase 2 — Time-lock (weight 30)
 
-**HeliosConsensus**:
-```go
-type HeliosConsensus struct {
-    Difficulty      int
-    Target          *big.Int
-    SidechainRouter *SidechainRouter
-    ProofValidator  *ProofValidator
-    Config          *HeliosConfig
-}
-```
+A sequential hash chain of `TimeLockIterations` rounds. Each round depends on the
+previous one, so the work cannot be split across cores.
 
-**Proof Structure**:
-```go
-type Proof struct {
-    TransactionID string
-    ProofData     []byte
-    Difficulty    int
-    Timestamp     int64
-    Validator     string
-}
-```
+**This phase used to call `time.Sleep` on every iteration of every nonce
+attempt.** Sleeping is not computation: it consumes no resources, costs nothing
+to skip if the output is fabricated, and a miner running N goroutines pays the
+same wall-clock cost as one. The chain length is the work; the sleep is gone.
 
-**Sidechain Router**:
-```go
-type SidechainRouter struct {
-    Protocols map[string]Protocol
-    Handlers  map[string]TransactionHandler
-}
-```
+### Phase 3 — Cryptographic (weight 30)
 
-### Difficulty Adjustment
+Iterated AES-GCM sealing, with the key and nonce derived deterministically from
+phase 2 as described above.
 
-**Dynamic Difficulty**:
-- **Parameterized Targets**: Configurable difficulty parameters
-- **Network Conditions**: Adjust based on network activity
-- **Block Time**: Maintain consistent block creation time
-- **Security Level**: Balance security vs performance
+The weights must sum to 100 or `Mine` returns an error. They are currently
+descriptive — they document the intended cost split rather than scaling it.
 
-**Implementation**:
-```go
-func (h *HeliosConsensus) AdjustDifficulty() {
-    currentTime := time.Now().Unix()
-    expectedTime := h.Config.BlockTime
-    
-    if currentTime < expectedTime {
-        h.Difficulty++
-    } else {
-        h.Difficulty--
-    }
-    
-    h.updateTarget()
-}
-```
+## ✅ Validation
 
-### Proof Validation
+`HeliosAlgorithm.ValidateProof(proof, blockHeader, target)`:
 
-**Validation Process**:
-1. **Format Check**: Verify proof structure
-2. **Difficulty Check**: Ensure proof meets difficulty
-3. **Cryptographic Check**: Validate cryptographic properties
-4. **Timestamp Check**: Verify proof timing
-5. **Transaction Check**: Confirm proof matches transaction
+1. Recompute phase 1 from the header and the proof's nonce; compare to
+   `Stage1Result`.
+2. Recompute phase 2 from that; compare to `Stage2Result`.
+3. Recompute phase 3 from that; compare to `Stage3Result`.
+4. Recompute the final hash; compare to `FinalHash`.
+5. Compare the recomputed hash against the target.
 
-**Security Features**:
-- **Collision Resistance**: Prevent proof forgery
-- **Temporal Validation**: Prevent replay attacks
-- **Difficulty Enforcement**: Maintain network security
-- **Proof Aggregation**: Efficient batch validation
+`validation.ProofValidator` adds structural checks (stage presence, hash format,
+nonce sanity) and its own target comparison — against the **decoded hash value**,
+not the proof's self-declared `Difficulty` field. That field is written by the
+miner, and `Mine` sets it to the target itself, so comparing the two was `x <= x`
+and could never fail.
 
-## 🚀 Advanced Features
+### Where validation runs
 
-### Rollup Block Processing
+The proof is stored on the block (`Block.HeliosProof`) and verified:
 
-**Purpose**: Efficiently process multiple blocks
+- at mining time, before a block is published (self-check);
+- in `Blockchain.AcceptBlock`, for blocks received from a peer;
+- in `Blockchain.ValidateChain`, for every block in the chain.
 
-**Process**:
-1. **Block Batching**: Group multiple blocks together
-2. **Batch Proof Generation**: Create proofs for entire batch
-3. **Parallel Processing**: Process blocks concurrently
-4. **Batch Validation**: Validate entire batch at once
-5. **State Update**: Update blockchain state efficiently
-
-**Benefits**:
-- **Improved Performance**: Faster block processing
-- **Reduced Overhead**: Lower computational cost
-- **Better Scalability**: Handle higher transaction volumes
-- **Efficient Storage**: Optimized data structures
-
-### Sidechain Protocols
-
-**BANK Protocol**:
-- Traditional cryptocurrency transfers
-- Balance validation
-- Double-spend prevention
-- Fee calculation
-
-**MESSAGE Protocol**:
-- Encrypted messaging
-- End-to-end encryption
-- Message persistence
-- Access control
-
-**COINBASE Protocol**:
-- Mining reward distribution
-- Block reward calculation
-- Fee collection
-- Reward validation
-
-**PERSIST Protocol**:
-- Data persistence
-- Storage optimization
-- Access control
-- Data integrity
-
-## 📊 Performance Characteristics
-
-### Scalability Metrics
-
-**Transaction Throughput**:
-- **Base Layer**: 1000+ TPS
-- **Sidechain Layer**: 5000+ TPS per protocol
-- **Rollup Processing**: 10,000+ TPS
-
-**Block Creation Time**:
-- **Target**: 10 seconds per block
-- **Actual**: 8-12 seconds average
-- **Variation**: ±20% acceptable range
-
-**Network Latency**:
-- **Local Network**: <1ms
-- **Regional Network**: <50ms
-- **Global Network**: <200ms
-
-### Resource Usage
-
-**Memory Consumption**:
-- **Base Blockchain**: 100MB
-- **Helios Consensus**: 50MB
-- **Sidechain Router**: 25MB
-- **Proof Storage**: 10MB
-
-**CPU Usage**:
-- **Proof Generation**: 30% of mining time
-- **Sidechain Routing**: 20% of processing time
-- **Block Finalization**: 10% of block time
-- **Network Sync**: 5% of total time
-
-## 🔐 Security Considerations
-
-### Cryptographic Security
-
-**Proof Security**:
-- **Collision Resistance**: SHA-256 hashing
-- **Temporal Security**: Timestamp validation
-- **Difficulty Enforcement**: Computational requirements
-- **Validation Integrity**: Multi-stage verification
-
-**Sidechain Security**:
-- **Protocol Isolation**: Separate security domains
-- **Access Control**: Protocol-specific permissions
-- **Data Integrity**: Cryptographic validation
-- **Audit Trail**: Complete transaction history
-
-### Network Security
-
-**Consensus Security**:
-- **Byzantine Fault Tolerance**: Handle malicious nodes
-- **Sybil Attack Prevention**: Identity verification
-- **51% Attack Resistance**: Distributed consensus
-- **Network Partition Handling**: Graceful degradation
-
-**Communication Security**:
-- **Encrypted Communication**: TLS for API
-- **Peer Authentication**: Node identity verification
-- **Message Integrity**: Cryptographic signatures
-- **Replay Protection**: Timestamp validation
-
-## 🧪 Testing
-
-### Test Categories
-
-**Unit Tests**:
-- Proof generation and validation
-- Sidechain routing logic
-- Difficulty adjustment
-- Block finalization
-
-**Integration Tests**:
-- End-to-end consensus flow
-- Multi-protocol processing
-- Network synchronization
-- State consistency
-
-**Performance Tests**:
-- Throughput measurement
-- Latency analysis
-- Resource usage monitoring
-- Scalability testing
-
-### Test Configuration
-
-**Test Parameters**:
-```go
-type HeliosTestConfig struct {
-    Difficulty      int    // Reduced for testing
-    BlockTime       int    // Faster blocks
-    ProofTimeout    int    // Shorter timeouts
-    SidechainCount  int    // Limited protocols
-}
-```
-
-**Test Scenarios**:
-- **Normal Operation**: Standard consensus flow
-- **High Load**: Maximum transaction volume
-- **Network Partition**: Split network conditions
-- **Malicious Nodes**: Byzantine fault scenarios
+Previously `bc.heliosValidator` was constructed and then never called anywhere,
+and the proof was discarded at mining time — so no block was ever verifiable
+after the fact.
 
 ## 🔧 Configuration
 
-### Helios Configuration
+```go
+type HeliosConfig struct {
+    MemoryWeight   int  // 40   — must sum to 100
+    TimeLockWeight int  // 30
+    CryptoWeight   int  // 30
 
-**Basic Settings**:
-```json
-{
-  "difficulty": 4,
-  "block_time": 10,
-  "proof_timeout": 30,
-  "sidechain_enabled": true,
-  "rollup_enabled": true
+    MemoryBaseSize    int     // bytes; floored at 32
+    MemoryScaleFactor float64
+    MemoryIterations  int
+
+    TimeLockBaseDuration time.Duration // retained for config compatibility
+    TimeLockScaleFactor  float64
+    TimeLockIterations   int           // the actual work: chain length
+
+    CryptoKeySize    int // 32 (AES-256)
+    CryptoBlockSize  int
+    CryptoIterations int
+
+    EnableEnergyTracking bool
+    MiningTimeout        time.Duration // 0 = 18s default
 }
 ```
 
-**Advanced Settings**:
-```json
-{
-  "difficulty_adjustment": {
-    "enabled": true,
-    "interval": 100,
-    "target_time": 10
-  },
-  "sidechain_config": {
-    "bank_enabled": true,
-    "message_enabled": true,
-    "coinbase_enabled": true,
-    "persist_enabled": true
-  },
-  "proof_config": {
-    "validation_timeout": 30,
-    "batch_size": 100,
-    "parallel_processing": true
-  }
-}
+`DefaultHeliosConfig()` is the production profile; `TestHeliosConfig()` is a much
+cheaper one for tests.
+
+> **Known gap:** `sdk.NewBlockchain` currently constructs the algorithm with
+> `TestHeliosConfig()`, with the comment *"Use test config for faster mining"*.
+> That is fine for an educational single node, but it means the shipped chain runs
+> test-grade mining parameters. Switching it to `DefaultHeliosConfig()` is a
+> one-line change when the node is meant to do real work.
+
+### Mining timeout
+
+`Mine` gives up after `MiningTimeout` and returns an **error**. The caller
+(`Blockchain.createNewBlock`) treats that as a hard failure: the block is
+abandoned and its transactions are returned to the mempool.
+
+Previously the timeout was logged and the *unmined* block was returned, appended
+to the chain and persisted — so blocks with no valid proof entered the chain
+whenever mining was slow.
+
+## 🔐 Security notes
+
+Honest assessment of what this does and does not give you:
+
+**It does:**
+- Make each nonce attempt expensive along three axes.
+- Produce a proof that any node can independently verify from the block header.
+- Bind the proof to a specific block header and nonce, so proofs cannot be reused
+  across blocks (`TestValidateProofRejectsWrongHeaderOrNonce`).
+
+**It does not:**
+- Provide network consensus. There is no chain sync and no fork choice, so
+  "longest chain wins" is not implemented at all. A single node mines its own
+  chain.
+- Provide ASIC resistance in any rigorous sense. The memory phase is
+  Argon2-*inspired*, not Argon2, and has not been analysed.
+- Provide a verifiable delay function. Phase 2 is a sequential hash chain, which
+  is un-parallelisable but is not a VDF — verification costs the same as
+  computation. A real VDF (repeated squaring in a group of unknown order) would
+  give fast verification of slow work.
+
+## 🧪 Testing
+
+`internal/helios/algorithm/determinism_test.go` covers the properties above:
+
+| Test | Property |
+|---|---|
+| `TestStagesAreDeterministic` | Every phase reproduces from header + nonce |
+| `TestMinedProofValidates` | Round trip: what `Mine` produces, `ValidateProof` accepts |
+| `TestValidateProofRejectsFabricatedStages` | Invented stages rejected, including a self-consistent fabrication |
+| `TestValidateProofRejectsWrongHeaderOrNonce` | Proofs cannot be reused across blocks |
+| `TestValidateProofRejectsHashAboveTarget` | Difficulty is enforced against the real hash |
+| `TestTimeLockPhaseDoesNotSleep` | Phase 2 does real work rather than sleeping |
+| `TestMemoryPhaseDoesNotMutateTheHeader` | No `append` aliasing into the caller's slice |
+| `TestMemoryPhaseHandlesUnalignedSizes` | No out-of-range slicing for any buffer size |
+| `TestMiningTimeoutIsReported` | A timeout is an error, never a block |
+
+Run them with:
+
+```bash
+go test ./internal/helios/... -v
 ```
 
-## 📈 Future Enhancements
+## 📈 Future work
 
-### Planned Features
-
-**Additional Protocols**:
-- **DEFI**: Decentralized finance protocols
-- **NFT**: Non-fungible token support
-- **DAO**: Decentralized autonomous organizations
-- **Oracle**: External data integration
-
-**Performance Improvements**:
-- **Sharding**: Horizontal scaling
-- **Layer 2**: Off-chain processing
-- **Optimistic Rollups**: Faster finality
-- **Zero-Knowledge Proofs**: Privacy features
-
-**Security Enhancements**:
-- **Threshold Signatures**: Multi-party security
-- **Homomorphic Encryption**: Privacy-preserving computation
-- **Quantum Resistance**: Post-quantum cryptography
-- **Formal Verification**: Mathematical correctness
-
----
-
-**The Helios consensus algorithm represents a significant advancement in blockchain consensus mechanisms, providing enhanced security, scalability, and functionality while maintaining the educational value of the project.** 
+- Replace phase 2 with a genuine VDF so verification is cheaper than computation.
+- Wire `internal/helios/difficulty` into block production. It is implemented and
+  tested but nothing calls it; `Config.Difficulty` is currently static.
+- Scale the phase parameters by the weights, so the weights are load-bearing
+  rather than descriptive.
+- Analyse the memory phase properly, or replace it with real Argon2id.

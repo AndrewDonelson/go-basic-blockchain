@@ -3,8 +3,10 @@
 package sdk
 
 import (
+	"context"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"html/template"
 	"io"
@@ -12,6 +14,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	appservices "github.com/AndrewDonelson/go-basic-blockchain/internal/application/services"
@@ -23,6 +26,21 @@ import (
 type ErrorResponse struct {
 	Message string `json:"message"`
 }
+
+// HTTP server hardening. http.ListenAndServe uses a zero-value http.Server, which
+// has no timeouts at all: a handful of slow clients can hold every connection open
+// indefinitely (Slowloris).
+const (
+	apiReadHeaderTimeout = 10 * time.Second
+	apiReadTimeout       = 30 * time.Second
+	apiWriteTimeout      = 30 * time.Second
+	apiIdleTimeout       = 120 * time.Second
+	apiMaxHeaderBytes    = 1 << 20 // 1 MiB
+	apiMaxBodyBytes      = 1 << 20 // 1 MiB
+	// defaultPageLimit / maxPageLimit bound paginated collection responses.
+	defaultPageLimit = 10
+	maxPageLimit     = 1000
+)
 
 // Blockchain API
 //
@@ -75,8 +93,31 @@ type API struct {
 	router            *mux.Router
 	log               *logging.Logger
 	running           bool
+	runningMu         sync.RWMutex
+	server            *http.Server
 	blockchainService *appservices.BlockchainService
 	accountStore      AccountStore
+	accountLimiter    *rateLimiter
+}
+
+// respondJSON writes v as a JSON response with the given status code.
+//
+// Every handler previously repeated the same 12-line marshal/WriteHeader/Write
+// block, and several wrote the status code before discovering the payload could
+// not be marshalled -- at which point http.Error could no longer set a 500.
+func respondJSON(w http.ResponseWriter, status int, v interface{}) {
+	data, err := json.Marshal(v)
+	if err != nil {
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	if _, err := w.Write(data); err != nil {
+		// The status line is already sent; all that is left is to record it.
+		LogVerbosef("failed writing response body: %v", err)
+	}
 }
 
 var publicPaths = []string{
@@ -98,6 +139,7 @@ func NewAPI(bc *Blockchain) *API {
 		router:            mux.NewRouter(),
 		blockchainService: appservices.NewBlockchainService(bc),
 		accountStore:      NewFileAccountStore(bc.GetConfig().DataPath),
+		accountLimiter:    newRateLimiter(authRateLimitAttempts, authRateLimitWindow),
 	}
 
 	LogInfof("Initializing API...")
@@ -132,6 +174,11 @@ func isPublicPath(path string) bool {
 	return false
 }
 
+// authenticateNode guards the /consensus endpoints.
+//
+// With no key configured this now refuses every request rather than relying on a
+// published fallback key. Comparisons are constant-time and attempts are rate
+// limited per source address.
 func authenticateNode(next http.Handler) http.Handler {
 	cfg := defaultAPIKeyConfig()
 	decodedAPIKeys := make(map[string][]byte)
@@ -146,9 +193,18 @@ func authenticateNode(next http.Handler) http.Handler {
 		decodedAPIKeys[name] = decodedKey
 	}
 
+	limiter := newRateLimiter(authRateLimitAttempts, authRateLimitWindow)
+
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if len(decodedAPIKeys) == 0 {
-			http.Error(w, "Consensus authentication unavailable", http.StatusInternalServerError)
+			RespondError(w, http.StatusServiceUnavailable,
+				"consensus authentication unavailable: no API key configured")
+			return
+		}
+
+		host := clientIP(r)
+		if !limiter.allow(host) {
+			RespondError(w, http.StatusTooManyRequests, "too many authentication attempts")
 			return
 		}
 
@@ -158,12 +214,14 @@ func authenticateNode(next http.Handler) http.Handler {
 			return
 		}
 
-		if _, ok := apiKeyIsValid(apiKey, decodedAPIKeys); !ok {
+		principal, ok := apiKeyIsValid(apiKey, decodedAPIKeys)
+		if !ok {
 			RespondError(w, http.StatusUnauthorized, "unauthorized")
 			return
 		}
 
-		next.ServeHTTP(w, r)
+		limiter.reset(host)
+		next.ServeHTTP(w, r.WithContext(withPrincipal(r.Context(), principal)))
 	})
 }
 
@@ -207,25 +265,40 @@ func (ww *responseWriterWrapper) Write(data []byte) (int, error) {
 	return n, err
 }
 
-// IsRunning returns true if the API is running
+// IsRunning returns true if the API is running.
 func (api *API) IsRunning() bool {
+	api.runningMu.RLock()
+	defer api.runningMu.RUnlock()
 	return api.running
 }
 
-// Start starts the API and listens for incoming requests
-func (api *API) Start() {
+func (api *API) setRunning(running bool) {
+	api.runningMu.Lock()
+	defer api.runningMu.Unlock()
+	api.running = running
+}
 
+// Start starts the API and listens for incoming requests.
+//
+// It returns an error instead of calling log.Fatal: a library must not terminate
+// the host process, and the caller needs to know the listener failed. The server
+// is configured with explicit timeouts -- http.ListenAndServe's zero-value server
+// has none, which leaves it open to Slowloris-style connection exhaustion.
+func (api *API) Start() error {
 	if api.IsRunning() {
-		return
+		return nil
 	}
+
+	keyCfg := defaultAPIKeyConfig()
+	keyCfg.accountStore = api.accountStore
 
 	// Create a logging middleware
 	api.router.Use(loggingMiddleware)
 
 	// API key middleware
-	apiKeyMiddleware, err := ApiKeyMiddleware(defaultAPIKeyConfig(), api.log)
+	apiKeyMiddleware, err := ApiKeyMiddleware(keyCfg, api.log)
 	if err != nil {
-		api.log.Fatal("Error initializing API key middleware:", err)
+		return fmt.Errorf("error initializing API key middleware: %w", err)
 	}
 	api.router.Use(apiKeyMiddleware)
 
@@ -234,10 +307,41 @@ func (api *API) Start() {
 		bindAddr = cfg.APIHostName
 	}
 
-	// Start the HTTP server
-	LogInfof("API server starting on %s", bindAddr)
+	server := &http.Server{
+		Addr:              bindAddr,
+		Handler:           api.router,
+		ReadHeaderTimeout: apiReadHeaderTimeout,
+		ReadTimeout:       apiReadTimeout,
+		WriteTimeout:      apiWriteTimeout,
+		IdleTimeout:       apiIdleTimeout,
+		MaxHeaderBytes:    apiMaxHeaderBytes,
+	}
+
+	api.runningMu.Lock()
+	api.server = server
 	api.running = true
-	api.log.Fatal(http.ListenAndServe(bindAddr, api.router))
+	api.runningMu.Unlock()
+
+	LogInfof("API server starting on %s", bindAddr)
+	if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		api.setRunning(false)
+		return fmt.Errorf("api server stopped: %w", err)
+	}
+
+	api.setRunning(false)
+	return nil
+}
+
+// Stop gracefully shuts the API server down.
+func (api *API) Stop(ctx context.Context) error {
+	api.runningMu.RLock()
+	server := api.server
+	api.runningMu.RUnlock()
+
+	if server == nil {
+		return nil
+	}
+	return server.Shutdown(ctx)
 }
 
 // GetConfig returns the configuration used to create the API instance.
@@ -257,9 +361,11 @@ func (api *API) registerRoutes() {
 	api.router.HandleFunc("/info", api.handleInfo).Methods("GET") // Same as / but JSON only
 	api.router.HandleFunc("/health", api.handleHealth).Methods("GET")
 
-	// Register Public Account Endpoints
-	api.router.HandleFunc("/account/register", api.handleAccountRegister).Methods("GET")
-	api.router.HandleFunc("/account/login", api.handleAccountLogin).Methods("GET")
+	// Register Public Account Endpoints.
+	// register/login are POST: they create state and carry a credential, neither
+	// of which belongs in a GET query string.
+	api.router.HandleFunc("/account/register", api.handleAccountRegister).Methods("POST")
+	api.router.HandleFunc("/account/login", api.handleAccountLogin).Methods("POST")
 	api.router.HandleFunc("/account/verify", api.handleAccountVerify).Methods("GET")
 
 	// Register Private Account Endpoints
@@ -277,19 +383,22 @@ func (api *API) registerRoutes() {
 	api.router.HandleFunc("/blockchain/blocks/{index}", api.handleViewBlock).Methods("GET")
 	api.router.HandleFunc("/blockchain/blocks/{index}/transactions", api.handleBrowseTransactionsInBlock).Methods("GET")
 	api.router.HandleFunc("/blockchain/blocks/{index}/transactions/{id}", api.handleViewTransactionInBlock).Methods("GET")
-	api.router.HandleFunc("/blockchain/blocks/{index}/transactions/{protocol}", api.handleBrowseTransactionsByProtocolInBlock).Methods("GET")
 	api.router.HandleFunc("/blockchain/wallets", api.handleBrowseWallets).Methods("GET")
-	api.router.HandleFunc("/blockchain/wallets/new", api.handleCreateWallet).Methods("GET")
+	// POST: creating a wallet is not a safe, idempotent, cacheable operation.
+	api.router.HandleFunc("/blockchain/wallets/new", api.handleCreateWallet).Methods("POST")
 	api.router.HandleFunc("/blockchain/wallets/tx", api.handleCreateWalletTransaction).Methods("POST")
 	api.router.HandleFunc("/blockchain/wallets/{id}", api.handleViewWallet).Methods("GET")
 	api.router.HandleFunc("/blockchain/wallets/{id}", api.handleUpdateWallet).Methods("POST")
 	api.router.HandleFunc("/blockchain/wallets/{id}/balance", api.handleViewWalletBalance).Methods("GET")
 	api.router.HandleFunc("/blockchain/wallets/{id}/transactions", api.handleBrowseTransactionsForWallet).Methods("GET")
-	api.router.HandleFunc("/blockchain/wallets/{id}/transactions/{id}", api.handleViewTransactionForWallet).Methods("GET")
-	api.router.HandleFunc("/blockchain/wallets/{id}/transactions/{protocol}", api.handleBrowseTransactionsByProtocolForWallet).Methods("GET")
+	// Was "/blockchain/wallets/{id}/transactions/{id}" -- two variables with the
+	// same name, of which mux keeps only one. The handler worked around it by
+	// re-parsing r.URL.Path by hand; with distinct names mux.Vars is usable again.
+	api.router.HandleFunc("/blockchain/wallets/{id}/transactions/{txid}", api.handleViewTransactionForWallet).Methods("GET")
 	api.router.HandleFunc("/blockchain/transactions", api.handleBrowseTransactions).Methods("GET")
+	// A single route handles both an ID and a protocol name; registering the same
+	// pattern twice left the second registration permanently unreachable.
 	api.router.HandleFunc("/blockchain/transactions/{id}", api.handleViewTransaction).Methods("GET")
-	api.router.HandleFunc("/blockchain/transactions/{protocol}", api.handleBrowseTransactionsByProtocol).Methods("GET")
 
 	// Create a subrouter for the consensus endpoints
 	// This is only available to other regsitered/authorized nodes
@@ -486,62 +595,104 @@ func (api *API) handleConsensusP2P(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusCreated)
 }
 
-// handleConsensusTx handles the consensus/tx endpoint.
+// handleConsensusTx accepts a transaction from another node.
+//
+// This used to parse the body into a discarded map and answer {"accepted":true}
+// unconditionally -- it validated nothing and stored nothing, while telling the
+// caller its transaction had been accepted. It now verifies the signature and
+// enqueues the transaction, or reports precisely why it did not.
 func (api *API) handleConsensusTx(w http.ResponseWriter, r *http.Request) {
-	body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+	body, err := io.ReadAll(io.LimitReader(r.Body, apiMaxBodyBytes))
 	if err != nil {
-		http.Error(w, "Failed to read request body", http.StatusBadRequest)
+		RespondError(w, http.StatusBadRequest, "Failed to read request body")
 		return
 	}
 
-	var payload map[string]interface{}
-	if err := json.Unmarshal(body, &payload); err != nil {
-		http.Error(w, "Invalid JSON payload", http.StatusBadRequest)
+	tx, err := DecodeTransaction(body)
+	if err != nil {
+		RespondError(w, http.StatusBadRequest, fmt.Sprintf("Invalid transaction payload: %v", err))
 		return
 	}
 
-	response := struct {
-		Status   string `json:"status"`
-		Accepted bool   `json:"accepted"`
-	}{
-		Status:   "ok",
-		Accepted: true,
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	if err := json.NewEncoder(w).Encode(response); err != nil {
-		http.Error(w, "Internal server error", http.StatusInternalServerError)
+	if err := tx.Validate(); err != nil {
+		respondJSON(w, http.StatusUnprocessableEntity, consensusResult{
+			Status: "rejected", Accepted: false, Reason: err.Error(),
+		})
 		return
 	}
+
+	sender := tx.GetSenderWallet()
+	if sender == nil {
+		respondJSON(w, http.StatusUnprocessableEntity, consensusResult{
+			Status: "rejected", Accepted: false, Reason: "transaction has no sender wallet",
+		})
+		return
+	}
+
+	valid, err := tx.Verify([]byte(sender.PublicPEM()), tx.GetSignature())
+	if err != nil || !valid {
+		reason := "signature verification failed"
+		if err != nil {
+			reason = err.Error()
+		}
+		respondJSON(w, http.StatusUnprocessableEntity, consensusResult{
+			Status: "rejected", Accepted: false, Reason: reason,
+		})
+		return
+	}
+
+	if api.bc.HasTransactionID(tx.GetID()) {
+		respondJSON(w, http.StatusOK, consensusResult{
+			Status: "duplicate", Accepted: false, Reason: "transaction already known", ID: tx.GetID(),
+		})
+		return
+	}
+
+	api.bc.AddTransaction(tx)
+
+	respondJSON(w, http.StatusAccepted, consensusResult{
+		Status: "ok", Accepted: true, ID: tx.GetID(),
+	})
 }
 
-// handleConsensusBlock handles the consensus/block endpoint.
+// consensusResult is the reply shape for the consensus endpoints.
+type consensusResult struct {
+	Status   string `json:"status"`
+	Accepted bool   `json:"accepted"`
+	Reason   string `json:"reason,omitempty"`
+	ID       string `json:"id,omitempty"`
+}
+
+// handleConsensusBlock accepts a block from another node.
+//
+// Like consensus/tx this previously answered {"accepted":true} without looking at
+// the payload. It now validates the block against the current head before
+// accepting it. Full fork-choice/reorg handling is still absent (see the design
+// notes), so a block that does not extend the current head is explicitly refused
+// rather than silently "accepted".
 func (api *API) handleConsensusBlock(w http.ResponseWriter, r *http.Request) {
-	body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+	body, err := io.ReadAll(io.LimitReader(r.Body, apiMaxBodyBytes))
 	if err != nil {
-		http.Error(w, "Failed to read request body", http.StatusBadRequest)
+		RespondError(w, http.StatusBadRequest, "Failed to read request body")
 		return
 	}
 
-	var payload map[string]interface{}
-	if err := json.Unmarshal(body, &payload); err != nil {
-		http.Error(w, "Invalid JSON payload", http.StatusBadRequest)
+	block := &Block{}
+	if err := json.Unmarshal(body, block); err != nil {
+		RespondError(w, http.StatusBadRequest, fmt.Sprintf("Invalid block payload: %v", err))
 		return
 	}
 
-	response := struct {
-		Status   string `json:"status"`
-		Accepted bool   `json:"accepted"`
-	}{
-		Status:   "ok",
-		Accepted: true,
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	if err := json.NewEncoder(w).Encode(response); err != nil {
-		http.Error(w, "Internal server error", http.StatusInternalServerError)
+	if err := api.bc.AcceptBlock(block); err != nil {
+		respondJSON(w, http.StatusUnprocessableEntity, consensusResult{
+			Status: "rejected", Accepted: false, Reason: err.Error(), ID: block.Hash,
+		})
 		return
 	}
+
+	respondJSON(w, http.StatusAccepted, consensusResult{
+		Status: "ok", Accepted: true, ID: block.Hash,
+	})
 }
 
 // handleBlockchain handles the blockchain endpoint.
@@ -575,49 +726,52 @@ func (api *API) handleBlockchain(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// handleBrowseBlocks handles the /blockchain/blocks endpoint.
-func (api *API) handleBrowseBlocks(w http.ResponseWriter, r *http.Request) {
-
-	// Parse the query parameters
-	queryParams := r.URL.Query()
-	page, err := strconv.Atoi(queryParams.Get("page"))
-	if err != nil {
+// parsePagination reads and clamps page/limit query parameters.
+func parsePagination(r *http.Request) (page, limit int) {
+	page, err := strconv.Atoi(r.URL.Query().Get("page"))
+	if err != nil || page < 1 {
 		page = 1
 	}
-	limit, err := strconv.Atoi(queryParams.Get("limit"))
-	if err != nil {
-		limit = 10
+	limit, err = strconv.Atoi(r.URL.Query().Get("limit"))
+	if err != nil || limit < 1 {
+		limit = defaultPageLimit
 	}
+	if limit > maxPageLimit {
+		limit = maxPageLimit
+	}
+	return page, limit
+}
 
-	// Calculate the start and end indices for pagination
+// handleBrowseBlocks handles the /blockchain/blocks endpoint.
+//
+// Two defects here: the read went straight at api.bc.Blocks while the miner was
+// appending to it (a data race), and on an empty chain the clamp set startIndex to
+// -1 and the reslice panicked. Pagination now clamps into [0, len] and reads a
+// copy taken under the blockchain's lock.
+func (api *API) handleBrowseBlocks(w http.ResponseWriter, r *http.Request) {
+	page, limit := parsePagination(r)
+
+	total := api.bc.GetBlockCount()
 	startIndex := (page - 1) * limit
+	if startIndex > total {
+		startIndex = total
+	}
 	endIndex := startIndex + limit
-	if startIndex >= len(api.bc.Blocks) {
-		startIndex = len(api.bc.Blocks) - 1
-	}
-	if endIndex >= len(api.bc.Blocks) {
-		endIndex = len(api.bc.Blocks)
+	if endIndex > total {
+		endIndex = total
 	}
 
-	// Get the requested blocks based on the pagination
-	requestedBlocks := api.bc.Blocks[startIndex:endIndex]
-
-	// Set response headers
-	w.Header().Set("Content-Type", "application/json")
-
-	// Marshal the requested blocks to JSON
-	data, err := json.Marshal(requestedBlocks)
-	if err != nil {
-		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
-		return
-	}
-
-	// Write the JSON response
-	w.WriteHeader(http.StatusOK)
-	if _, err := w.Write(data); err != nil {
-		http.Error(w, "Internal server error", http.StatusInternalServerError)
-		return
-	}
+	respondJSON(w, http.StatusOK, struct {
+		Page   int      `json:"page"`
+		Limit  int      `json:"limit"`
+		Total  int      `json:"total"`
+		Blocks []*Block `json:"blocks"`
+	}{
+		Page:   page,
+		Limit:  limit,
+		Total:  total,
+		Blocks: api.bc.GetBlockRange(startIndex, endIndex),
+	})
 }
 
 // handleViewBlock handles the /blockchain/blocks/{index} endpoint.
@@ -631,31 +785,13 @@ func (api *API) handleViewBlock(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Check if the requested block index is valid
-	if index < 0 || index >= len(api.bc.Blocks) {
+	block := api.bc.GetBlockByIndex(int64(index))
+	if block == nil {
 		http.Error(w, "Block not found", http.StatusNotFound)
 		return
 	}
 
-	// Get the requested block
-	block := api.bc.Blocks[index]
-
-	// Set response headers
-	w.Header().Set("Content-Type", "application/json")
-
-	// Marshal the block to JSON
-	data, err := json.Marshal(block)
-	if err != nil {
-		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
-		return
-	}
-
-	// Write the JSON response
-	w.WriteHeader(http.StatusOK)
-	if _, err := w.Write(data); err != nil {
-		http.Error(w, "Internal server error", http.StatusInternalServerError)
-		return
-	}
+	respondJSON(w, http.StatusOK, block)
 }
 
 // handleBrowseTransactionsInBlock handles the /blockchain/blocks/{index}/transactions endpoint.
@@ -669,31 +805,13 @@ func (api *API) handleBrowseTransactionsInBlock(w http.ResponseWriter, r *http.R
 		return
 	}
 
-	// Check if the requested block index is valid
-	if index < 0 || index >= len(api.bc.Blocks) {
+	block := api.bc.GetBlockByIndex(int64(index))
+	if block == nil {
 		http.Error(w, "Block index out of range", http.StatusBadRequest)
 		return
 	}
 
-	// Get the transactions of the requested block
-	transactions := api.bc.Blocks[index].Transactions
-
-	// Set response headers
-	w.Header().Set("Content-Type", "application/json")
-
-	// Marshal the transactions to JSON
-	data, err := json.Marshal(transactions)
-	if err != nil {
-		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
-		return
-	}
-
-	// Write the JSON response
-	w.WriteHeader(http.StatusOK)
-	if _, err := w.Write(data); err != nil {
-		http.Error(w, "Internal server error", http.StatusInternalServerError)
-		return
-	}
+	respondJSON(w, http.StatusOK, block.Transactions)
 }
 
 // handleViewTransactionInBlock handles the /blockchain/blocks/{index}/transactions/{id} endpoint.
@@ -708,12 +826,11 @@ func (api *API) handleViewTransactionInBlock(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	if index < 0 || index >= len(api.bc.Blocks) {
+	block := api.bc.GetBlockByIndex(int64(index))
+	if block == nil {
 		http.Error(w, "Block not found", http.StatusNotFound)
 		return
 	}
-
-	block := api.bc.Blocks[index]
 
 	// Keep legacy route compatibility: `/.../transactions/{id}` and
 	// `/.../transactions/{protocol}` share the same path pattern.
@@ -839,6 +956,15 @@ func (api *API) listWalletAddresses() ([]string, error) {
 	return addresses, nil
 }
 
+// walletID returns a wallet's identifier, tolerating a wallet loaded from a file
+// that predates the ID field.
+func walletID(w *Wallet) string {
+	if w == nil || w.ID == nil {
+		return ""
+	}
+	return w.ID.String()
+}
+
 func (api *API) loadWalletByAddress(address string) (*Wallet, error) {
 	if err := api.ensureLocalStorageReady(); err != nil {
 		return nil, err
@@ -880,7 +1006,7 @@ func (api *API) handleBrowseWallets(w http.ResponseWriter, r *http.Request) {
 		}
 
 		result = append(result, walletSummary{
-			WalletID:  wallet.ID.String(),
+			WalletID:  walletID(wallet),
 			Address:   wallet.GetAddress(),
 			Encrypted: wallet.Encrypted,
 			Balance:   api.bc.GetBalance(wallet.GetAddress()),
@@ -902,106 +1028,193 @@ func (api *API) handleBrowseWallets(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleCreateWallet handles the /blockchain/wallets/new endpoint.
+//
+// POST /blockchain/wallets/new  {"name":"...","passphrase":"...","tags":[...]}
+//
+// The caller supplies the passphrase. This used to be a GET that generated a
+// passphrase server-side and returned it in the response body: a GET that creates
+// state, and a secret travelling back over a channel the server does not control,
+// landing in caches and browser history.
 func (api *API) handleCreateWallet(w http.ResponseWriter, r *http.Request) {
-	passphrase, err := GenerateRandomPassword()
-	if err != nil {
-		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+	type createWalletRequest struct {
+		Name       string   `json:"name"`
+		Passphrase string   `json:"passphrase"`
+		Tags       []string `json:"tags"`
+	}
+
+	var req createWalletRequest
+	if r.Body != nil {
+		// An empty body is tolerated so the endpoint stays usable for exploration;
+		// the passphrase check below still applies.
+		_ = json.NewDecoder(io.LimitReader(r.Body, apiMaxBodyBytes)).Decode(&req)
+	}
+
+	if err := testPasswordStrength(req.Passphrase); err != nil {
+		RespondError(w, http.StatusBadRequest, fmt.Sprintf("Passphrase is not strong enough: %v", err))
 		return
 	}
 
-	name := fmt.Sprintf("wallet-%d", time.Now().UnixNano())
+	name := req.Name
+	if name == "" {
+		name = fmt.Sprintf("wallet-%d", time.Now().UnixNano())
+	}
+	tags := req.Tags
+	if tags == nil {
+		tags = []string{"api-created"}
+	}
+
 	wallet, err := NewWallet(NewWalletOptions(
 		NewBigInt(1),
 		NewBigInt(1),
 		NewBigInt(time.Now().Unix()),
-		NewBigInt(0),
+		NewBigInt(time.Now().UnixNano()),
 		name,
-		passphrase,
-		[]string{"api-created"},
+		req.Passphrase,
+		tags,
 	))
 	if err != nil {
-		http.Error(w, "Failed to create wallet", http.StatusInternalServerError)
+		RespondError(w, http.StatusInternalServerError, "Failed to create wallet")
 		return
 	}
 
-	response := struct {
-		WalletID   string `json:"wallet_id"`
-		Address    string `json:"address"`
-		Name       string `json:"name"`
-		Passphrase string `json:"passphrase"`
+	respondJSON(w, http.StatusCreated, struct {
+		WalletID string   `json:"wallet_id"`
+		Address  string   `json:"address"`
+		Name     string   `json:"name"`
+		Tags     []string `json:"tags"`
 	}{
-		WalletID:   wallet.ID.String(),
-		Address:    wallet.GetAddress(),
-		Name:       name,
-		Passphrase: passphrase,
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	data, err := json.Marshal(response)
-	if err != nil {
-		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
-		return
-	}
-
-	w.WriteHeader(http.StatusOK)
-	if _, err := w.Write(data); err != nil {
-		http.Error(w, "Internal server error", http.StatusInternalServerError)
-		return
-	}
+		WalletID: wallet.ID.String(),
+		Address:  wallet.GetAddress(),
+		Name:     name,
+		Tags:     tags,
+	})
 }
 
-// handleCreateWalletTransaction handles /blockchain/wallets/tx for externally submitted transaction payloads.
+// handleCreateWalletTransaction submits a transaction on behalf of a stored wallet.
+//
+// POST /blockchain/wallets/tx
+//
+//	{"protocol":"BANK","from":"<addr>","to":"<addr>","amount":1.0,
+//	 "passphrase":"<sender passphrase>"}
+//
+// This endpoint previously validated the request and then returned
+// {"status":"ok","accepted":true,...} without creating, signing, queueing or
+// persisting anything at all. It now builds, signs and enqueues a real
+// transaction, or reports why it could not.
 func (api *API) handleCreateWalletTransaction(w http.ResponseWriter, r *http.Request) {
 	type createTxRequest struct {
-		Protocol string  `json:"protocol"`
-		From     string  `json:"from"`
-		To       string  `json:"to"`
-		Amount   float64 `json:"amount"`
-	}
-
-	var req createTxRequest
-	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&req); err != nil {
-		http.Error(w, "Invalid request body", http.StatusBadRequest)
-		return
-	}
-
-	if strings.TrimSpace(req.Protocol) == "" || strings.TrimSpace(req.From) == "" || strings.TrimSpace(req.To) == "" {
-		http.Error(w, "Missing required transaction fields", http.StatusBadRequest)
-		return
-	}
-
-	if req.Amount <= 0 {
-		http.Error(w, "Amount must be greater than zero", http.StatusBadRequest)
-		return
-	}
-
-	if _, ok := normalizeProtocol(req.Protocol); !ok {
-		http.Error(w, "Invalid protocol", http.StatusBadRequest)
-		return
-	}
-
-	response := struct {
-		Status     string  `json:"status"`
-		Accepted   bool    `json:"accepted"`
 		Protocol   string  `json:"protocol"`
 		From       string  `json:"from"`
 		To         string  `json:"to"`
 		Amount     float64 `json:"amount"`
-		ExternalID string  `json:"external_id"`
-	}{
-		Status:     "ok",
-		Accepted:   true,
-		Protocol:   strings.ToUpper(req.Protocol),
-		From:       req.From,
-		To:         req.To,
-		Amount:     req.Amount,
-		ExternalID: generateRandomToken(),
+		Message    string  `json:"message"`
+		Passphrase string  `json:"passphrase"`
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	if err := json.NewEncoder(w).Encode(response); err != nil {
-		http.Error(w, "Internal server error", http.StatusInternalServerError)
+	var req createTxRequest
+	if err := json.NewDecoder(io.LimitReader(r.Body, apiMaxBodyBytes)).Decode(&req); err != nil {
+		RespondError(w, http.StatusBadRequest, "Invalid request body")
 		return
+	}
+
+	if strings.TrimSpace(req.From) == "" || strings.TrimSpace(req.To) == "" {
+		RespondError(w, http.StatusBadRequest, "Missing required transaction fields")
+		return
+	}
+
+	protocol, ok := normalizeProtocol(req.Protocol)
+	if !ok {
+		RespondError(w, http.StatusBadRequest, "Invalid protocol")
+		return
+	}
+
+	if req.Passphrase == "" {
+		RespondError(w, http.StatusBadRequest, "Sender passphrase is required to sign the transaction")
+		return
+	}
+
+	sender, err := OpenWallet(req.From, req.Passphrase)
+	if err != nil {
+		RespondError(w, http.StatusUnauthorized, "Could not unlock the sender wallet")
+		return
+	}
+
+	recipient, err := api.loadWalletByAddress(req.To)
+	if err != nil {
+		RespondError(w, http.StatusNotFound, "Recipient wallet not found")
+		return
+	}
+
+	tx, err := api.buildWalletTransaction(protocol, sender, recipient, req.Amount, req.Message)
+	if err != nil {
+		RespondError(w, http.StatusUnprocessableEntity, err.Error())
+		return
+	}
+
+	signature, err := tx.Sign([]byte(sender.PrivatePEM()))
+	if err != nil {
+		RespondError(w, http.StatusInternalServerError, "Failed to sign transaction")
+		return
+	}
+	setTransactionSignature(tx, signature)
+
+	if err := tx.Send(api.bc); err != nil {
+		RespondError(w, http.StatusUnprocessableEntity, err.Error())
+		return
+	}
+
+	respondJSON(w, http.StatusAccepted, struct {
+		Status   string  `json:"status"`
+		Accepted bool    `json:"accepted"`
+		ID       string  `json:"id"`
+		Protocol string  `json:"protocol"`
+		From     string  `json:"from"`
+		To       string  `json:"to"`
+		Amount   float64 `json:"amount,omitempty"`
+	}{
+		Status:   "ok",
+		Accepted: true,
+		ID:       tx.GetID(),
+		Protocol: protocol,
+		From:     sender.GetAddress(),
+		To:       recipient.GetAddress(),
+		Amount:   req.Amount,
+	})
+}
+
+// buildWalletTransaction constructs a concrete transaction for the given protocol.
+func (api *API) buildWalletTransaction(protocol string, from, to *Wallet, amount float64, message string) (Transaction, error) {
+	switch protocol {
+	case BankProtocolID:
+		if amount <= 0 {
+			return nil, errors.New("amount must be greater than zero")
+		}
+		return NewBankTransaction(from, to, amount)
+
+	case MessageProtocolID:
+		if strings.TrimSpace(message) == "" {
+			return nil, errors.New("message must not be empty")
+		}
+		return NewMessageTransaction(from, to, message)
+
+	default:
+		return nil, fmt.Errorf("protocol %s cannot be submitted through this endpoint", protocol)
+	}
+}
+
+// setTransactionSignature stores a signature on a concrete transaction.
+func setTransactionSignature(tx Transaction, signature string) {
+	switch concrete := tx.(type) {
+	case *Bank:
+		concrete.Signature = signature
+	case *Message:
+		concrete.Signature = signature
+	case *Coinbase:
+		concrete.Signature = signature
+	case *Persist:
+		concrete.Signature = signature
+	case *Tx:
+		concrete.Signature = signature
 	}
 }
 
@@ -1026,7 +1239,7 @@ func (api *API) handleViewWallet(w http.ResponseWriter, r *http.Request) {
 		Encrypted bool    `json:"encrypted"`
 		Balance   float64 `json:"balance"`
 	}{
-		WalletID:  wallet.ID.String(),
+		WalletID:  walletID(wallet),
 		Address:   wallet.GetAddress(),
 		Encrypted: wallet.Encrypted,
 		Balance:   api.bc.GetBalance(wallet.GetAddress()),
@@ -1062,7 +1275,7 @@ func (api *API) handleUpdateWallet(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req updateWalletRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := json.NewDecoder(io.LimitReader(r.Body, apiMaxBodyBytes)).Decode(&req); err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
 	}
@@ -1116,7 +1329,7 @@ func (api *API) handleUpdateWallet(w http.ResponseWriter, r *http.Request) {
 		Tags     []string `json:"tags"`
 		Updated  bool     `json:"updated"`
 	}{
-		WalletID: wallet.ID.String(),
+		WalletID: walletID(wallet),
 		Address:  wallet.GetAddress(),
 		Name:     req.Name,
 		Tags:     req.Tags,
@@ -1189,8 +1402,13 @@ func (api *API) handleBrowseTransactionsForWallet(w http.ResponseWriter, r *http
 
 // handleViewTransactionForWallet handles the /blockchain/wallets/{id}/transactions/{id} endpoint.
 func (api *API) handleViewTransactionForWallet(w http.ResponseWriter, r *http.Request) {
-	walletID, idOrProtocol, ok := parseWalletTransactionPath(r.URL.Path)
-	if !ok {
+	// The route now uses distinct variable names ({id} and {txid}), so mux.Vars
+	// works and the hand-rolled path parser this used to need is gone.
+	vars := mux.Vars(r)
+	walletID := vars["id"]
+	idOrProtocol := vars["txid"]
+
+	if walletID == "" || idOrProtocol == "" {
 		http.Error(w, "Invalid wallet transaction path", http.StatusBadRequest)
 		return
 	}
@@ -1291,13 +1509,9 @@ func (api *API) respondTransactionList(w http.ResponseWriter, txs []Transaction)
 	}
 }
 
+// collectAllTransactions returns every transaction, read under the chain's lock.
 func (api *API) collectAllTransactions() []Transaction {
-	all := make([]Transaction, 0)
-	for _, block := range api.bc.Blocks {
-		all = append(all, block.Transactions...)
-	}
-	all = append(all, api.bc.GetPendingTransactions()...)
-	return all
+	return api.bc.GetAllTransactions()
 }
 
 // handleBrowseTransactions handles the /blockchain/transactions endpoint.

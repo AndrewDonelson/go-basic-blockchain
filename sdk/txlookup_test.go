@@ -42,6 +42,10 @@ func (m *mockTransaction) Validate() error {
 	return nil
 }
 func (m *mockTransaction) Size() int { return len(m.id) }
+func (m *mockTransaction) SigningBytes() ([]byte, error) {
+	return []byte(m.id + ":" + m.protocol), nil
+}
+
 func (m *mockTransaction) EstimateFee(feePerByte float64) float64 {
 	return 0
 }
@@ -63,14 +67,16 @@ func TestFIFOQueueOperations(t *testing.T) {
 	q.Enqueue("b")
 	q.Enqueue("b") // duplicate should be ignored
 
-	// Current queue semantics dequeue on full-capacity enqueue before duplicate check,
-	// so enqueuing duplicate "b" at capacity shrinks queue from [a,b] to [b].
-	if got := q.Len(); got != 1 {
-		t.Fatalf("expected queue length 1, got %d", got)
+	// Enqueuing a duplicate at capacity must be a no-op. The old implementation
+	// dequeued *before* the duplicate check, so re-adding "b" evicted the
+	// unrelated entry "a" -- silent index loss, which this test used to assert as
+	// intended behaviour.
+	if got := q.Len(); got != 2 {
+		t.Fatalf("expected queue length 2, got %d", got)
 	}
 
-	if q.Exists("a") || !q.Exists("b") {
-		t.Fatal("expected queue to contain only b after duplicate enqueue at capacity")
+	if !q.Exists("a") || !q.Exists("b") {
+		t.Fatal("a duplicate enqueue must not evict an unrelated entry")
 	}
 
 	if got := q.Find("b"); got != "b" {
@@ -91,10 +97,19 @@ func TestFIFOQueueOperations(t *testing.T) {
 		t.Fatalf("expected backing index length 2, got %d", len(*idx))
 	}
 
+	// Set now respects the queue's capacity. It used to replace the backing slice
+	// wholesale, so a restore could push the "bounded" cache past its bound and
+	// keep it there.
 	replacement := Index{"x", "y", "z"}
 	q.Set(&replacement)
-	if q.Len() != 3 {
-		t.Fatalf("expected set queue length 3, got %d", q.Len())
+	if q.Len() != 2 {
+		t.Fatalf("expected the restored queue to be capped at 2, got %d", q.Len())
+	}
+	if q.Exists("x") {
+		t.Fatal("expected the oldest restored entry to be dropped at capacity")
+	}
+	if !q.Exists("y") || !q.Exists("z") {
+		t.Fatal("expected the most recent restored entries to be retained")
 	}
 }
 
@@ -172,8 +187,135 @@ func TestTXLookupManagerAddAndSplitMerge(t *testing.T) {
 		t.Fatal("expected merge output")
 	}
 
-	split := m.split(merged)
-	if split == nil {
-		t.Fatal("expected split output")
+	// split now returns an error and actually parses. Previously it used
+	// fmt.Sscanf with "%s:%s:%s" -- which cannot split on colons -- and discarded
+	// both return values, so every entry it produced was empty and this assertion
+	// passed against a zero-valued struct.
+	split, err := m.split(merged)
+	if err != nil {
+		t.Fatalf("expected split to succeed, got error: %v", err)
 	}
+	if split.BlockNumber.Int64() != 9 {
+		t.Fatalf("expected block number 9, got %s", split.BlockNumber.String())
+	}
+	if split.TxID != "tx-9" {
+		t.Fatalf("expected tx ID tx-9, got %q", split.TxID)
+	}
+	if split.TxHash != "hash-9" {
+		t.Fatalf("expected tx hash hash-9, got %q", split.TxHash)
+	}
+
+	if _, err := m.split("not-a-valid-entry"); err == nil {
+		t.Fatal("expected an error for a malformed index entry")
+	}
+	if _, err := m.split("notanumber:tx:hash"); err == nil {
+		t.Fatal("expected an error for a non-numeric block number")
+	}
+}
+
+// TestTXLookupFindByEachField covers lookups that were previously unreachable:
+// Find gated on `BlockNumber.String() != ""`, and a zero big.Int stringifies to
+// "0", so BlockNumber always looked populated and every TxID/TxHash lookup was
+// rejected.
+func TestTXLookupFindByEachField(t *testing.T) {
+	m := NewTXLookupManager()
+	entry := m.merge(*big.NewInt(42), "tx-42", "hash-42")
+	m.index.Enqueue(entry)
+
+	byID, err := m.Find(&IndexEntry{TxID: "tx-42"})
+	if err != nil {
+		t.Fatalf("find by tx ID failed: %v", err)
+	}
+	if byID.TxID != "tx-42" {
+		t.Fatalf("expected tx-42, got %q", byID.TxID)
+	}
+
+	byHash, err := m.Find(&IndexEntry{TxHash: "hash-42"})
+	if err != nil {
+		t.Fatalf("find by tx hash failed: %v", err)
+	}
+	if byHash.TxHash != "hash-42" {
+		t.Fatalf("expected hash-42, got %q", byHash.TxHash)
+	}
+
+	byBlock, err := m.Find(&IndexEntry{BlockNumber: *big.NewInt(42)})
+	if err != nil {
+		t.Fatalf("find by block number failed: %v", err)
+	}
+	if byBlock.BlockNumber.Int64() != 42 {
+		t.Fatalf("expected block 42, got %s", byBlock.BlockNumber.String())
+	}
+
+	if _, err := m.Find(&IndexEntry{}); err == nil {
+		t.Fatal("expected an error when no field is populated")
+	}
+	if _, err := m.Find(&IndexEntry{TxID: "a", TxHash: "b"}); err == nil {
+		t.Fatal("expected an error when more than one field is populated")
+	}
+	if _, err := m.Find(nil); err == nil {
+		t.Fatal("expected an error for a nil index entry")
+	}
+	if _, err := m.Find(&IndexEntry{TxID: "missing"}); err == nil {
+		t.Fatal("expected an error for an unknown transaction")
+	}
+}
+
+// TestFIFOQueueEvictionAndDeduplication covers the ring buffer that replaced the
+// O(n^2), unbounded-memory slice implementation.
+func TestFIFOQueueEvictionAndDeduplication(t *testing.T) {
+	q := NewFIFOQueue(3)
+
+	q.Enqueue("a")
+	q.Enqueue("b")
+	q.Enqueue("c")
+	if q.Len() != 3 {
+		t.Fatalf("expected 3 entries, got %d", q.Len())
+	}
+
+	// Re-adding an existing element must not evict an unrelated one. The old
+	// Enqueue dequeued first and only then checked for duplicates.
+	q.Enqueue("a")
+	if q.Len() != 3 || !q.Exists("a") || !q.Exists("b") || !q.Exists("c") {
+		t.Fatalf("duplicate enqueue disturbed the queue: len=%d", q.Len())
+	}
+
+	// Exceeding capacity evicts the oldest.
+	q.Enqueue("d")
+	if q.Exists("a") {
+		t.Fatal("expected the oldest entry to be evicted")
+	}
+	if !q.Exists("d") || q.Len() != 3 {
+		t.Fatalf("expected d present at capacity 3, got len=%d", q.Len())
+	}
+
+	// Insertion order is preserved.
+	snapshot := q.Get()
+	if len(*snapshot) != 3 || (*snapshot)[0] != "b" || (*snapshot)[2] != "d" {
+		t.Fatalf("unexpected snapshot order: %v", *snapshot)
+	}
+
+	// Empty-queue behaviour.
+	empty := NewFIFOQueue(2)
+	if !empty.IsEmpty() || empty.Dequeue() != "" || empty.Find("x") != "" {
+		t.Fatal("unexpected behaviour on an empty queue")
+	}
+	empty.Enqueue("")
+	if !empty.IsEmpty() {
+		t.Fatal("empty strings must not be indexed")
+	}
+}
+
+// TestFIFOQueueSetTruncatesToCapacity guards the restore path.
+func TestFIFOQueueSetTruncatesToCapacity(t *testing.T) {
+	q := NewFIFOQueue(2)
+	idx := Index{"one", "two", "three", "three"}
+	q.Set(&idx)
+
+	if q.Len() != 2 {
+		t.Fatalf("expected the queue to hold at most 2 entries, got %d", q.Len())
+	}
+	if !q.Exists("three") {
+		t.Fatal("expected the most recent entries to be retained")
+	}
+	q.Set(nil) // must not panic
 }

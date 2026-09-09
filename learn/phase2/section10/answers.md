@@ -231,9 +231,22 @@ Congratulations! You've successfully completed **Phase 2: Advanced Blockchain Fe
 ✅ **Enterprise Security**: Implemented advanced security features  
 ✅ **Production Readiness**: Deployed production-ready blockchain systems  
 
+### **A note on "production-ready"**
+
+You have built the *components* of a blockchain system and understand how they fit
+together. Treat "production-ready" as a direction, not a destination reached: this
+reference implementation is a **single-node educational chain**. It has no chain
+synchronisation, no fork choice, no UTXO state model and no peer authentication —
+see the status table in the [project README](../../../README.md).
+
+It also shipped thirteen serious defects that a review later found, including
+signature forgery and a proof of work that proved nothing.
+[Security Case Studies](../../SECURITY_CASE_STUDIES.md) walks through all of them.
+Read it before you put anything you build here in front of real value.
+
 ### **What You've Accomplished**
 
-You now have the skills to build **production-ready blockchain systems** with:
+You now have the skills to work on blockchain systems with:
 - **Sophisticated consensus mechanisms**
 - **Distributed P2P networks**
 - **Professional RESTful APIs**

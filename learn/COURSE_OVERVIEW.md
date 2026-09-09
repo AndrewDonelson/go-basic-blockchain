@@ -156,6 +156,7 @@ This comprehensive course teaches you how to build a complete blockchain from sc
 
 ### **Project Portfolio**
 ✅ **Basic Blockchain**: Working blockchain with mining  
+✅ **Security Review**: Read [Security Case Studies](./SECURITY_CASE_STUDIES.md) — thirteen real defects from this codebase, with causes and fixes  
 ✅ **Advanced Blockchain**: Production-ready with API  
 ✅ **Web Application**: Responsive blockchain interface  
 ✅ **Mobile Application**: Cross-platform blockchain wallet  

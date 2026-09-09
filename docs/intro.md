@@ -69,18 +69,33 @@ Go Basic Blockchain is an educational blockchain implementation written in Go th
 ## 📊 Current Status
 
 ### Implementation Progress
-- **Core Blockchain**: 95% complete
-- **Helios Consensus**: 100% complete
-- **Wallet System**: 90% complete
-- **API Layer**: 90% complete
-- **Test Suite**: 90% complete
-- **Documentation**: 85% complete
+
+| Component | Status |
+|---|---|
+| Core blockchain (blocks, mining, persistence) | ✅ Working |
+| Helios consensus | ✅ Working — deterministic proof, verified on every block |
+| Wallet system | ✅ Working — encrypted at rest, atomic writes, recorded KDF parameters |
+| API layer | ✅ Working — fails closed, rate limited, paginated |
+| Networking (sync, fork choice) | ❌ Not implemented — see the roadmap below |
 
 ### Performance Metrics
-- **Test Coverage**: 39.8%
-- **Test Performance**: ~9.5 seconds (30x faster than before)
+- **Test Coverage**: 57.0% (`sdk`), 85–97% across the Helios packages
+- **Test Performance**: ~17 seconds; ~85 seconds under the race detector
 - **Memory Usage**: Optimized for educational use
-- **Network Latency**: Minimal overhead
+
+### What is deliberately not built yet
+
+This matters if you are reading the code to learn from it — these are absent, not
+broken:
+
+- **Chain synchronisation.** Nodes do not exchange blocks or transactions. P2P
+  exchanges peer lists only.
+- **Fork choice and reorganisation.** A block that does not extend the current
+  head is refused rather than compared by cumulative work.
+- **A UTXO or account state model.** Balances are recomputed by scanning the
+  chain, which is correct but O(chain) per query.
+- **Peer authentication and transport security.** P2P is plaintext and any peer
+  may claim any identity.
 
 ## 🎓 Learning Path
 

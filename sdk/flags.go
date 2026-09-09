@@ -51,7 +51,9 @@ func init() {
 	Args = NewArguments()
 
 	// Register new command-line flags for seed node functionality
-	if err := Args.Register("seed", "Run as a seed node", true); err != nil {
+	// Default false. This was registered with a default of `true`, so every node
+	// ran as a seed node unless explicitly told otherwise.
+	if err := Args.Register("seed", "Run as a seed node", false); err != nil {
 		// Log error but continue
 		_ = err // Suppress unused variable warning
 	}
@@ -205,7 +207,11 @@ func (a *Arguments) PrintUsage() {
 // GetBool returns the boolean value of the named flag
 func (a *Arguments) GetBool(name string) bool {
 	if f, ok := a.Flags[name]; ok {
-		return *(f.Value.(*bool))
+		// Comma-ok: a mistyped flag registration used to panic here rather than
+		// falling back to the zero value.
+		if v, ok := f.Value.(*bool); ok {
+			return *v
+		}
 	}
 	return false
 }
@@ -213,7 +219,9 @@ func (a *Arguments) GetBool(name string) bool {
 // GetString returns the string value of the named flag
 func (a *Arguments) GetString(name string) string {
 	if f, ok := a.Flags[name]; ok {
-		return *f.Value.(*string)
+		if v, ok := f.Value.(*string); ok {
+			return *v
+		}
 	}
 	return ""
 }
@@ -221,7 +229,9 @@ func (a *Arguments) GetString(name string) string {
 // GetInt returns the int value of the named flag
 func (a *Arguments) GetInt(name string) int {
 	if f, ok := a.Flags[name]; ok {
-		return *f.Value.(*int)
+		if v, ok := f.Value.(*int); ok {
+			return *v
+		}
 	}
 	return 0
 }
@@ -229,7 +239,9 @@ func (a *Arguments) GetInt(name string) int {
 // GetInt64 returns the int64 value of the named flag
 func (a *Arguments) GetInt64(name string) int64 {
 	if f, ok := a.Flags[name]; ok {
-		return *f.Value.(*int64)
+		if v, ok := f.Value.(*int64); ok {
+			return *v
+		}
 	}
 	return 0
 }
@@ -237,7 +249,9 @@ func (a *Arguments) GetInt64(name string) int64 {
 // GetFloat64 returns the float64 value of the named flag
 func (a *Arguments) GetFloat64(name string) float64 {
 	if f, ok := a.Flags[name]; ok {
-		return *f.Value.(*float64)
+		if v, ok := f.Value.(*float64); ok {
+			return *v
+		}
 	}
 	return 0
 }

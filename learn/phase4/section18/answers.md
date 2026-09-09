@@ -739,4 +739,4 @@ func (bm *BackupManager) ScheduleBackups(ctx context.Context, interval time.Dura
 
 **Great job completing Section 18! 🎉**
 
-Ready for the next challenge? Move on to [Section 19: Course Project & Next Steps](./section19/README.md)!
+Ready for the next challenge? Move on to [Section 19: Course Project & Next Steps](../section19/README.md)!

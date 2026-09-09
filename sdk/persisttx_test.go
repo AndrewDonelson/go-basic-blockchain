@@ -47,7 +47,9 @@ func TestPersistTransaction(t *testing.T) {
 	// Process the transaction
 	result := persist.Process()
 	assert.Equal(t, "Persist transaction processed successfully", result)
-	assert.Equal(t, TransactionStatus("processed"), persist.Status)
+	// Was TransactionStatus("processed") -- a value outside the declared status
+	// set, which Block.Validate (requiring StatusConfirmed) always rejected.
+	assert.Equal(t, StatusConfirmed, persist.Status)
 
 	// Create a new test chain with isolated data path
 	config := NewConfig()

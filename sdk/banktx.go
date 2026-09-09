@@ -4,6 +4,7 @@ package sdk
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 )
 
@@ -14,36 +15,22 @@ type Bank struct {
 	Amount float64
 }
 
-// MarshalJSON implements custom JSON marshaling for Bank transaction
+// MarshalJSON encodes the Bank transaction in the canonical wire form.
 func (b *Bank) MarshalJSON() ([]byte, error) {
-	// First marshal the base Tx
-	baseTx, err := json.Marshal(&b.Tx)
-	if err != nil {
-		return nil, err
+	w := b.Tx.toWire()
+	w.Amount = b.Amount
+	return json.Marshal(w)
+}
+
+// UnmarshalJSON decodes a Bank transaction from the canonical wire form.
+func (b *Bank) UnmarshalJSON(data []byte) error {
+	var w txWire
+	if err := json.Unmarshal(data, &w); err != nil {
+		return err
 	}
-
-	// Create a map to hold the base transaction data
-	var baseMap map[string]interface{}
-	err = json.Unmarshal(baseTx, &baseMap)
-	if err != nil {
-		return nil, err
-	}
-
-	// Add the bank-specific data
-	baseMap["amount"] = b.Amount
-
-	// Serialize the protocol data to the Data field
-	protocolData := map[string]interface{}{
-		"amount": b.Amount,
-	}
-
-	protocolDataBytes, err := json.Marshal(protocolData)
-	if err != nil {
-		return nil, err
-	}
-	baseMap["data"] = protocolDataBytes
-
-	return json.Marshal(baseMap)
+	b.Tx.applyWire(w)
+	b.Amount = w.Amount
+	return nil
 }
 
 // NewBankTransaction creates a new Bank transaction. It takes a from wallet, a to wallet, and an amount to transfer.
@@ -76,117 +63,112 @@ func (b *Bank) Process() string {
 		return fmt.Sprintf("Insufficient balance in wallet %s", b.From.GetAddress())
 	}
 
-	// Subtract the amount from the From wallet and add it to the To wallet
-	newFromBalance := b.From.GetBalance() - (b.Amount + transactionFee)
-	err := b.From.SetData("balance", newFromBalance)
-	if err != nil {
+	// Debit the sender.
+	newFromBalance := b.From.GetBalance() - (b.Amount + b.Fee)
+	if err := b.From.SetData("balance", newFromBalance); err != nil {
 		return fmt.Sprintf("Error updating wallet %s balance: %s", b.From.GetAddress(), err.Error())
 	}
 
-	//TODO: Disperse fee to the miner & dev wallet's (if applicable)
+	// Credit the recipient. Without this the transferred value is simply destroyed
+	// while the transaction reports success.
+	if err := b.To.SetData("balance", b.To.GetBalance()+b.Amount); err != nil {
+		return fmt.Sprintf("Error updating wallet %s balance: %s", b.To.GetAddress(), err.Error())
+	}
 
 	return fmt.Sprintf("Transferred %f from %s to %s", b.Amount, b.From.Address, b.To.Address)
 }
 
-// Transaction interface method implementations
-// These methods delegate to the embedded Tx struct
+// Transaction interface methods that MUST be overridden.
+//
+// Everything else (GetID, GetFee, GetStatus, ...) is promoted from the embedded Tx
+// and needs no wrapper. Only the methods whose behaviour genuinely differs for a
+// Bank transaction are defined here -- previously these were all hand-written
+// pass-throughs, which is how Amount ended up outside the signature.
 
-func (b *Bank) GetProtocol() string {
-	return b.Tx.GetProtocol()
+// SigningBytes includes Amount, so a signed Bank transfer cannot have its value
+// altered in transit without invalidating the signature.
+func (b *Bank) SigningBytes() ([]byte, error) {
+	fields := b.Tx.signingFields()
+	fields["amount"] = b.Amount
+	return json.Marshal(fields)
 }
 
-func (b *Bank) GetID() string {
-	if b == nil {
-		return "" // Return empty string if Bank is nil
+// Sign signs the full Bank transaction, including Amount.
+func (b *Bank) Sign(privPEM []byte) (string, error) {
+	payload, err := b.SigningBytes()
+	if err != nil {
+		return "", fmt.Errorf("error marshaling transaction: %v", err)
 	}
-	if b.Tx.ID == nil {
-		return "" // Return empty string if Tx is not properly initialized
+	return signPayload(payload, privPEM)
+}
+
+// Verify verifies a signature over the full Bank transaction, including Amount.
+func (b *Bank) Verify(pubKey []byte, sign string) (bool, error) {
+	payload, err := b.SigningBytes()
+	if err != nil {
+		return false, fmt.Errorf("error marshaling transaction: %v", err)
+	}
+	return verifyPayload(payload, pubKey, sign)
+}
+
+// Hash covers Amount as well as the base fields.
+func (b *Bank) Hash() string {
+	if b == nil || b.Tx.ID == nil {
+		return ""
+	}
+	b.Tx.hash = hashTransaction(b)
+	return b.Tx.hash
+}
+
+// Bytes returns the canonical encoding, including Amount.
+func (b *Bank) Bytes() []byte {
+	payload, err := b.SigningBytes()
+	if err != nil {
+		return nil
+	}
+	return payload
+}
+
+// Size reports the size of the full transaction, not just its base fields.
+func (b *Bank) Size() int {
+	return len(b.Bytes())
+}
+
+// EstimateFee is derived from the full transaction size.
+func (b *Bank) EstimateFee(feePerByte float64) float64 {
+	return float64(b.Size()) * feePerByte
+}
+
+// Send queues the Bank transaction itself. Delegating to Tx.Send would enqueue the
+// embedded base transaction and silently drop Amount.
+func (b *Bank) Send(bc *Blockchain) error {
+	if err := b.Validate(); err != nil {
+		return fmt.Errorf("invalid transaction: %v", err)
+	}
+	bc.AddTransaction(b)
+	LogVerbosef("Bank transaction %s added to the transaction queue", b.GetID())
+	return nil
+}
+
+// Validate checks the base transaction plus Bank-specific invariants.
+func (b *Bank) Validate() error {
+	if err := b.Tx.Validate(); err != nil {
+		return err
+	}
+	if b.Amount <= 0 {
+		return errors.New("bank transaction amount must be greater than zero")
+	}
+	if b.Tx.Protocol != BankProtocolID {
+		return fmt.Errorf("bank transaction has wrong protocol: %s", b.Tx.Protocol)
+	}
+	return nil
+}
+
+// GetID is nil-safe because rollup reconstruction can produce partially built
+// Bank values before their identity has been assigned.
+func (b *Bank) GetID() string {
+	if b == nil || b.Tx.ID == nil {
+		return ""
 	}
 	return b.Tx.GetID()
-}
-
-func (b *Bank) GetHash() string {
-	return b.Tx.GetHash()
-}
-
-func (b *Bank) GetSignature() string {
-	return b.Tx.GetSignature()
-}
-
-func (b *Bank) GetSenderWallet() *Wallet {
-	return b.Tx.GetSenderWallet()
-}
-
-func (b *Bank) GetRecipientWallet() *Wallet {
-	return b.Tx.GetRecipientWallet()
-}
-
-func (b *Bank) GetFee() float64 {
-	return b.Tx.GetFee()
-}
-
-func (b *Bank) GetStatus() TransactionStatus {
-	return b.Tx.GetStatus()
-}
-
-func (b *Bank) SetStatus(status TransactionStatus) {
-	b.Tx.SetStatus(status)
-}
-
-func (b *Bank) Sign(privPEM []byte) (string, error) {
-	return b.Tx.Sign(privPEM)
-}
-
-func (b *Bank) Verify(pubKey []byte, sign string) (bool, error) {
-	return b.Tx.Verify(pubKey, sign)
-}
-
-func (b *Bank) Send(bc *Blockchain) error {
-	return b.Tx.Send(bc)
-}
-
-func (b *Bank) String() string {
-	return b.Tx.String()
-}
-
-func (b *Bank) Hex() string {
-	return b.Tx.Hex()
-}
-
-func (b *Bank) Hash() string {
-	if b == nil {
-		return "" // Return empty string if Bank is nil
-	}
-	if b.Tx.ID == nil {
-		return "" // Return empty string if Tx is not properly initialized
-	}
-	return b.Tx.Hash()
-}
-
-func (b *Bank) Bytes() []byte {
-	return b.Tx.Bytes()
-}
-
-func (b *Bank) JSON() string {
-	return b.Tx.JSON()
-}
-
-func (b *Bank) Validate() error {
-	return b.Tx.Validate()
-}
-
-func (b *Bank) Size() int {
-	return b.Tx.Size()
-}
-
-func (b *Bank) EstimateFee(feePerByte float64) float64 {
-	return b.Tx.EstimateFee(feePerByte)
-}
-
-func (b *Bank) SetPriority(priority int) {
-	b.Tx.SetPriority(priority)
-}
-
-func (b *Bank) GetPriority() int {
-	return b.Tx.GetPriority()
 }

@@ -213,25 +213,39 @@ type Blockchain struct {
 9. Network propagation
 ```
 
-### Network Synchronization
+### Network Synchronization — NOT IMPLEMENTED
+
+The flow below is the **intended** design. It is documented here as a roadmap,
+not as a description of the current code, because that distinction was previously
+unclear:
 
 ```
 1. Node starts up
    ↓
-2. Load local blockchain
+2. Load local blockchain            ← implemented (LoadExistingBlocks)
    ↓
-3. Connect to peers
+3. Connect to peers                 ← partially: peer lists are exchanged
    ↓
-4. Request missing blocks
+4. Request missing blocks           ← NOT implemented
    ↓
-5. Validate received blocks
+5. Validate received blocks         ← implemented (AcceptBlock)
    ↓
-6. Update local chain
+6. Update local chain               ← implemented, head-extension only
    ↓
-7. Broadcast new blocks
+7. Broadcast new blocks             ← NOT implemented
    ↓
-8. Maintain network state
+8. Maintain network state           ← NOT implemented
 ```
+
+**What actually happens today:** P2P discovers peers and exchanges peer lists.
+Blocks and transactions are **not** propagated. `AcceptBlock` will validate and
+append a block handed to it via `POST /consensus/block`, but only if that block
+extends the current head — there is no fork choice, no orphan pool and no
+rollback, so a block that does not extend the head is refused rather than
+compared by cumulative work.
+
+Each node therefore mines its own independent chain. Chain sync and fork choice
+are the two largest pieces of outstanding work.
 
 ## 🔐 Security Architecture
 
@@ -256,10 +270,16 @@ type Blockchain struct {
 ### Authentication & Authorization
 
 **API Security**:
-- API key authentication
-- Session management
-- Rate limiting (planned)
-- Input validation
+- API key authentication that **fails closed** — with no key configured, every
+  authenticated request is rejected. There is no built-in fallback credential.
+- Constant-time key comparison (`crypto/subtle`), so keys are not recoverable by
+  timing.
+- Keys are stored as SHA-256 hashes, never in plaintext.
+- Rate limiting per source address on every authenticated and credential endpoint.
+- Request body size caps (1 MiB) and full server timeouts (read-header, read,
+  write, idle) plus a header size cap.
+- Input validation on every handler.
+- **No TLS.** Terminate it in front of the node.
 
 **Wallet Security**:
 - Strong password requirements
@@ -302,24 +322,34 @@ type Blockchain struct {
 
 ### Environment Variables
 
+The real variable names are in [`.env.example`](../.env.example); the list below
+previously used names (`API_PORT`, `MINING_DIFFICULTY`, `SCRYPT_N`, …) that the
+code never read.
+
 ```bash
-# API Configuration
-API_PORT=8200
-API_HOST=localhost
+# API / network
+API_HOSTNAME=:8200
+P2P_HOSTNAME=:8201
+ENABLE_API=true
 
-# Blockchain Configuration
-MINING_DIFFICULTY=4
-BLOCK_REWARD=50
-BLOCK_TIME=10
+# Blockchain
+DIFFICULTY=4                 # 1..255
+BLOCK_TIME=20                # seconds
+MAX_BLOCK_SIZE=1000000
+TRANSACTION_FEE=0.05
+MINER_REWARD_PCT=50.00
+DEV_REWARD_PCT=50.00
 
-# Network Configuration
-P2P_PORT=8100
-MAX_PEERS=10
-
-# Security Configuration
-SCRYPT_N=16384  # Test mode
-SCRYPT_N=1048576  # Production mode
+# Security -- REQUIRED, no defaults
+BLOCKCHAIN_API_KEY=          # hex; without it the API rejects everything
+BLOCKCHAIN_SERVER_SEED=      # hex
+NODE_WALLET_PASSPHRASE=      # else one is generated and logged once
+TRUST_PROXY_HEADERS=false    # X-Forwarded-For is client-controlled
 ```
+
+scrypt cost is **not** an environment variable. It is chosen at wallet-creation
+time and recorded in the wallet's `EncryptionParams`, so a wallet always decrypts
+with the parameters it was encrypted with.
 
 ### Configuration Files
 

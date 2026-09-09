@@ -2,6 +2,7 @@ package difficulty
 
 import (
 	"fmt"
+	"math"
 	"math/big"
 	"time"
 )
@@ -93,32 +94,84 @@ func (da *DifficultyAdjuster) CalculateNewDifficulty(
 	return da.calculateSimpleDifficulty(currentDifficulty, windowMetrics)
 }
 
-// calculateSimpleDifficulty implements basic time-based difficulty adjustment
+// UNITS: the big.Int handled by this package is a DIFFICULTY SCALAR, not a
+// mining target. Larger means harder. This was never written down anywhere, which
+// is what made the adjustment direction ambiguous to read; sdk.difficultyTarget
+// converts a scalar into the 256-bit target used for the actual hash comparison.
+//
+// calculateSimpleDifficulty implements basic time-based difficulty adjustment.
+//
+//	blocks too fast (actual < target) -> factor > 1 -> harder -> slower blocks
+//	blocks too slow (actual > target) -> factor < 1 -> easier -> faster blocks
+//
+// The direction (target/actual) is unchanged; what is fixed here is the arithmetic
+// around it: a zero AverageBlockTime produced +Inf, and int64(+Inf) is undefined
+// in Go, so an empty adjustment window yielded a garbage difficulty.
 func (da *DifficultyAdjuster) calculateSimpleDifficulty(
 	currentDifficulty *big.Int,
 	windowMetrics *WindowMetrics,
 ) *big.Int {
 
-	// Calculate time ratio
-	timeRatio := float64(windowMetrics.AverageBlockTime) / float64(da.config.TargetBlockTime)
+	adjustmentFactor := da.clampFactor(safeRatio(
+		float64(da.config.TargetBlockTime),
+		float64(windowMetrics.AverageBlockTime),
+	))
 
-	// Calculate adjustment factor
-	adjustmentFactor := 1.0 / timeRatio
+	return scaleDifficulty(currentDifficulty, adjustmentFactor)
+}
 
-	// Apply limits
-	if adjustmentFactor > da.config.MaxAdjustmentFactor {
-		adjustmentFactor = da.config.MaxAdjustmentFactor
+// safeRatio divides two float64 values, returning 1.0 (no change) when the result
+// would be undefined -- a zero denominator, a zero numerator, NaN or Inf.
+func safeRatio(numerator, denominator float64) float64 {
+	if denominator == 0 || numerator == 0 {
+		return 1.0
 	}
-	if adjustmentFactor < da.config.MinAdjustmentFactor {
-		adjustmentFactor = da.config.MinAdjustmentFactor
+	ratio := numerator / denominator
+	if math.IsNaN(ratio) || math.IsInf(ratio, 0) {
+		return 1.0
+	}
+	return ratio
+}
+
+// clampFactor bounds an adjustment factor to the configured limits.
+func (da *DifficultyAdjuster) clampFactor(factor float64) float64 {
+	if math.IsNaN(factor) {
+		return 1.0
+	}
+	if factor > da.config.MaxAdjustmentFactor {
+		return da.config.MaxAdjustmentFactor
+	}
+	if factor < da.config.MinAdjustmentFactor {
+		return da.config.MinAdjustmentFactor
+	}
+	return factor
+}
+
+// scaleDifficulty multiplies a difficulty scalar by a factor using fixed-point
+// arithmetic.
+//
+// The scale is six decimal places rather than the previous three, so small
+// adjustments are no longer truncated to a no-op.
+func scaleDifficulty(difficulty *big.Int, factor float64) *big.Int {
+	if difficulty == nil {
+		return big.NewInt(1)
 	}
 
-	// Calculate new difficulty
-	newDifficulty := new(big.Int).Set(currentDifficulty)
-	newDifficulty.Mul(newDifficulty, big.NewInt(int64(adjustmentFactor*1000)))
-	newDifficulty.Div(newDifficulty, big.NewInt(1000))
+	const scale = 1000000
+	scaled := int64(factor * scale)
+	if scaled <= 0 {
+		scaled = 1
+	}
 
-	return newDifficulty
+	out := new(big.Int).Set(difficulty)
+	out.Mul(out, big.NewInt(scaled))
+	out.Div(out, big.NewInt(scale))
+
+	// Difficulty must stay at least 1; zero would accept any hash at all.
+	if out.Sign() <= 0 {
+		out.SetInt64(1)
+	}
+	return out
 }
 
 // calculateMultiFactorDifficulty implements multi-factor difficulty adjustment
@@ -127,38 +180,30 @@ func (da *DifficultyAdjuster) calculateMultiFactorDifficulty(
 	windowMetrics *WindowMetrics,
 ) *big.Int {
 
-	// Calculate time factor
-	timeRatio := float64(windowMetrics.AverageBlockTime) / float64(da.config.TargetBlockTime)
-	timeFactor := 1.0 / timeRatio
-
-	// Calculate energy factor
-	energyRatio := float64(windowMetrics.AverageEnergyUsed) / float64(da.config.TargetEnergyUsage)
-	energyFactor := 1.0 / energyRatio
-
-	// Calculate network factor
-	networkRatio := float64(windowMetrics.AverageNetworkHashrate) / float64(da.config.TargetNetworkHashrate)
-	networkFactor := 1.0 / networkRatio
+	// Each factor is oriented so that "> 1 means make it harder":
+	//
+	//   time:    blocks faster than target      -> harder  -> target/actual
+	//   energy:  more energy than target        -> easier  -> target/actual
+	//   network: more hashrate than target      -> harder  -> actual/target
+	//
+	// The network factor was previously 1/(actual/target), i.e. inverted: adding
+	// hashrate to the network made mining *easier*, which is a runaway feedback
+	// loop. Time and energy keep their original orientation.
+	timeFactor := safeRatio(float64(da.config.TargetBlockTime), float64(windowMetrics.AverageBlockTime))
+	energyFactor := safeRatio(float64(da.config.TargetEnergyUsage), float64(windowMetrics.AverageEnergyUsed))
+	networkFactor := safeRatio(float64(windowMetrics.AverageNetworkHashrate), float64(da.config.TargetNetworkHashrate))
 
 	// Weighted combination
 	totalWeight := da.config.TimeWeight + da.config.EnergyWeight + da.config.NetworkWeight
-	adjustmentFactor := (timeFactor*da.config.TimeWeight +
+	if totalWeight == 0 {
+		return new(big.Int).Set(currentDifficulty)
+	}
+
+	adjustmentFactor := da.clampFactor((timeFactor*da.config.TimeWeight +
 		energyFactor*da.config.EnergyWeight +
-		networkFactor*da.config.NetworkWeight) / totalWeight
+		networkFactor*da.config.NetworkWeight) / totalWeight)
 
-	// Apply limits
-	if adjustmentFactor > da.config.MaxAdjustmentFactor {
-		adjustmentFactor = da.config.MaxAdjustmentFactor
-	}
-	if adjustmentFactor < da.config.MinAdjustmentFactor {
-		adjustmentFactor = da.config.MinAdjustmentFactor
-	}
-
-	// Calculate new difficulty
-	newDifficulty := new(big.Int).Set(currentDifficulty)
-	newDifficulty.Mul(newDifficulty, big.NewInt(int64(adjustmentFactor*1000)))
-	newDifficulty.Div(newDifficulty, big.NewInt(1000))
-
-	return newDifficulty
+	return scaleDifficulty(currentDifficulty, adjustmentFactor)
 }
 
 // ValidateMetrics validates that metrics are within acceptable ranges
@@ -179,6 +224,9 @@ func (da *DifficultyAdjuster) ValidateMetrics(metrics *BlockMetrics) error {
 	}
 
 	// Validate difficulty
+	if metrics.Difficulty == nil {
+		return fmt.Errorf("difficulty must not be nil")
+	}
 	if metrics.Difficulty.Cmp(big.NewInt(0)) <= 0 {
 		return fmt.Errorf("difficulty must be positive")
 	}
@@ -214,7 +262,11 @@ func (da *DifficultyAdjuster) AggregateWindowMetrics(blockMetrics []*BlockMetric
 
 // ShouldAdjustDifficulty determines if difficulty should be adjusted
 func (da *DifficultyAdjuster) ShouldAdjustDifficulty(blockNumber int) bool {
-	return blockNumber%da.config.AdjustmentWindow == 0
+	// A zero window would panic with a division by zero.
+	if da.config.AdjustmentWindow <= 0 {
+		return false
+	}
+	return blockNumber > 0 && blockNumber%da.config.AdjustmentWindow == 0
 }
 
 // GetAdjustmentWindowSize returns the size of the adjustment window
@@ -224,6 +276,9 @@ func (da *DifficultyAdjuster) GetAdjustmentWindowSize() int {
 
 // UpdateConfig updates the difficulty adjustment configuration
 func (da *DifficultyAdjuster) UpdateConfig(newConfig *DifficultyAdjustmentConfig) {
+	if newConfig == nil {
+		return
+	}
 	da.config = newConfig
 }
 

@@ -7,6 +7,7 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/binary"
+	"fmt"
 	"math"
 	"strconv"
 	"time"
@@ -28,31 +29,36 @@ func NewRandomBigInt() (*BigInt, error) {
 }
 
 // NewBigIntFromBytes creates a new BigInt instance from a byte slice.
-func NewBigIntFromBytes(bytes []byte) *BigInt {
-	return &BigInt{Val: int64(binary.BigEndian.Uint64(bytes))}
+//
+// Short input is left-padded rather than panicking: binary.BigEndian.Uint64
+// requires exactly 8 bytes and used to panic with "index out of range" on
+// anything shorter, which was reachable from NewBigIntFromString.
+func NewBigIntFromBytes(b []byte) *BigInt {
+	var buf [8]byte
+	if len(b) >= 8 {
+		copy(buf[:], b[len(b)-8:])
+	} else {
+		copy(buf[8-len(b):], b)
+	}
+	return &BigInt{Val: int64(binary.BigEndian.Uint64(buf[:]))}
 }
 
 // NewBigIntFromString creates a new BigInt instance from a string representation.
 // If the input string is base64-encoded, it will be decoded first.
 func NewBigIntFromString(s string) (*BigInt, error) {
-	// Check if the input string is base64-encoded
-	if isBase64Encoded(s) {
-		// Decode the base64 string
-		decoded, err := base64.StdEncoding.DecodeString(s)
-		if err != nil {
-			return nil, err
-		}
-
-		// Create a BigInt from the decoded byte slice
-		return NewBigIntFromBytes(decoded), nil
+	// Try the decimal form first. The old code called isBase64Encoded() first,
+	// which returns true for any string that happens to decode -- "1234" does --
+	// so ordinary decimal input was reinterpreted as base64 and corrupted (and,
+	// being shorter than 8 bytes, panicked in NewBigIntFromBytes).
+	if val, err := parseInt64(s); err == nil {
+		return &BigInt{Val: val}, nil
 	}
 
-	// Parse the string as a decimal integer
-	val, err := parseInt64(s)
+	decoded, err := base64.StdEncoding.DecodeString(s)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("value %q is neither a decimal integer nor base64: %w", s, err)
 	}
-	return &BigInt{Val: val}, nil
+	return NewBigIntFromBytes(decoded), nil
 }
 
 // String returns the string representation of the BigInt.
@@ -111,12 +117,27 @@ func (b *BigInt) Multiply(other *BigInt) *BigInt {
 }
 
 // Divide divides the current BigInt by the given BigInt.
+// Division by zero returns zero rather than panicking.
 func (b *BigInt) Divide(other *BigInt) *BigInt {
+	if other == nil || other.Val == 0 {
+		return &BigInt{Val: 0}
+	}
+	// math.MinInt64 / -1 overflows and panics on some architectures.
+	if b.Val == math.MinInt64 && other.Val == -1 {
+		return &BigInt{Val: math.MinInt64}
+	}
 	return &BigInt{Val: b.Val / other.Val}
 }
 
 // Modulo returns the modulo of the current BigInt by the given BigInt.
+// A zero modulus returns zero rather than panicking.
 func (b *BigInt) Modulo(other *BigInt) *BigInt {
+	if other == nil || other.Val == 0 {
+		return &BigInt{Val: 0}
+	}
+	if b.Val == math.MinInt64 && other.Val == -1 {
+		return &BigInt{Val: 0}
+	}
 	return &BigInt{Val: b.Val % other.Val}
 }
 
@@ -163,8 +184,18 @@ func (b *BigInt) IsLessThan(other *BigInt) bool {
 }
 
 // Abs returns the absolute value of the BigInt.
+//
+// It no longer routes through float64, which silently lost precision above 2^53
+// and returned the wrong answer for math.MinInt64. MinInt64 has no positive
+// counterpart in int64, so it is clamped to MaxInt64.
 func (b *BigInt) Abs() *BigInt {
-	return &BigInt{Val: int64(math.Abs(float64(b.Val)))}
+	if b.Val == math.MinInt64 {
+		return &BigInt{Val: math.MaxInt64}
+	}
+	if b.Val < 0 {
+		return &BigInt{Val: -b.Val}
+	}
+	return &BigInt{Val: b.Val}
 }
 
 // Neg returns the negation of the BigInt.

@@ -563,4 +563,4 @@ spec:
 
 **Great job completing Section 17! 🎉**
 
-Ready for the next challenge? Move on to [Section 18: Production Readiness](./section18/README.md)!
+Ready for the next challenge? Move on to [Section 18: Production Readiness](../section18/README.md)!

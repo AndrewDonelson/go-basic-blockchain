@@ -1,137 +1,250 @@
 // Package sdk is a software development kit for building blockchain applications.
-// File sdk/apiEndpointsAccount.go -
+// File sdk/apiEndpointsAccount.go - account registration, verification and login
 package sdk
 
 import (
+	"crypto/subtle"
 	"encoding/json"
+	"io"
 	"net/http"
 	"strings"
 	"time"
 )
 
-// handleAccountRegister handles the registration of a new account and returns an API key.
-// api.router.HandleFunc("/account/register", api.handleAccountRegister).Methods("GET")
-// Shell: curl -X GET "http://localhost:8080/account/register?email=EMAIL&password_hash=PASSWORD_HASH"
-// Go: http.Get("http://localhost:8080/account/register?email=EMAIL&password_hash=PASSWORD_HASH")
-// GDScript: HTTP.request("http://localhost:8080/account/register?email=EMAIL&password_hash=PASSWORD_HASH", [], true, HTTP.METHOD_GET)
+// accountCredentials is the request body for register and login.
 //
-// 1. receives a GET with email & password hash query parameters
-// 2. validates the email & password hash for SQL injection and password complexity
-// 3. sends an email with a verification link that expires is 30 minutes
-// 4. email link format: https://somedomain.com/account/verify?email=EMAIL&token=TOKEN
+// The password is sent in the body of a POST, not as a query parameter of a GET.
+// Query strings end up in access logs, proxy logs, browser history and Referer
+// headers, so the previous ?password_hash=... scheme leaked the credential to
+// every intermediary on the path.
+type accountCredentials struct {
+	Email    string `json:"email"`
+	Password string `json:"password"`
+}
+
+// decodeAccountCredentials reads credentials from the request body, falling back
+// to query parameters only for the email so error messages stay useful.
+func decodeAccountCredentials(r *http.Request) (accountCredentials, bool) {
+	var creds accountCredentials
+	if err := json.NewDecoder(io.LimitReader(r.Body, maxAccountRequestBytes)).Decode(&creds); err != nil {
+		return accountCredentials{}, false
+	}
+	creds.Email = normalizeAccountEmail(creds.Email)
+	return creds, true
+}
+
+// minAccountPasswordLength is the shortest password a new account may use.
+const (
+	minAccountPasswordLength = 12
+	maxAccountPasswordLength = 128
+	maxAccountRequestBytes   = 1 << 16
+	accountTokenTTL          = 30 * time.Minute
+)
+
+// handleAccountRegister registers a new account and emails a verification token.
+//
+// POST /account/register  {"email": "...", "password": "..."}
+//
+// Three things changed here, all of them security-relevant:
+//
+//  1. It is a POST. Registration creates state, so it was never safe or idempotent
+//     as a GET, and GETs are cached and logged with their query strings.
+//  2. The verification token is no longer returned in the response. Returning it
+//     made the entire email-verification step a formality that any caller could
+//     skip.
+//  3. Registering an address that is already verified is refused. Previously an
+//     attacker could re-register a victim's verified address, read the token
+//     straight out of the response, verify, and thereby replace the victim's
+//     stored credential -- a full account takeover.
 func (api *API) handleAccountRegister(w http.ResponseWriter, r *http.Request) {
 	if api.accountStore == nil {
 		RespondError(w, http.StatusInternalServerError, "Account store unavailable")
 		return
 	}
 
-	// Extract email and password hash from query parameters
-	email := r.URL.Query().Get("email")
-	passwordHash := r.URL.Query().Get("password_hash")
+	if !api.accountLimiter.allow(clientIP(r)) {
+		RespondError(w, http.StatusTooManyRequests, "Too many registration attempts")
+		return
+	}
 
-	// Validate email
-	if !isValidEmail(email) {
+	creds, ok := decodeAccountCredentials(r)
+	if !ok {
+		RespondError(w, http.StatusBadRequest, "Invalid request body")
+		return
+	}
+
+	if !isValidEmail(creds.Email) {
 		RespondError(w, http.StatusBadRequest, "Invalid email format")
 		return
 	}
 
-	// Validate password hash (for simplicity, just check length)
-	if len(passwordHash) != 64 { // Assuming SHA-256 hash
-		RespondError(w, http.StatusBadRequest, "Invalid password hash")
+	if len(creds.Password) < minAccountPasswordLength || len(creds.Password) > maxAccountPasswordLength {
+		RespondError(w, http.StatusBadRequest, "Password must be between 12 and 128 characters")
+		return
+	}
+
+	// Refuse to shadow an already-verified account.
+	if _, exists, err := api.accountStore.GetVerified(creds.Email); err != nil {
+		RespondError(w, http.StatusInternalServerError, "Failed to read account store")
+		return
+	} else if exists {
+		// Deliberately the same generic response as success, so this endpoint
+		// cannot be used to enumerate which addresses are registered.
+		respondJSON(w, http.StatusAccepted, registrationAccepted())
+		return
+	}
+
+	passwordHash, passwordSalt, err := hashAccountPassword(creds.Password)
+	if err != nil {
+		RespondError(w, http.StatusInternalServerError, "Failed to hash password")
 		return
 	}
 
 	token := generateRandomToken()
+	if token == "" {
+		RespondError(w, http.StatusInternalServerError, "Failed to generate verification token")
+		return
+	}
 
-	err := api.accountStore.SavePending(PendingAccountRecord{
-		Email:        strings.ToLower(email),
+	// Only the token's hash is stored, so a leaked store cannot be used to verify
+	// somebody else's pending registration.
+	err = api.accountStore.SavePending(PendingAccountRecord{
+		Email:        creds.Email,
 		PasswordHash: passwordHash,
-		Token:        token,
-		ExpiresAt:    time.Now().Add(30 * time.Minute),
+		PasswordSalt: passwordSalt,
+		TokenHash:    hashAPIKey(token),
+		ExpiresAt:    time.Now().Add(accountTokenTTL),
 	})
 	if err != nil {
 		RespondError(w, http.StatusInternalServerError, "Failed to persist registration")
 		return
 	}
 
-	response := struct {
-		Status            string `json:"status"`
-		Message           string `json:"message"`
-		VerificationToken string `json:"verification_token"`
-	}{
-		Status:            "ok",
-		Message:           "Registration successful. Please verify your email.",
-		VerificationToken: token,
-	}
+	api.deliverVerificationToken(creds.Email, token)
 
-	w.Header().Set("Content-Type", "application/json")
-	if err := json.NewEncoder(w).Encode(response); err != nil {
-		http.Error(w, "Internal server error", http.StatusInternalServerError)
-		return
+	respondJSON(w, http.StatusAccepted, registrationAccepted())
+}
+
+// registrationAccepted is the single response registration ever gives, so the
+// endpoint reveals nothing about whether an address already exists.
+func registrationAccepted() interface{} {
+	return struct {
+		Status  string `json:"status"`
+		Message string `json:"message"`
+	}{
+		Status:  "ok",
+		Message: "If the address is eligible, a verification link has been sent.",
 	}
 }
 
-// handleAccountLogin handles the login of an existing account and returns an API key.
-// POST email & password hash and returns JSON with API key
+// deliverVerificationToken sends the verification link out of band.
+//
+// The doc comment on the old handler promised an email and no email was ever
+// sent; the token came back in the HTTP response instead. When no mail transport
+// is configured the token is written to the node log so a local operator can
+// still complete the flow, but it never reaches the HTTP client.
+func (api *API) deliverVerificationToken(email, token string) {
+	cfg := api.GetConfig()
+	link := "/account/verify?email=" + email + "&token=" + token
+	if cfg != nil && cfg.Domain != "" {
+		link = strings.TrimRight(cfg.Domain, "/") + link
+	}
+
+	if cfg != nil && cfg.GMailEmail != "" && cfg.GMailPassword != "" {
+		body := "Please verify your account by visiting:\r\n" + link
+		if err := SendGmail(email, "Verify your account", body, cfg); err != nil {
+			LogInfof("Failed to send verification email to %s: %v", email, err)
+		} else {
+			return
+		}
+	}
+
+	LogInfof("Verification link for %s: %s", email, link)
+}
+
+// handleAccountLogin authenticates an account and issues a fresh API key.
+//
+// POST /account/login  {"email": "...", "password": "..."}
+//
+// The issued key is random, stored only as a SHA-256 hash, and accepted by the
+// API key middleware. Previously login returned SHA256(serverSeed+email): a value
+// that was deterministic, unrevocable, derivable by anyone who knew the seed (which
+// was a published constant), and -- because the middleware only ever checked the
+// single statically configured key -- did not actually authenticate anything.
 func (api *API) handleAccountLogin(w http.ResponseWriter, r *http.Request) {
 	if api.accountStore == nil {
 		RespondError(w, http.StatusInternalServerError, "Account store unavailable")
 		return
 	}
 
-	email := strings.ToLower(r.URL.Query().Get("email"))
-	passwordHash := r.URL.Query().Get("password_hash")
+	if !api.accountLimiter.allow(clientIP(r)) {
+		RespondError(w, http.StatusTooManyRequests, "Too many login attempts")
+		return
+	}
 
-	if !isValidEmail(email) {
+	creds, ok := decodeAccountCredentials(r)
+	if !ok {
+		RespondError(w, http.StatusBadRequest, "Invalid request body")
+		return
+	}
+
+	if !isValidEmail(creds.Email) {
 		RespondError(w, http.StatusBadRequest, "Invalid email format")
 		return
 	}
 
-	if len(passwordHash) != 64 {
-		RespondError(w, http.StatusBadRequest, "Invalid password hash")
-		return
-	}
-
-	record, exists, err := api.accountStore.GetVerified(email)
+	record, exists, err := api.accountStore.GetVerified(creds.Email)
 	if err != nil {
 		RespondError(w, http.StatusInternalServerError, "Failed to read account store")
 		return
 	}
 
-	if !exists {
-		RespondError(w, http.StatusUnauthorized, "Account not verified")
-		return
-	}
-
-	if record.PasswordHash != passwordHash {
+	// Same response for "no such account" and "wrong password" so the endpoint
+	// cannot be used to enumerate accounts.
+	if !exists || !verifyAccountPassword(creds.Password, record.PasswordHash, record.PasswordSalt) {
 		RespondError(w, http.StatusUnauthorized, "Invalid credentials")
 		return
 	}
 
-	response := struct {
+	apiKey, hashed, err := generateAPIKey()
+	if err != nil {
+		RespondError(w, http.StatusInternalServerError, "Failed to issue API key")
+		return
+	}
+
+	record.APIKeyHash = hashed
+	if err := api.accountStore.SaveVerified(record); err != nil {
+		RespondError(w, http.StatusInternalServerError, "Failed to persist API key")
+		return
+	}
+
+	api.accountLimiter.reset(clientIP(r))
+
+	respondJSON(w, http.StatusOK, struct {
 		Status string `json:"status"`
 		APIKey string `json:"api_key"`
 	}{
 		Status: "ok",
-		APIKey: generateAPIKeyForEmail(email),
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	if err := json.NewEncoder(w).Encode(response); err != nil {
-		http.Error(w, "Internal server error", http.StatusInternalServerError)
-		return
-	}
+		APIKey: apiKey,
+	})
 }
 
-// handleAccountVerify handles the verification of a new account from the email link.
-// email link format: https://somedomain.com/account/verify?email=EMAIL&token=TOKEN
+// handleAccountVerify verifies a pending registration.
+//
+// GET /account/verify?email=EMAIL&token=TOKEN  (a GET because it is followed from
+// an emailed link, and it is idempotent once the pending record is consumed).
 func (api *API) handleAccountVerify(w http.ResponseWriter, r *http.Request) {
 	if api.accountStore == nil {
 		RespondError(w, http.StatusInternalServerError, "Account store unavailable")
 		return
 	}
 
-	email := strings.ToLower(r.URL.Query().Get("email"))
+	if !api.accountLimiter.allow(clientIP(r)) {
+		RespondError(w, http.StatusTooManyRequests, "Too many verification attempts")
+		return
+	}
+
+	email := normalizeAccountEmail(r.URL.Query().Get("email"))
 	token := r.URL.Query().Get("token")
 
 	if !isValidEmail(email) {
@@ -155,7 +268,8 @@ func (api *API) handleAccountVerify(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if pending.Token != token {
+	// Constant-time: a byte-by-byte string compare leaks the token by timing.
+	if subtle.ConstantTimeCompare([]byte(pending.TokenHash), []byte(hashAPIKey(token))) != 1 {
 		RespondError(w, http.StatusUnauthorized, "Invalid verification token")
 		return
 	}
@@ -169,9 +283,17 @@ func (api *API) handleAccountVerify(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	apiKey, hashed, err := generateAPIKey()
+	if err != nil {
+		RespondError(w, http.StatusInternalServerError, "Failed to issue API key")
+		return
+	}
+
 	err = api.accountStore.SaveVerified(VerifiedAccountRecord{
 		Email:        email,
 		PasswordHash: pending.PasswordHash,
+		PasswordSalt: pending.PasswordSalt,
+		APIKeyHash:   hashed,
 		VerifiedAt:   time.Now(),
 	})
 	if err != nil {
@@ -184,17 +306,13 @@ func (api *API) handleAccountVerify(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	response := struct {
+	api.accountLimiter.reset(clientIP(r))
+
+	respondJSON(w, http.StatusOK, struct {
 		Status string `json:"status"`
 		APIKey string `json:"api_key"`
 	}{
 		Status: "ok",
-		APIKey: generateAPIKeyForEmail(email),
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	if err := json.NewEncoder(w).Encode(response); err != nil {
-		http.Error(w, "Internal server error", http.StatusInternalServerError)
-		return
-	}
+		APIKey: apiKey,
+	})
 }

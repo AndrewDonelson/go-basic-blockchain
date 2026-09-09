@@ -69,7 +69,9 @@ func TestCreateWallet(t *testing.T) {
 	// Test wallet data and properties
 	assert.Equal(t, "TestWallet", wallet.GetWalletName())
 	assert.Equal(t, []string{"tag1", "tag2"}, wallet.GetTags())
-	assert.Equal(t, fundWalletAmount, wallet.GetBalance())
+	// New wallets now start at zero; they no longer mint fundWalletAmount
+	// for themselves at creation time.
+	assert.Equal(t, 0.0, wallet.GetBalance())
 }
 
 // TestOpneCloseWallet test the open and close wallet functions including the locking and unlocking of the wallet
@@ -86,7 +88,9 @@ func TestOpenCloseWallet(t *testing.T) {
 	// Test wallet data and properties
 	assert.Equal(t, "TestWallet", wallet.GetWalletName())
 	assert.Equal(t, []string{"tag1", "tag2"}, wallet.GetTags())
-	assert.Equal(t, fundWalletAmount, wallet.GetBalance())
+	// New wallets now start at zero; they no longer mint fundWalletAmount
+	// for themselves at creation time.
+	assert.Equal(t, 0.0, wallet.GetBalance())
 
 	// Test wallet address generation
 	address := wallet.GetAddress()
@@ -133,11 +137,12 @@ func TestWallet(t *testing.T) {
 	// Test wallet data and properties
 	assert.Equal(t, "Wallet1", wallet1.GetWalletName())
 	assert.Equal(t, []string{"tag1", "tag2"}, wallet1.GetTags())
-	assert.Equal(t, fundWalletAmount, wallet1.GetBalance())
+	// New wallets start at zero (they no longer self-fund at creation).
+	assert.Equal(t, 0.0, wallet1.GetBalance())
 
 	assert.Equal(t, "Wallet2", wallet2.GetWalletName())
 	assert.Equal(t, []string{"tag3", "tag4"}, wallet2.GetTags())
-	assert.Equal(t, fundWalletAmount, wallet2.GetBalance())
+	assert.Equal(t, 0.0, wallet2.GetBalance())
 
 	// Test wallet address generation
 	address1 := wallet1.GetAddress()
@@ -162,13 +167,17 @@ func TestWallet(t *testing.T) {
 	config := NewConfig()
 	config.DataPath = "./test_data_wallet"
 	bc := NewBlockchain(config)
+	// Wallets are no longer created pre-funded (that minted tokens from nothing),
+	// so fund the sender explicitly for this test.
+	assert.NoError(t, wallet1.SetData("balance", 100.0))
+
 	tx, err := NewBankTransaction(wallet1, wallet2, 1.0)
 	assert.NoError(t, err)
 
 	tx.Signature, err = tx.Sign([]byte(wallet1.PrivatePEM()))
 	assert.NoError(t, err)
 
-	sentTx, err := wallet1.SendTransaction(wallet2.GetAddress(), tx, bc)
+	sentTx, err := wallet1.SendTransaction(tx, bc)
 	assert.NoError(t, err)
 	assert.NotNil(t, sentTx)
 }

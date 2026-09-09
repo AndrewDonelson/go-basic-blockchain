@@ -3,19 +3,16 @@
 package sdk
 
 import (
-	"bytes"
 	"crypto/ecdsa"
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/x509"
 	"encoding/base64"
-	"encoding/gob"
 	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
 	"errors"
 	"fmt"
-	"io"
 	"strings"
 	"time"
 )
@@ -47,6 +44,10 @@ type Transaction interface {
 	Sign(privPEM []byte) (string, error)
 	Verify(pubKey []byte, sign string) (bool, error)
 	Send(bc *Blockchain) error
+	// SigningBytes returns the canonical payload a signature commits to. Every
+	// protocol must include its own value-bearing fields here, otherwise those
+	// fields are unsigned and can be tampered with in transit.
+	SigningBytes() ([]byte, error)
 	String() string
 	Hex() string
 	Hash() string
@@ -89,8 +90,7 @@ func NewTransaction(protocol string, from *Wallet, to *Wallet) (*Tx, error) {
 
 	LogInfof("Creating %s transaction: %s → %s", protocol, from.GetAddress()[:8], to.GetAddress()[:8])
 
-	toWalletPUID := to.ID
-	if toWalletPUID == nil {
+	if to.ID == nil {
 		return nil, fmt.Errorf("to wallet PUID can't be empty")
 	}
 	assetID, err := NewRandomBigInt()
@@ -98,10 +98,18 @@ func NewTransaction(protocol string, from *Wallet, to *Wallet) (*Tx, error) {
 		return nil, err
 	}
 
-	toWalletPUID.SetAssetID(assetID)
+	// Build a *fresh* PUID. Taking to.ID directly would alias the recipient
+	// wallet's own identity: mutating it here would rewrite the wallet's ID and
+	// retroactively change the ID of every transaction previously sent to it.
+	txID := NewPUID(
+		NewBigInt(to.ID.GetOrganizationID().Val),
+		NewBigInt(to.ID.GetAppID().Val),
+		NewBigInt(to.ID.GetUserID().Val),
+		assetID,
+	)
 
 	tx := &Tx{
-		ID:       toWalletPUID,
+		ID:       txID,
 		Time:     time.Now(),
 		Version:  TransactionVersion,
 		Protocol: protocol,
@@ -109,39 +117,30 @@ func NewTransaction(protocol string, from *Wallet, to *Wallet) (*Tx, error) {
 		To:       to,
 		Fee:      transactionFee,
 		Status:   StatusPending,
-		Nonce:    uint64(SecureRandomInt(8)),
+		// SecureRandomInt(8) produced a value in 0..7 -- three bits of nonce.
+		Nonce: SecureRandomUint64(),
 	}
 
 	return tx, nil
 }
 
-// MarshalJSON implements custom JSON marshaling for Transaction
+// MarshalJSON encodes the transaction in the canonical wire form.
+//
+// The previous implementation flattened From/To to addresses but its
+// UnmarshalJSON counterpart ignored those fields entirely, so From and To came
+// back nil and the next GetSenderWallet().GetAddress() nil-dereferenced.
 func (t *Tx) MarshalJSON() ([]byte, error) {
-	type Alias Tx
-	return json.Marshal(&struct {
-		*Alias
-		From string `json:"from"`
-		To   string `json:"to"`
-	}{
-		Alias: (*Alias)(t),
-		From:  t.From.GetAddress(),
-		To:    t.To.GetAddress(),
-	})
+	return json.Marshal(t.toWire())
 }
 
-// UnmarshalJSON implements custom JSON unmarshaling for Transaction
+// UnmarshalJSON decodes the canonical wire form, restoring From and To as
+// verification-only wallets.
 func (t *Tx) UnmarshalJSON(data []byte) error {
-	type Alias Tx
-	aux := &struct {
-		*Alias
-		From string `json:"from"`
-		To   string `json:"to"`
-	}{
-		Alias: (*Alias)(t),
-	}
-	if err := json.Unmarshal(data, &aux); err != nil {
+	var w txWire
+	if err := json.Unmarshal(data, &w); err != nil {
 		return err
 	}
+	t.applyWire(w)
 	return nil
 }
 
@@ -212,26 +211,35 @@ func (t *Tx) Hex() string {
 	return hex.EncodeToString(t.Bytes())
 }
 
+// hashTransaction derives a transaction's hash from its canonical signing payload,
+// so the hash covers exactly the same fields the signature does. Passing the
+// concrete transaction (not the embedded Tx) is what makes protocol fields count.
+func hashTransaction(tx Transaction) string {
+	payload, err := tx.SigningBytes()
+	if err != nil {
+		LogInfof("Error building signing bytes for hash: %v", err)
+		return ""
+	}
+	hash := sha256.Sum256(payload)
+	return hex.EncodeToString(hash[:])
+}
+
 // Hash returns the hash of the transaction as a string.
 func (t *Tx) Hash() string {
-	txCopy := *t
-	txCopy.hash = ""
-	txCopy.Signature = ""
-	hash := sha256.Sum256(txCopy.Bytes())
-	t.hash = hex.EncodeToString(hash[:])
+	t.hash = hashTransaction(t)
 	return t.hash
 }
 
 // Bytes returns the serialized byte representation of the transaction.
+// It uses the canonical signing payload so that, unlike gob, the encoding is
+// stable across processes and covers the concrete protocol's own fields.
 func (t *Tx) Bytes() []byte {
-	var buf bytes.Buffer
-	enc := gob.NewEncoder(&buf)
-	err := enc.Encode(t)
+	payload, err := t.SigningBytes()
 	if err != nil {
 		LogInfof("Error encoding transaction: %v", err)
 		return nil
 	}
-	return buf.Bytes()
+	return payload
 }
 
 // JSON returns the JSON representation of the transaction as a string.
@@ -265,14 +273,38 @@ func (t *Tx) Send(bc *Blockchain) error {
 	return nil
 }
 
-// Sign signs the transaction with the provided private key.
-func (t *Tx) Sign(privPEM []byte) (string, error) {
-	txBytes, err := json.Marshal(t)
-	if err != nil {
-		return "", fmt.Errorf("error marshaling transaction: %v", err)
+// signingFields returns the base fields every transaction commits to when signed.
+// Signature and the cached hash are deliberately absent: including them would make
+// a signature depend on itself, and verification could never reproduce the digest.
+func (t *Tx) signingFields() map[string]interface{} {
+	fields := map[string]interface{}{
+		"version":  t.Version,
+		"protocol": t.Protocol,
+		"fee":      t.Fee,
+		"nonce":    t.Nonce,
+		"time":     t.Time.UTC().UnixNano(),
+		"data":     t.Data,
 	}
-	reader := bytes.NewReader(txBytes)
+	if t.ID != nil {
+		fields["id"] = t.ID.String()
+	}
+	if t.From != nil {
+		fields["from"] = t.From.GetAddress()
+	}
+	if t.To != nil {
+		fields["to"] = t.To.GetAddress()
+	}
+	return fields
+}
 
+// SigningBytes returns the canonical signing payload for a base transaction.
+// json.Marshal sorts map keys, so the encoding is deterministic across runs.
+func (t *Tx) SigningBytes() ([]byte, error) {
+	return json.Marshal(t.signingFields())
+}
+
+// signPayload signs an already-canonical payload with the given PEM private key.
+func signPayload(payload []byte, privPEM []byte) (string, error) {
 	block, _ := pem.Decode(privPEM)
 	if block == nil {
 		return "", errors.New("failed to decode PEM block containing private key")
@@ -283,27 +315,17 @@ func (t *Tx) Sign(privPEM []byte) (string, error) {
 		return "", fmt.Errorf("error parsing private key: %v", err)
 	}
 
-	h := sha256.New()
-	if _, err := io.Copy(h, reader); err != nil {
-		return "", fmt.Errorf("error hashing transaction: %v", err)
-	}
-	hash := h.Sum(nil)
+	hash := sha256.Sum256(payload)
 
-	sign, err := ecdsa.SignASN1(rand.Reader, pk, hash)
+	sign, err := ecdsa.SignASN1(rand.Reader, pk, hash[:])
 	if err != nil {
 		return "", fmt.Errorf("error signing transaction: %v", err)
 	}
 	return base64.StdEncoding.EncodeToString(sign), nil
 }
 
-// Verify verifies the signature of the transaction with the provided public key.
-func (t *Tx) Verify(pubKey []byte, sign string) (bool, error) {
-	txBytes, err := json.Marshal(t)
-	if err != nil {
-		return false, fmt.Errorf("error marshaling transaction: %v", err)
-	}
-	reader := bytes.NewReader(txBytes)
-
+// verifyPayload checks a signature over an already-canonical payload.
+func verifyPayload(payload []byte, pubKey []byte, sign string) (bool, error) {
 	block, _ := pem.Decode(pubKey)
 	if block == nil {
 		return false, errors.New("failed to decode PEM block containing public key")
@@ -317,17 +339,35 @@ func (t *Tx) Verify(pubKey []byte, sign string) (bool, error) {
 		return false, errors.New("not an ECDSA public key")
 	}
 
-	h := sha256.New()
-	if _, err := io.Copy(h, reader); err != nil {
-		return false, fmt.Errorf("error hashing transaction: %v", err)
-	}
-	hash := h.Sum(nil)
+	hash := sha256.Sum256(payload)
 
 	bSign, err := base64.StdEncoding.DecodeString(sign)
 	if err != nil {
 		return false, fmt.Errorf("error decoding signature: %v", err)
 	}
-	return ecdsa.VerifyASN1(pk, hash, bSign), nil
+	return ecdsa.VerifyASN1(pk, hash[:], bSign), nil
+}
+
+// Sign signs the transaction with the provided private key.
+//
+// Concrete protocols (Bank, Message, ...) MUST override this so that their own
+// value-bearing fields are covered; see Bank.Sign. Go has no virtual dispatch on
+// embedded structs, so delegating to Tx.Sign would sign only the base fields.
+func (t *Tx) Sign(privPEM []byte) (string, error) {
+	payload, err := t.SigningBytes()
+	if err != nil {
+		return "", fmt.Errorf("error marshaling transaction: %v", err)
+	}
+	return signPayload(payload, privPEM)
+}
+
+// Verify verifies the signature of the transaction with the provided public key.
+func (t *Tx) Verify(pubKey []byte, sign string) (bool, error) {
+	payload, err := t.SigningBytes()
+	if err != nil {
+		return false, fmt.Errorf("error marshaling transaction: %v", err)
+	}
+	return verifyPayload(payload, pubKey, sign)
 }
 
 // GetSignature returns the signature of the transaction.

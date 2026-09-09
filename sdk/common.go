@@ -22,28 +22,23 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 )
 
-// VerifySignature verifies the provided signature against the given message and public key.
-// It returns true if the signature is valid, and false otherwise.
+// VerifySignature verifies an ASN.1/DER ECDSA signature over message.
+//
+// It previously split the signature in half and treated the parts as raw r||s.
+// Everything in this project signs with ecdsa.SignASN1, which produces DER, so
+// this function accepted and rejected essentially at random -- a dangerous
+// property for anything named VerifySignature.
 func VerifySignature(message []byte, signature []byte, publicKey *ecdsa.PublicKey) bool {
-	// Verify the signature by recovering the public key from the signature and comparing it with the provided public key.
-	// Use the Verify function from the elliptic package to perform the verification.
-	// The Verify function returns true if the signature is valid, and false otherwise.
+	if publicKey == nil || len(signature) == 0 {
+		return false
+	}
 
-	// Prepare the hashed message
 	hash := sha256.Sum256(message)
-
-	// Extract the r and s components from the signature
-	r := big.Int{}
-	s := big.Int{}
-	sigLen := len(signature)
-	r.SetBytes(signature[:(sigLen / 2)])
-	s.SetBytes(signature[(sigLen / 2):])
-
-	// Verify the signature using the public key
-	return ecdsa.Verify(publicKey, hash[:], &r, &s)
+	return ecdsa.VerifyASN1(publicKey, hash[:], signature)
 }
 
 // PrettyPrint takes an arbitrary interface{} value and returns a formatted string
@@ -74,7 +69,29 @@ func GetType(i interface{}) string {
 // GetUserIP returns the IP address of the client making the HTTP request. It handles cases where the request
 // comes through a proxy by parsing the X-Forwarded-For header. If the header is not set, it falls back to
 // the RemoteAddr field of the request.
+// GetUserIP returns the client address for logging.
+//
+// X-Forwarded-For is attacker-controlled and only meaningful behind a proxy you
+// operate, so it is honoured only when TRUST_PROXY_HEADERS is set. Trusting it
+// unconditionally let any client forge the address in the logs.
 func GetUserIP(r *http.Request) string {
+	if getEnvAsBool("TRUST_PROXY_HEADERS", false) {
+		if forwardedFor := r.Header.Get("X-Forwarded-For"); forwardedFor != "" {
+			ips := strings.Split(forwardedFor, ",")
+			return strings.TrimSpace(ips[0])
+		}
+	}
+
+	ip, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		return r.RemoteAddr
+	}
+
+	return ip
+}
+
+//nolint:unused
+func getUserIPLegacy(r *http.Request) string {
 	// Check if the request comes through a proxy
 	if forwardedFor := r.Header.Get("X-Forwarded-For"); forwardedFor != "" {
 		// The X-Forwarded-For header may contain a comma-separated list of IP addresses
@@ -139,9 +156,10 @@ func ConvertToFloat64(value interface{}) (float64, error) {
 	}
 }
 
-// ValidateAddress validates the provided Ethereum address string. It decodes the address
-// and verifies that the length of the decoded bytes is 32. If the address is invalid,
-// it returns an error.
+// ValidateAddress validates a wallet address for this chain.
+//
+// Addresses here are the hex encoding of a SHA-256 hash, so 32 bytes. The doc
+// comment used to describe these as Ethereum addresses, which are 20 bytes.
 func ValidateAddress(address string) error {
 	// Decode the test address
 	addr, err := hex.DecodeString(address)
@@ -167,25 +185,25 @@ func testPasswordStrength(password string) error {
 	}
 
 	// Check for at least 2 uppercase letters
-	uppercaseCount := countMatches(password, "[A-Z]")
+	uppercaseCount := countMatches(password, reUppercase)
 	if uppercaseCount < 2 {
 		return fmt.Errorf("password should contain at least 2 uppercase letters")
 	}
 
 	// Check for at least 2 lowercase letters
-	lowercaseCount := countMatches(password, "[a-z]")
+	lowercaseCount := countMatches(password, reLowercase)
 	if lowercaseCount < 2 {
 		return fmt.Errorf("password should contain at least 2 lowercase letters")
 	}
 
 	// Check for at least 2 digits
-	digitCount := countMatches(password, "[0-9]")
+	digitCount := countMatches(password, reDigit)
 	if digitCount < 2 {
 		return fmt.Errorf("password should contain at least 2 digits")
 	}
 
 	// Check for at least 2 special characters
-	specialCharCount := countMatches(password, `[~!@#$%^&*()=+\[\]{}|\\/?<>]`)
+	specialCharCount := countMatches(password, reSpecial)
 	if specialCharCount < 2 {
 		return fmt.Errorf("password should contain at least 2 special characters (~!@#$%%^&*()=+[]{}|\\/<>?)")
 	}
@@ -244,19 +262,53 @@ func GenerateRandomPassword() (string, error) {
 	return "", errors.New("failed to generate a password meeting the strength criteria after 100 attempts")
 }
 
+// SecureRandomInt returns a cryptographically secure integer in [0, max).
+//
+// A non-positive max returns 0 instead of panicking: crypto/rand.Int panics on
+// max <= 0, which made this a latent crash for any caller that computed its
+// bound.
 func SecureRandomInt(max int) int {
+	if max <= 0 {
+		return 0
+	}
+
 	n, err := rand.Int(rand.Reader, big.NewInt(int64(max)))
 	if err != nil {
-		panic(err) // In a production environment, handle this error more gracefully
+		// The only way crypto/rand fails is a broken system entropy source.
+		LogInfof("crypto/rand failure: %v", err)
+		return 0
 	}
 	return int(n.Int64())
 }
 
-// countMatches returns the number of non-overlapping matches of the regular expression pattern in the string s.
-func countMatches(s, pattern string) int {
-	re := regexp.MustCompile(pattern)
-	matches := re.FindAllString(s, -1)
-	return len(matches)
+// SecureRandomUint64 returns a cryptographically secure 64-bit value.
+//
+// Transaction nonces used to be SecureRandomInt(8) -- a value in 0..7, which
+// gives essentially no replay protection at all.
+func SecureRandomUint64() uint64 {
+	buf := make([]byte, 8)
+	if _, err := rand.Read(buf); err != nil {
+		LogInfof("crypto/rand failure: %v", err)
+		return 0
+	}
+	return binary.BigEndian.Uint64(buf)
+}
+
+// Password-strength patterns, compiled once.
+//
+// countMatches used to call regexp.MustCompile on every invocation, so each
+// testPasswordStrength call recompiled four patterns -- on every wallet create,
+// unlock and lock.
+var (
+	reUppercase = regexp.MustCompile(`[A-Z]`)
+	reLowercase = regexp.MustCompile(`[a-z]`)
+	reDigit     = regexp.MustCompile(`[0-9]`)
+	reSpecial   = regexp.MustCompile(`[~!@#$%^&*()=+\[\]{}|\\/?<>_.,;:-]`)
+)
+
+// countMatches returns the number of non-overlapping matches of re in s.
+func countMatches(s string, re *regexp.Regexp) int {
+	return len(re.FindAllString(s, -1))
 }
 
 // createFolder creates the folder if it does not exist.
@@ -326,11 +378,16 @@ func isValidEmail(email string) bool {
 
 // generateRandomToken generates a random 256-bit token encoded as a URL-safe base64 string.
 // This function is used to generate unique identifiers or tokens, such as for authentication purposes.
+// generateRandomToken returns a random 256-bit URL-safe token, or "" on failure.
+//
+// The error from rand.Read used to be discarded, so a failing entropy source
+// produced a token of 32 zero bytes -- identical for every caller, and trivially
+// guessable.
 func generateRandomToken() string {
 	b := make([]byte, 32) // 256 bits
 	if _, err := rand.Read(b); err != nil {
-		// Log error but continue
-		_ = err // Suppress unused variable warning
+		LogInfof("failed to generate random token: %v", err)
+		return ""
 	}
 	return base64.URLEncoding.EncodeToString(b)
 }
@@ -343,18 +400,24 @@ func isBase64Encoded(s string) bool {
 	return err == nil
 }
 
-var configVerbose = false // will be set from Config at startup
+// configVerbose gates verbose logging. It is accessed from multiple goroutines
+// (the miner, the API handlers, the menu), so it is atomic rather than a plain
+// bool read and written without synchronisation.
+var configVerbose atomic.Bool
 
+// LogVerbosef logs only when verbose logging is enabled.
 func LogVerbosef(format string, args ...interface{}) {
-	if configVerbose {
+	if configVerbose.Load() {
 		log.Printf("[VERBOSE] "+format, args...)
 	}
 }
 
+// LogInfof logs unconditionally.
 func LogInfof(format string, args ...interface{}) {
 	log.Printf(format, args...)
 }
 
+// ConfigSetVerbose enables or disables verbose logging.
 func ConfigSetVerbose(v bool) {
-	configVerbose = v
+	configVerbose.Store(v)
 }

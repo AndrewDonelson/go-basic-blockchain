@@ -11,26 +11,28 @@ Welcome to the comprehensive documentation for the Go Basic Blockchain project. 
 
 ### Core Concepts
 - **[Architecture](architecture.md)** - System design and component overview
-- **[Blockchain Fundamentals](fundamentals.md)** - Understanding blockchain basics
-- **[Helios Consensus](helios.md)** - Advanced consensus algorithm documentation
+- **[Helios Consensus](helios.md)** - The proof-of-work algorithm, and why determinism is what makes it work
 
 ### User Guides
-- **[API Reference](api.md)** - Complete RESTful API documentation
+- **[API Reference](api.md)** - The REST API as implemented
 - **[Wallet Guide](wallet.md)** - Wallet creation, management, and security
-- **[Mining Guide](mining.md)** - Mining operations and consensus participation
-- **[Network Guide](network.md)** - P2P networking and node communication
 
 ### Development
-- **[Development Guide](development.md)** - Contributing and development workflow
+- **[Development Guide](development.md)** - Contributing, coding standards, and security guidelines drawn from the audit
 - **[Testing Guide](testing.md)** - Test suite and coverage information
-- **[Deployment](deployment.md)** - Production deployment and configuration
-- **[Troubleshooting](troubleshooting.md)** - Common issues and solutions
 
-### Advanced Topics
-- **[Sidechain Protocols](sidechains.md)** - Transaction routing and specialized protocols
-- **[Security](security.md)** - Cryptographic implementations and security considerations
-- **[Performance](performance.md)** - Optimization and scalability considerations
-- **[Extending the Blockchain](extending.md)** - Adding new features and protocols
+### Learning
+- **[Learning Course](../learn/README.md)** - 19 sections, beginner to advanced
+- **[Security Case Studies](../learn/SECURITY_CASE_STUDIES.md)** - Thirteen real defects from this codebase, with causes and fixes
+
+### Not yet written
+
+These were listed here as links, but the files were never created. They are
+recorded as gaps rather than as 404s:
+
+`fundamentals.md`, `mining.md`, `network.md`, `deployment.md`,
+`troubleshooting.md`, `sidechains.md`, `security.md`, `performance.md`,
+`extending.md`
 
 ## 🚀 Quick Navigation
 
@@ -49,18 +51,26 @@ Welcome to the comprehensive documentation for the Go Basic Blockchain project. 
 5. Reference the [White Paper](WHITEPAPER.md) for standards
 
 ### For Advanced Users
-1. Explore [Sidechain Protocols](sidechains.md) for specialized features
-2. Review [Security](security.md) for production considerations
-3. Check [Performance](performance.md) for optimization
-4. Read [Extending the Blockchain](extending.md) for customization
-5. Consult the [White Paper](WHITEPAPER.md) for governance and roadmap
+4. Consult the [White Paper](WHITEPAPER.md) for governance and roadmap
 
 ## 📊 Project Status
 
-- **Implementation**: ~85% complete
-- **Test Coverage**: 39.8%
-- **Test Performance**: ~9.5 seconds
-- **Helios Consensus**: ✅ Fully integrated
+A **single-node educational blockchain**: it mines, validates and persists a chain
+correctly, but does not yet form a network.
+
+| Area | Status |
+|---|---|
+| Block production & persistence | ✅ Working |
+| Proof of work (Helios) | ✅ Working — deterministic and verified on every block |
+| Transaction signing | ✅ Working — covers all protocol fields |
+| REST API | ✅ Working — authenticated, rate limited, paginated |
+| P2P peer discovery | ⚠️ Partial — no peer authentication |
+| Chain sync / propagation | ❌ Not implemented |
+| Fork choice / reorg | ❌ Not implemented |
+| UTXO / account state model | ❌ Not implemented |
+
+- **Test Coverage**: 57.0% (`sdk`), 85–97% across the Helios packages
+- **Test Performance**: ~17 seconds; ~85 seconds under `-race`
 - **Documentation**: ✅ Comprehensive
 
 ## 🔗 External Resources

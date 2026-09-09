@@ -3,6 +3,8 @@
 package sdk
 
 import (
+	"encoding/json"
+	"errors"
 	"fmt"
 )
 
@@ -10,6 +12,27 @@ import (
 type Message struct {
 	Tx
 	Message string
+}
+
+// MarshalJSON encodes the Message transaction in the canonical wire form.
+//
+// Message had no MarshalJSON, so Go promoted Tx.MarshalJSON and the message body
+// was silently dropped on every serialisation.
+func (m *Message) MarshalJSON() ([]byte, error) {
+	w := m.Tx.toWire()
+	w.Message = m.Message
+	return json.Marshal(w)
+}
+
+// UnmarshalJSON decodes a Message transaction from the canonical wire form.
+func (m *Message) UnmarshalJSON(data []byte) error {
+	var w txWire
+	if err := json.Unmarshal(data, &w); err != nil {
+		return err
+	}
+	m.Tx.applyWire(w)
+	m.Message = w.Message
+	return nil
 }
 
 // NewMessageTransaction creates a new message transaction.
@@ -23,6 +46,9 @@ func NewMessageTransaction(from *Wallet, to *Wallet, message string) (*Message, 
 	if message == "" {
 		return nil, fmt.Errorf("message can't be empty")
 	}
+	if len(message) > MaxMessageLength {
+		return nil, fmt.Errorf("message exceeds maximum length of %d bytes", MaxMessageLength)
+	}
 
 	return &Message{
 		Tx:      *tx,
@@ -32,96 +58,100 @@ func NewMessageTransaction(from *Wallet, to *Wallet, message string) (*Message, 
 
 // Process returns a string representation of the message.
 func (m *Message) Process() string {
-	return fmt.Sprintf("Message from %s to %s: %s", m.From.GetWalletName(), m.To.GetWalletName(), m.Message)
+	from, to := "unknown", "unknown"
+	if m.From != nil {
+		from = m.From.GetWalletName()
+	}
+	if m.To != nil {
+		to = m.To.GetWalletName()
+	}
+	m.Status = StatusConfirmed
+	return fmt.Sprintf("Message from %s to %s: %s", from, to, m.Message)
 }
 
-// Transaction interface method implementations
-// These methods delegate to the embedded Tx struct
+// Transaction interface methods that MUST be overridden.
+//
+// Everything else is promoted from the embedded Tx; hand-written pass-throughs
+// only hid the fact that Message was never covered by the signature.
 
-func (m *Message) GetProtocol() string {
-	return m.Tx.GetProtocol()
+// SigningBytes includes the message body so it cannot be rewritten after signing.
+func (m *Message) SigningBytes() ([]byte, error) {
+	fields := m.Tx.signingFields()
+	fields["message"] = m.Message
+	return json.Marshal(fields)
 }
 
-func (m *Message) GetID() string {
-	return m.Tx.GetID()
-}
-
-func (m *Message) GetHash() string {
-	return m.Tx.GetHash()
-}
-
-func (m *Message) GetSignature() string {
-	return m.Tx.GetSignature()
-}
-
-func (m *Message) GetSenderWallet() *Wallet {
-	return m.Tx.GetSenderWallet()
-}
-
-func (m *Message) GetRecipientWallet() *Wallet {
-	return m.Tx.GetRecipientWallet()
-}
-
-func (m *Message) GetFee() float64 {
-	return m.Tx.GetFee()
-}
-
-func (m *Message) GetStatus() TransactionStatus {
-	return m.Tx.GetStatus()
-}
-
-func (m *Message) SetStatus(status TransactionStatus) {
-	m.Tx.SetStatus(status)
-}
-
+// Sign signs the full Message transaction, including the message body.
 func (m *Message) Sign(privPEM []byte) (string, error) {
-	return m.Tx.Sign(privPEM)
+	payload, err := m.SigningBytes()
+	if err != nil {
+		return "", fmt.Errorf("error marshaling transaction: %v", err)
+	}
+	return signPayload(payload, privPEM)
 }
 
+// Verify verifies a signature over the full Message transaction.
 func (m *Message) Verify(pubKey []byte, sign string) (bool, error) {
-	return m.Tx.Verify(pubKey, sign)
+	payload, err := m.SigningBytes()
+	if err != nil {
+		return false, fmt.Errorf("error marshaling transaction: %v", err)
+	}
+	return verifyPayload(payload, pubKey, sign)
 }
 
-func (m *Message) Send(bc *Blockchain) error {
-	return m.Tx.Send(bc)
-}
-
-func (m *Message) String() string {
-	return m.Tx.String()
-}
-
-func (m *Message) Hex() string {
-	return m.Tx.Hex()
-}
-
+// Hash covers the message body as well as the base fields.
 func (m *Message) Hash() string {
-	return m.Tx.Hash()
+	m.Tx.hash = hashTransaction(m)
+	return m.Tx.hash
 }
 
+// Bytes returns the canonical encoding, including the message body.
 func (m *Message) Bytes() []byte {
-	return m.Tx.Bytes()
+	payload, err := m.SigningBytes()
+	if err != nil {
+		return nil
+	}
+	return payload
 }
 
-func (m *Message) JSON() string {
-	return m.Tx.JSON()
-}
+// Size reports the size of the full transaction.
+func (m *Message) Size() int { return len(m.Bytes()) }
 
-func (m *Message) Validate() error {
-	return m.Tx.Validate()
-}
-
-func (m *Message) Size() int {
-	return m.Tx.Size()
-}
-
+// EstimateFee is derived from the full transaction size.
 func (m *Message) EstimateFee(feePerByte float64) float64 {
-	return m.Tx.EstimateFee(feePerByte)
+	return float64(m.Size()) * feePerByte
 }
 
-func (m *Message) SetPriority(priority int) {
-	m.Tx.SetPriority(priority)
+// Send queues the Message transaction itself rather than its base transaction.
+func (m *Message) Send(bc *Blockchain) error {
+	if err := m.Validate(); err != nil {
+		return fmt.Errorf("invalid transaction: %v", err)
+	}
+	bc.AddTransaction(m)
+	return nil
 }
 
-func (m *Message) GetPriority() int {
-	return m.Tx.GetPriority()
+// Validate checks the base transaction plus Message-specific invariants.
+func (m *Message) Validate() error {
+	if err := m.Tx.Validate(); err != nil {
+		return err
+	}
+	if m.Message == "" {
+		return errors.New("message transaction body can't be empty")
+	}
+	if len(m.Message) > MaxMessageLength {
+		return fmt.Errorf("message exceeds maximum length of %d bytes", MaxMessageLength)
+	}
+	if m.Tx.Protocol != MessageProtocolID {
+		return fmt.Errorf("message transaction has wrong protocol: %s", m.Tx.Protocol)
+	}
+	return nil
+}
+
+// GetID is nil-safe because rollup reconstruction can produce partially built values.
+func (m *Message) GetID() string {
+	if m == nil || m.Tx.ID == nil {
+		return ""
+	}
+	return m.Tx.GetID()
 }

@@ -2,9 +2,11 @@ package menu
 
 import (
 	"fmt"
+	"os"
 	"strconv"
 
 	"github.com/AndrewDonelson/go-basic-blockchain/sdk"
+	"golang.org/x/term"
 )
 
 // BlockchainMenu creates the main blockchain menu system
@@ -220,10 +222,24 @@ func createNewWallet(blockchain *sdk.Blockchain) error {
 func listWallets(blockchain *sdk.Blockchain) error {
 	fmt.Printf("\n=== Available Wallets ===\n")
 
-	// This would need to be implemented based on how wallets are stored
-	// For now, we'll show a placeholder
-	fmt.Printf("Wallet listing functionality needs to be implemented.\n")
-	fmt.Printf("This would show all wallets in the system.\n")
+	addresses, err := sdk.ListWalletAddresses()
+	if err != nil {
+		fmt.Printf("❌ Failed to list wallets: %v\n", err)
+		return err
+	}
+
+	if len(addresses) == 0 {
+		fmt.Printf("No wallets found.\n")
+		return nil
+	}
+
+	for i, address := range addresses {
+		balance := 0.0
+		if blockchain != nil {
+			balance = blockchain.GetBalance(address)
+		}
+		fmt.Printf("%3d. %s  (balance: %.2f)\n", i+1, address, balance)
+	}
 
 	return nil
 }
@@ -252,16 +268,42 @@ func unlockWallet(blockchain *sdk.Blockchain) error {
 		return err
 	}
 
-	fmt.Printf("Enter passphrase: ")
-	var passphrase string
-	if _, err := fmt.Scanln(&passphrase); err != nil {
+	passphrase, err := readPassphrase("Enter passphrase: ")
+	if err != nil {
 		return err
 	}
 
-	// This would need to be implemented based on wallet unlocking mechanism
-	fmt.Printf("Wallet unlocking functionality needs to be implemented.\n")
+	wallet, err := sdk.OpenWallet(address, passphrase)
+	if err != nil {
+		fmt.Printf("❌ Failed to unlock wallet: %v\n", err)
+		return err
+	}
 
+	fmt.Printf("✅ Wallet %s unlocked (%s)\n", wallet.GetAddress(), wallet.GetWalletName())
 	return nil
+}
+
+// readPassphrase reads a passphrase without echoing it to the terminal.
+//
+// The menu used fmt.Scanln, which echoes: the passphrase appeared on screen and
+// in the user's scrollback.
+func readPassphrase(prompt string) (string, error) {
+	fmt.Print(prompt)
+
+	fd := int(os.Stdin.Fd())
+	if !term.IsTerminal(fd) {
+		// Not a terminal (piped input, CI): fall back to a plain read.
+		var value string
+		_, err := fmt.Scanln(&value)
+		return value, err
+	}
+
+	data, err := term.ReadPassword(fd)
+	fmt.Println()
+	if err != nil {
+		return "", err
+	}
+	return string(data), nil
 }
 
 func createTransaction(blockchain *sdk.Blockchain) error {

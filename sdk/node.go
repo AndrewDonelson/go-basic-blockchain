@@ -3,6 +3,7 @@
 package sdk
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -14,6 +15,13 @@ import (
 	"github.com/AndrewDonelson/go-basic-blockchain/internal/progress"
 	"github.com/pborman/uuid"
 )
+
+// envNodeWalletPassphrase names the environment variable holding the node
+// wallet's passphrase.
+const envNodeWalletPassphrase = "NODE_WALLET_PASSPHRASE"
+
+// nodeShutdownTimeout bounds the graceful shutdown of the HTTP server.
+const nodeShutdownTimeout = 10 * time.Second
 
 // NodeOptions is the options for a node.
 type NodeOptions struct {
@@ -50,6 +58,8 @@ type NodeStatus struct {
 // Node is a node in the blockchain network.
 type Node struct {
 	sync.Mutex
+	cancel            context.CancelFunc
+	shutdownOnce      sync.Once
 	initialized       bool
 	StartedAt         time.Time
 	LastSeen          time.Time
@@ -63,15 +73,8 @@ type Node struct {
 	ProgressIndicator *progress.ProgressIndicator
 }
 
-// Lock locks the node's mutex
-func (n *Node) Lock() {
-	n.Mutex.Lock()
-}
-
-// Unlock unlocks the node's mutex
-func (n *Node) Unlock() {
-	n.Mutex.Unlock()
-}
+// (Node embeds sync.Mutex, so Lock/Unlock are already promoted; the hand-written
+// wrappers that used to sit here just called the embedded methods.)
 
 // node is the node instance
 var node *Node
@@ -116,10 +119,15 @@ func NewNode(opts *NodeOptions) error {
 	}
 	node.P2P = p2p
 
-	// Initialize wallet with a strong password
-	strongPassword, err := GenerateRandomPassword()
+	// Initialize the node wallet.
+	//
+	// The passphrase comes from configuration (NODE_WALLET_PASSPHRASE). It used to
+	// be generated with GenerateRandomPassword() and then dropped on the floor, so
+	// the wallet was encrypted with a key nobody had: the node could never sign
+	// with it again, and every restart orphaned another wallet file on disk.
+	strongPassword, err := nodeWalletPassphrase()
 	if err != nil {
-		return fmt.Errorf("failed to generate strong password: %v", err)
+		return fmt.Errorf("failed to resolve node wallet passphrase: %w", err)
 	}
 
 	walletOptions := NewWalletOptions(
@@ -148,6 +156,31 @@ func NewNode(opts *NodeOptions) error {
 
 	LogInfof("Node initialized: %s", node.ID)
 	return nil
+}
+
+// nodeWalletPassphrase resolves the node wallet passphrase from the environment.
+//
+// When NODE_WALLET_PASSPHRASE is unset a passphrase is generated and reported
+// once, prominently, so the operator can persist it. Silently generating an
+// unrecoverable one is what made the node wallet useless.
+func nodeWalletPassphrase() (string, error) {
+	if pass := getEnv(envNodeWalletPassphrase, ""); pass != "" {
+		if err := testPasswordStrength(pass); err != nil {
+			return "", fmt.Errorf("%s is too weak: %w", envNodeWalletPassphrase, err)
+		}
+		return pass, nil
+	}
+
+	generated, err := GenerateRandomPassword()
+	if err != nil {
+		return "", err
+	}
+
+	LogInfof("No %s configured; generated one for this node wallet. "+
+		"Save it now -- the wallet cannot be recovered without it: %s",
+		envNodeWalletPassphrase, generated)
+
+	return generated, nil
 }
 
 func DefaultNodeOptions() *NodeOptions {
@@ -212,13 +245,26 @@ func LogEvent(format string, args ...interface{}) {
 	LogInfof(format, args...)
 }
 
-// Run runs the node.
+// Run runs the node until the process is terminated.
 func (n *Node) Run() {
+	n.RunContext(context.Background())
+}
+
+// RunContext runs the node until ctx is cancelled, then shuts it down cleanly.
+//
+// The old Run ended in a bare `select {}` with no exit path: there was no way to
+// stop the node, drain the HTTP server, close the P2P listener, or flush state.
+func (n *Node) RunContext(ctx context.Context) {
 	LogInfof("Starting node...")
+
+	ctx, cancel := context.WithCancel(ctx)
+	n.Lock()
+	n.cancel = cancel
 	if n.StartedAt.IsZero() {
 		n.StartedAt = time.Now()
 	}
 	n.LastSeen = n.StartedAt
+	n.Unlock()
 
 	// Start progress indicator
 	if n.ProgressIndicator != nil {
@@ -226,31 +272,89 @@ func (n *Node) Run() {
 		n.ProgressIndicator.ShowInfo("Node starting up...")
 	}
 
-	// Start P2P network
-	go func() {
-		if err := n.P2P.Start(); err != nil {
-			// Log error but continue
-			_ = err // Suppress unused variable warning
-		}
-	}()
-	LogInfof("P2P network starting on %s", n.Config.P2PHostName)
-
 	if n.Blockchain == nil {
 		LogInfof("Error: Blockchain is not initialized")
-		n.ProgressIndicator.ShowError("Blockchain not initialized")
+		if n.ProgressIndicator != nil {
+			n.ProgressIndicator.ShowError("Blockchain not initialized")
+		}
+		cancel()
 		return
 	}
 
-	n.ProgressIndicator.ShowSuccess("Blockchain initialized successfully")
-	go n.Blockchain.Run(n.Config.Difficulty)
-
-	if n.Config.EnableAPI {
-		go n.API.Start()
-		n.ProgressIndicator.ShowInfo("API server started")
+	// Start P2P network
+	if n.P2P != nil {
+		go func() {
+			if err := n.P2P.Start(); err != nil {
+				LogInfof("P2P network failed to start: %v", err)
+			}
+		}()
+		LogInfof("P2P network starting on %s", n.Config.P2PHostName)
 	}
 
-	// Otherwise, just block forever
-	select {}
+	if n.ProgressIndicator != nil {
+		n.ProgressIndicator.ShowSuccess("Blockchain initialized successfully")
+	}
+	go n.Blockchain.RunContext(ctx, n.Config.Difficulty)
+
+	if n.Config.EnableAPI && n.API != nil {
+		go func() {
+			if err := n.API.Start(); err != nil {
+				LogInfof("API server stopped: %v", err)
+			}
+		}()
+		if n.ProgressIndicator != nil {
+			n.ProgressIndicator.ShowInfo("API server started")
+		}
+	}
+
+	<-ctx.Done()
+	n.shutdown()
+}
+
+// Stop signals the node to shut down.
+func (n *Node) Stop() {
+	n.Lock()
+	cancel := n.cancel
+	n.Unlock()
+
+	if cancel != nil {
+		cancel()
+	}
+}
+
+// shutdown releases the node's resources in dependency order.
+func (n *Node) shutdown() {
+	n.shutdownOnce.Do(func() {
+		LogInfof("Shutting down node...")
+
+		if n.API != nil {
+			shutdownCtx, cancel := context.WithTimeout(context.Background(), nodeShutdownTimeout)
+			defer cancel()
+			if err := n.API.Stop(shutdownCtx); err != nil {
+				LogInfof("Error stopping API server: %v", err)
+			}
+		}
+
+		if n.P2P != nil {
+			if err := n.P2P.Stop(); err != nil {
+				LogVerbosef("Error stopping P2P network: %v", err)
+			}
+		}
+
+		if n.Blockchain != nil {
+			n.Blockchain.Cleanup()
+		}
+
+		if n.ProgressIndicator != nil {
+			n.ProgressIndicator.Stop()
+		}
+
+		n.Lock()
+		n.Status = "stopped"
+		n.Unlock()
+
+		LogInfof("Node shutdown complete")
+	})
 }
 
 // ProcessP2PTransaction processes a P2PTransaction received from the P2P network.
@@ -305,12 +409,19 @@ func (n *Node) Register() error {
 	}
 	LogEvent("Node registered with P2P network")
 
-	LogEvent("Marshaling node data to JSON")
-	jsonNodeData, err := json.Marshal(n)
+	// Announce only this node's identity and address.
+	//
+	// This used to marshal the entire Node -- which transitively includes the
+	// whole Blockchain (every block) and the Wallet's ciphertext -- and pushed all
+	// of it into a broadcast message.
+	address := ""
+	if n.Config != nil {
+		address = n.Config.P2PHostName
+	}
+	jsonNodeData, err := json.Marshal(NodeInfo{ID: n.ID, Address: address})
 	if err != nil {
 		return fmt.Errorf("error marshaling node data: %w", err)
 	}
-	LogEvent("Node data marshaled to JSON")
 
 	LogEvent("Creating new transaction")
 	tx, err := NewTransaction("chain", n.Wallet, n.Wallet)
@@ -341,109 +452,57 @@ func (n *Node) Register() error {
 }
 
 func (n *Node) validateTransaction(tx P2PTransaction) error {
+	if tx.Tx.From == nil {
+		return errors.New("transaction has no sender wallet")
+	}
+
 	isValid, err := tx.Tx.Verify([]byte(tx.Tx.From.PublicPEM()), tx.Tx.GetSignature())
 	if err != nil {
 		return fmt.Errorf("error validating transaction: %w", err)
 	}
 
-	if isValid {
-		LogEvent("Transaction %s is valid", tx.ID)
-		n.Blockchain.AddTransaction(&tx.Tx)
-	} else {
-		LogEvent("Transaction %s is invalid", tx.ID)
-	}
-
-	return nil
-}
-
-func (n *Node) updateStatus(tx P2PTransaction) error {
-	var status NodeStatus
-	data, ok := tx.Data.([]byte)
-	if !ok {
-		return errors.New("error asserting tx.Data to []byte")
-	}
-	err := json.Unmarshal(data, &status)
-	if err != nil {
-		return fmt.Errorf("error unmarshaling node status: %w", err)
-	}
-
-	if node, exists := n.P2P.nodes[status.NodeID]; exists {
-		node.LastSeen = time.Now()
-		node.Status = status.Status
-		LogEvent("Updated status of node %s: %s", status.NodeID, status.Status)
+	if !isValid {
+		LogEvent("Transaction %s is invalid", tx.GetID())
 		return nil
 	}
 
-	return fmt.Errorf("node %s not found in the network", status.NodeID)
+	LogEvent("Transaction %s is valid", tx.GetID())
+	if n.Blockchain != nil {
+		n.Blockchain.AddTransaction(&tx.Tx)
+	}
+	return nil
+}
+
+// The node-management handlers (updateStatus/addNode/removeNode/registerNode) used
+// to be duplicated here, mutating n.P2P.nodes directly and without P2P's mutex --
+// a concurrent map write, which is an unrecoverable fatal error rather than a
+// catchable panic. They now delegate to the P2P implementations, which hold the
+// correct lock, so there is one implementation instead of two divergent ones.
+
+func (n *Node) updateStatus(tx P2PTransaction) error {
+	if n.P2P == nil {
+		return errors.New("p2p network is not initialized")
+	}
+	return n.P2P.updateNodeStatus(tx)
 }
 
 func (n *Node) addNode(tx P2PTransaction) error {
-	var newNode Node
-	data, ok := tx.Data.([]byte)
-	if !ok {
-		return errors.New("error asserting tx.Data to []byte")
+	if n.P2P == nil {
+		return errors.New("p2p network is not initialized")
 	}
-	err := json.Unmarshal(data, &newNode)
-	if err != nil {
-		return fmt.Errorf("error unmarshaling new node data: %w", err)
-	}
-
-	if _, exists := n.P2P.nodes[newNode.ID]; exists {
-		return fmt.Errorf("node %s already exists in the network", newNode.ID)
-	}
-
-	n.P2P.nodes[newNode.ID] = &newNode
-	LogEvent("Added new node to the network: %s", newNode.ID)
-	return nil
+	return n.P2P.addNode(tx)
 }
 
 func (n *Node) removeNode(tx P2PTransaction) error {
-	var nodeID string
-	data, ok := tx.Data.([]byte)
-	if !ok {
-		return errors.New("error asserting tx.Data to []byte")
+	if n.P2P == nil {
+		return errors.New("p2p network is not initialized")
 	}
-	err := json.Unmarshal(data, &nodeID)
-	if err != nil {
-		return fmt.Errorf("error unmarshaling node ID: %w", err)
-	}
-
-	if _, exists := n.P2P.nodes[nodeID]; exists {
-		delete(n.P2P.nodes, nodeID)
-		LogEvent("Removed node from the network: %s", nodeID)
-		return nil
-	}
-
-	return fmt.Errorf("node %s not found in the network", nodeID)
+	return n.P2P.removeNode(tx)
 }
 
 func (n *Node) registerNode(tx P2PTransaction) error {
-	var newNode Node
-	data, ok := tx.Data.([]byte)
-	if !ok {
-		return errors.New("error asserting tx.Data to []byte")
+	if n.P2P == nil {
+		return errors.New("p2p network is not initialized")
 	}
-	err := json.Unmarshal(data, &newNode)
-	if err != nil {
-		return fmt.Errorf("error unmarshaling new node data: %w", err)
-	}
-
-	if _, exists := n.P2P.nodes[newNode.ID]; exists {
-		return fmt.Errorf("node %s is already registered in the network", newNode.ID)
-	}
-
-	n.P2P.nodes[newNode.ID] = &newNode
-	LogEvent("Registered new node in the network: %s", newNode.ID)
-
-	if err := n.P2P.Broadcast(P2PTransaction{
-		Tx:     tx.Tx,
-		Target: "all",
-		Action: "add",
-		Data:   tx.Data,
-	}); err != nil {
-		// Log error but continue
-		_ = err // Suppress unused variable warning
-	}
-
-	return nil
+	return n.P2P.registerNode(tx)
 }

@@ -1,4 +1,44 @@
+# golangci-lint configuration.
+#
+# This file previously enabled nothing beyond the defaults, so the many
+# `if err != nil { _ = err }` suppressions and unchecked type assertions in the
+# codebase went unreported. The `go` version also disagreed with go.mod.
 run:
   timeout: 5m
-  go: "1.25"
+  go: "1.22"
 
+linters:
+  enable:
+    - errcheck      # unchecked errors -- the single highest-value linter here
+    - govet
+    - ineffassign
+    - staticcheck
+    - unused
+    - gosec         # hardcoded credentials, weak crypto, unsafe permissions
+    - bodyclose     # leaked HTTP response bodies
+    - rowserrcheck
+    - noctx
+    - errorlint
+    - copyloopvar
+    - misspell
+    - unconvert
+    - nilerr
+
+linters-settings:
+  errcheck:
+    check-type-assertions: true
+    check-blank: true
+  gosec:
+    excludes:
+      # G104 overlaps with errcheck.
+      - G104
+
+issues:
+  exclude-rules:
+    # Test files may ignore errors on setup helpers.
+    - path: _test\.go
+      linters:
+        - errcheck
+        - gosec
+  max-issues-per-linter: 0
+  max-same-issues: 0

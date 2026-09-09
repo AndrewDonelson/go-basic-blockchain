@@ -79,6 +79,12 @@ func NewConfig() *Config {
 	// Apply command line flags (highest priority)
 	cfg.applyCommandLineFlags()
 
+	// Surface a bad configuration at startup rather than at first use. NewConfig
+	// never validated what it produced.
+	if err := cfg.Validate(); err != nil {
+		LogInfof("Configuration is invalid: %v", err)
+	}
+
 	return cfg
 }
 
@@ -136,19 +142,17 @@ func (c *Config) loadFromEnv() {
 			}
 		}
 
-		// If an environment file is found, load it
+		// If an environment file is found, load it.
+		//
+		// A parse failure falls back to defaults. It used to call
+		// promptForValues(), i.e. block on an interactive stdin read from inside
+		// library initialization -- which hangs a daemon, a container or a CI run
+		// forever, or silently consumes input meant for something else.
 		if envFile != "" {
-			err := godotenv.Load(envFile)
-			if err != nil {
-				log.Printf("Error loading environment file [%s]: %v", envFile, err)
-				// Optionally prompt for values or use defaults
-				c.promptForValues()
-				if err := c.save(); err != nil {
-					// Log error but continue
-					_ = err // Suppress unused variable warning
-				}
+			if err := godotenv.Load(envFile); err != nil {
+				LogInfof("Error loading environment file [%s]: %v (continuing with defaults)", envFile, err)
 			} else {
-				log.Printf("Loaded environment file: %s", envFile)
+				LogVerbosef("Loaded environment file: %s", envFile)
 			}
 		}
 
@@ -247,8 +251,10 @@ func (c *Config) Validate() error {
 	if c.BlockTime <= 0 {
 		return errors.New("block time must be positive")
 	}
-	if c.Difficulty < 0 {
-		return errors.New("difficulty cannot be negative")
+	// Difficulty feeds a 256-bit shift in difficultyTarget; an out-of-range value
+	// there produces a nonsensical target.
+	if c.Difficulty < 1 || c.Difficulty > 255 {
+		return errors.New("difficulty must be between 1 and 255")
 	}
 	if c.TransactionFee < 0 {
 		return errors.New("transaction fee cannot be negative")
@@ -307,7 +313,10 @@ func (c *Config) Show() {
 func (c *Config) Path() string {
 	ex, err := os.Executable()
 	if err != nil {
-		panic(err)
+		// Panicking here killed the process because the OS could not report the
+		// executable's location -- recoverable, and not worth a crash.
+		LogInfof("Could not determine executable path: %v", err)
+		return "."
 	}
 	return filepath.Dir(ex)
 }
@@ -321,24 +330,58 @@ func (c *Config) save() error {
 		}
 		defer f.Close()
 
-		c.writeEnvValue(f, "BLOCKCHAIN_NAME", c.BlockchainName)
-		c.writeEnvValue(f, "BLOCKCHAIN_SYMBOL", c.BlockchainSymbol)
-		c.writeEnvValue(f, "BLOCK_TIME", fmt.Sprintf("%d", c.BlockTime))
-		c.writeEnvValue(f, "DIFFICULTY", fmt.Sprintf("%d", c.Difficulty))
-		c.writeEnvValue(f, "TRANSACTION_FEE", fmt.Sprintf("%.2f", c.TransactionFee))
-		c.writeEnvValue(f, "MINER_REWARD_PCT", fmt.Sprintf("%.2f", c.MinerRewardPCT))
-		c.writeEnvValue(f, "MINER_ADDRESS", c.MinerAddress)
-		c.writeEnvValue(f, "DEV_REWARD_PCT", fmt.Sprintf("%.2f", c.DevRewardPCT))
-		c.writeEnvValue(f, "DEV_ADDRESS", c.DevAddress)
-		c.writeEnvValue(f, "API_HOSTNAME", c.APIHostName)
+		if err := c.writeEnvValue(f, "BLOCKCHAIN_NAME", c.BlockchainName); err != nil {
+			return err
+		}
+		if err := c.writeEnvValue(f, "BLOCKCHAIN_SYMBOL", c.BlockchainSymbol); err != nil {
+			return err
+		}
+		if err := c.writeEnvValue(f, "BLOCK_TIME", fmt.Sprintf("%d", c.BlockTime)); err != nil {
+			return err
+		}
+		if err := c.writeEnvValue(f, "DIFFICULTY", fmt.Sprintf("%d", c.Difficulty)); err != nil {
+			return err
+		}
+		if err := c.writeEnvValue(f, "TRANSACTION_FEE", fmt.Sprintf("%.2f", c.TransactionFee)); err != nil {
+			return err
+		}
+		if err := c.writeEnvValue(f, "MINER_REWARD_PCT", fmt.Sprintf("%.2f", c.MinerRewardPCT)); err != nil {
+			return err
+		}
+		if err := c.writeEnvValue(f, "MINER_ADDRESS", c.MinerAddress); err != nil {
+			return err
+		}
+		if err := c.writeEnvValue(f, "DEV_REWARD_PCT", fmt.Sprintf("%.2f", c.DevRewardPCT)); err != nil {
+			return err
+		}
+		if err := c.writeEnvValue(f, "DEV_ADDRESS", c.DevAddress); err != nil {
+			return err
+		}
+		if err := c.writeEnvValue(f, "API_HOSTNAME", c.APIHostName); err != nil {
+			return err
+		}
 		c.writeEnvValue(f, "P2P_HOSTNAME", c.P2PHostName)
-		c.writeEnvValue(f, "ENABLE_API", fmt.Sprintf("%v", c.EnableAPI))
-		c.writeEnvValue(f, "FUND_WALLET_AMOUNT", fmt.Sprintf("%.2f", c.FundWalletAmount))
-		c.writeEnvValue(f, "TOKEN_COUNT", fmt.Sprintf("%d", c.TokenCount))
-		c.writeEnvValue(f, "TOKEN_PRICE", fmt.Sprintf("%.2f", c.TokenPrice))
-		c.writeEnvValue(f, "ALLOW_NEW_TOKENS", fmt.Sprintf("%v", c.AllowNewTokens))
-		c.writeEnvValue(f, "MAX_BLOCK_SIZE", fmt.Sprintf("%d", c.MaxBlockSize))
-		c.writeEnvValue(f, "MIN_TRANSACTION_FEE", fmt.Sprintf("%.2f", c.MinTransactionFee))
+		if err := c.writeEnvValue(f, "ENABLE_API", fmt.Sprintf("%v", c.EnableAPI)); err != nil {
+			return err
+		}
+		if err := c.writeEnvValue(f, "FUND_WALLET_AMOUNT", fmt.Sprintf("%.2f", c.FundWalletAmount)); err != nil {
+			return err
+		}
+		if err := c.writeEnvValue(f, "TOKEN_COUNT", fmt.Sprintf("%d", c.TokenCount)); err != nil {
+			return err
+		}
+		if err := c.writeEnvValue(f, "TOKEN_PRICE", fmt.Sprintf("%.2f", c.TokenPrice)); err != nil {
+			return err
+		}
+		if err := c.writeEnvValue(f, "ALLOW_NEW_TOKENS", fmt.Sprintf("%v", c.AllowNewTokens)); err != nil {
+			return err
+		}
+		if err := c.writeEnvValue(f, "MAX_BLOCK_SIZE", fmt.Sprintf("%d", c.MaxBlockSize)); err != nil {
+			return err
+		}
+		if err := c.writeEnvValue(f, "MIN_TRANSACTION_FEE", fmt.Sprintf("%.2f", c.MinTransactionFee)); err != nil {
+			return err
+		}
 
 		log.Println("Updated values have been saved to .env file.")
 	} else {
@@ -390,6 +433,11 @@ func (c *Config) promptBool(key string, defaultValue bool) bool {
 	return value
 }
 
+// promptValue reads a configuration value from the terminal.
+//
+// On invalid input it falls back to the default and reports the problem. It used
+// to call os.Exit(1) at five separate points: a library terminating the host
+// process because somebody mistyped a number.
 func (c *Config) promptValue(key, defaultValue string, required bool, returnType string) interface{} {
 	value := os.Getenv(key)
 
@@ -405,56 +453,60 @@ func (c *Config) promptValue(key, defaultValue string, required bool, returnType
 
 	_, _ = fmt.Scanln(&value)
 
-	if required && (value == "" || value == defaultValue) {
+	if required && value == "" {
 		fmt.Println("This is a required value and must be set")
-		os.Exit(1)
+		return parseConfigValue(defaultValue, defaultValue, returnType)
 	}
 
 	if value != defaultValue {
 		c.promptUpdate = true
 	}
 
+	return parseConfigValue(value, defaultValue, returnType)
+}
+
+// parseConfigValue converts a prompted string to the requested type, falling back
+// to the default on malformed input.
+func parseConfigValue(value, defaultValue, returnType string) interface{} {
 	switch strings.ToLower(returnType) {
-	case "string":
-		return value
 	case "int":
 		intValue, err := strconv.Atoi(value)
 		if err != nil {
-			fmt.Println("Invalid value. Please enter a valid integer.")
-			os.Exit(1)
+			fmt.Printf("Invalid integer %q; using %s\n", value, defaultValue)
+			intValue, _ = strconv.Atoi(defaultValue)
 		}
 		return intValue
 	case "int64":
 		int64Value, err := strconv.ParseInt(value, 10, 64)
 		if err != nil {
-			fmt.Println("Invalid value. Please enter a valid 64-bit integer.")
-			os.Exit(1)
+			fmt.Printf("Invalid 64-bit integer %q; using %s\n", value, defaultValue)
+			int64Value, _ = strconv.ParseInt(defaultValue, 10, 64)
 		}
 		return int64Value
 	case "float":
 		floatValue, err := strconv.ParseFloat(value, 64)
 		if err != nil {
-			fmt.Println("Invalid value. Please enter a valid float.")
-			os.Exit(1)
+			fmt.Printf("Invalid number %q; using %s\n", value, defaultValue)
+			floatValue, _ = strconv.ParseFloat(defaultValue, 64)
 		}
 		return floatValue
 	case "bool":
 		boolValue, err := strconv.ParseBool(value)
 		if err != nil {
-			fmt.Println("Invalid value. Please enter true or false.")
-			os.Exit(1)
+			fmt.Printf("Invalid boolean %q; using %s\n", value, defaultValue)
+			boolValue, _ = strconv.ParseBool(defaultValue)
 		}
 		return boolValue
+	default:
+		return value
 	}
-
-	return value
 }
 
-func (c *Config) writeEnvValue(f *os.File, key, value string) {
-	_, err := fmt.Fprintf(f, "%s=%s\n", key, value)
-	if err != nil {
-		log.Fatal("Error writing to .env file")
+func (c *Config) writeEnvValue(f *os.File, key, value string) error {
+	if _, err := fmt.Fprintf(f, "%s=%s\n", key, value); err != nil {
+		return fmt.Errorf("error writing to .env file: %w", err)
 	}
+	return nil
 }
 
 // Helper functions for environment variable handling
@@ -498,10 +550,15 @@ func getEnvAsBool(key string, fallback bool) bool {
 	return fallback
 }
 
-// fileExists checks if a file exists and is not a directory
+// fileExists checks if a file exists and is not a directory.
+//
+// Any Stat error other than not-exist (permission denied, ENOTDIR, a symlink
+// loop) leaves info nil, and the old code called info.IsDir() on it regardless --
+// a nil dereference during NewConfig(), which probes /etc/blockchain/.local.env
+// among other paths.
 func fileExists(filename string) bool {
 	info, err := os.Stat(filename)
-	if os.IsNotExist(err) {
+	if err != nil {
 		return false
 	}
 	return !info.IsDir()

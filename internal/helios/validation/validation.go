@@ -2,6 +2,7 @@
 package validation
 
 import (
+	"encoding/hex"
 	"fmt"
 	"math/big"
 
@@ -55,11 +56,21 @@ func (pv *ProofValidator) ValidateProof(proof *algorithm.HeliosProof, targetDiff
 		return fmt.Errorf("proof difficulty is nil")
 	}
 
-	// The proof's difficulty should be less than or equal to the target
-	// (lower difficulty = harder to find, in Bitcoin-style difficulty)
-	if proof.Difficulty.Cmp(targetDifficulty) > 0 {
-		return fmt.Errorf("proof difficulty does not meet target: got %s, target %s",
-			proof.Difficulty.String(), targetDifficulty.String())
+	// Compare the ACTUAL proof hash against the target.
+	//
+	// This used to compare proof.Difficulty against targetDifficulty. Both are
+	// written by the miner -- HeliosAlgorithm.Mine sets proof.Difficulty to
+	// targetDifficulty itself -- so the check reduced to `x <= x` and could never
+	// fail. The hash, which is what the work actually produces, was never
+	// inspected here at all.
+	hashBytes, err := hex.DecodeString(proof.FinalHash)
+	if err != nil {
+		return fmt.Errorf("final hash is not valid hex: %w", err)
+	}
+
+	hashInt := new(big.Int).SetBytes(hashBytes)
+	if hashInt.Cmp(targetDifficulty) > 0 {
+		return fmt.Errorf("proof hash does not meet target difficulty")
 	}
 
 	return nil
@@ -165,6 +176,11 @@ func (pv *ProofValidator) GetProofStatistics(proof *algorithm.HeliosProof) map[s
 		}
 	}
 
+	difficulty := "0"
+	if proof.Difficulty != nil {
+		difficulty = proof.Difficulty.String()
+	}
+
 	return map[string]interface{}{
 		"nonce":          proof.Nonce,
 		"timestamp":      proof.Timestamp.String(),
@@ -172,7 +188,7 @@ func (pv *ProofValidator) GetProofStatistics(proof *algorithm.HeliosProof) map[s
 		"stage2_size":    len(proof.Stage2Result),
 		"stage3_size":    len(proof.Stage3Result),
 		"final_hash":     proof.FinalHash,
-		"difficulty":     proof.Difficulty.String(),
+		"difficulty":     difficulty,
 		"energy_used_ns": proof.EnergyUsed,
 		"energy_used_ms": float64(proof.EnergyUsed) / 1_000_000,
 	}

@@ -11,7 +11,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
 	"math"
 	"math/big"
 	"os"
@@ -39,6 +38,10 @@ const (
 
 	// TestTargetBlockTimeHigh is the target block time for high difficulty tests (6 seconds)
 	TestTargetBlockTimeHigh = 6 * time.Second
+
+	// blockHeaderOverhead is a fixed allowance for the encoded block header when
+	// estimating block size.
+	blockHeaderOverhead = 512
 )
 
 // BlockHeader represents the header of a block in the blockchain.
@@ -58,6 +61,109 @@ type Block struct {
 	bloomFilter  *BloomFilter
 	Index        big.Int `json:"index"` // Maintain original Index for backwards compatibility
 	Hash         string  `json:"hash"`  // Maintain original Hash for backwards compatibility
+
+	// HeliosProof is the proof-of-work this block was mined with. It is persisted
+	// so the block can be re-verified later; previously updateWithHeliosProof
+	// copied out only the nonce and hash and discarded the proof, which left every
+	// mined block permanently unverifiable.
+	HeliosProof *algorithm.HeliosProof `json:"helios_proof,omitempty"`
+}
+
+// blockWire is the on-disk shape of a Block. Transactions are held as raw JSON so
+// each one can be dispatched to its concrete type by protocol.
+type blockWire struct {
+	Header       BlockHeader            `json:"header"`
+	Transactions []json.RawMessage      `json:"transactions"`
+	Index        json.RawMessage        `json:"index"`
+	Hash         string                 `json:"hash"`
+	HeliosProof  *algorithm.HeliosProof `json:"helios_proof,omitempty"`
+}
+
+// parseBlockIndex accepts the index as either a JSON number (how big.Int
+// marshals, and how every block already on disk is written) or a decimal string
+// (what this codec now emits, so very large indices do not lose precision passing
+// through a float64-based JSON decoder).
+func parseBlockIndex(raw json.RawMessage) (*big.Int, error) {
+	trimmed := strings.TrimSpace(string(raw))
+	if trimmed == "" || trimmed == "null" {
+		return big.NewInt(0), nil
+	}
+
+	if trimmed[0] == '"' {
+		var asString string
+		if err := json.Unmarshal(raw, &asString); err != nil {
+			return nil, err
+		}
+		trimmed = asString
+	}
+
+	parsed, ok := new(big.Int).SetString(trimmed, 10)
+	if !ok {
+		return nil, fmt.Errorf("invalid block index: %q", trimmed)
+	}
+	return parsed, nil
+}
+
+// MarshalJSON encodes the block, including the Helios proof needed to re-verify
+// it. The proof was previously discarded at mining time, which made every block
+// permanently unverifiable once written.
+func (b *Block) MarshalJSON() ([]byte, error) {
+	wire := blockWire{
+		Header:      b.Header,
+		Index:       json.RawMessage(`"` + b.Index.String() + `"`),
+		Hash:        b.Hash,
+		HeliosProof: b.HeliosProof,
+	}
+
+	wire.Transactions = make([]json.RawMessage, 0, len(b.Transactions))
+	for _, tx := range b.Transactions {
+		if tx == nil {
+			continue
+		}
+		encoded, err := json.Marshal(tx)
+		if err != nil {
+			return nil, fmt.Errorf("failed to encode transaction %s: %w", tx.GetID(), err)
+		}
+		wire.Transactions = append(wire.Transactions, encoded)
+	}
+
+	return json.Marshal(wire)
+}
+
+// UnmarshalJSON decodes a block, dispatching each transaction to its concrete
+// type via the protocol discriminator.
+//
+// Without this, decoding failed outright ("cannot unmarshal object into Go struct
+// field Block.transactions of type sdk.Transaction") because Transaction is an
+// interface. LoadExistingBlocks logged that error and skipped the block, so the
+// chain silently reset to genesis on every restart.
+func (b *Block) UnmarshalJSON(data []byte) error {
+	var wire blockWire
+	if err := json.Unmarshal(data, &wire); err != nil {
+		return err
+	}
+
+	b.Header = wire.Header
+	b.Hash = wire.Hash
+	b.HeliosProof = wire.HeliosProof
+
+	parsedIndex, err := parseBlockIndex(wire.Index)
+	if err != nil {
+		return err
+	}
+	b.Index = *parsedIndex
+
+	b.Transactions = make([]Transaction, 0, len(wire.Transactions))
+	for i, raw := range wire.Transactions {
+		tx, err := DecodeTransaction(raw)
+		if err != nil {
+			return fmt.Errorf("failed to decode transaction %d: %w", i, err)
+		}
+		b.Transactions = append(b.Transactions, tx)
+	}
+
+	b.bloomFilter = b.CreateBloomFilter()
+	return nil
 }
 
 // NewBlock creates a new block with the given transactions and previous hash.
@@ -136,7 +242,7 @@ func (b *Block) save() error {
 	if err != nil {
 		return err
 	}
-	log.Printf("Block [%s] saved to disk.\n", b.Index.String())
+	LogVerbosef("Block [%s] saved to disk.", b.Index.String())
 	return nil
 }
 
@@ -155,6 +261,9 @@ func (b *Block) load(blockNumber big.Int) error {
 
 // Validate checks if the block is valid.
 func (b *Block) Validate(previousBlock *Block) error {
+	if previousBlock == nil {
+		return errors.New("previous block is nil")
+	}
 	if b.Header.PreviousHash != previousBlock.Hash {
 		return errors.New("invalid previous hash")
 	}
@@ -162,8 +271,13 @@ func (b *Block) Validate(previousBlock *Block) error {
 		return errors.New("block timestamp is in the future")
 	}
 	for _, tx := range b.Transactions {
-		if tx.GetStatus() != StatusConfirmed {
-			return fmt.Errorf("invalid transaction status: %v", tx.GetStatus())
+		if tx == nil {
+			return errors.New("block contains a nil transaction")
+		}
+		// A transaction is confirmed by virtue of being in a block; requiring the
+		// flag to be pre-set meant nothing ever passed, because nothing set it.
+		if tx.GetStatus() == StatusFailed {
+			return fmt.Errorf("block contains a failed transaction: %s", tx.GetID())
 		}
 		if err := tx.Validate(); err != nil {
 			return fmt.Errorf("invalid transaction: %v", err)
@@ -195,14 +309,31 @@ func (b *Block) CalculateMerkleRoot() []byte {
 	return tree.Root.Data
 }
 
-// AdjustDifficulty adjusts the mining difficulty based on the time taken to mine recent blocks.
+// AdjustDifficulty adjusts the mining difficulty based on the time taken to mine
+// recent blocks.
+//
+// The decrease is floored at 1. Difficulty is a uint32, so `- 1` at zero wrapped
+// to 4294967295 -- a difficulty no machine could ever satisfy.
 func (b *Block) AdjustDifficulty(previousBlock *Block, targetBlockTime time.Duration) uint32 {
-	if b.Header.Timestamp.Sub(previousBlock.Header.Timestamp) < targetBlockTime/2 {
-		return previousBlock.Header.Difficulty + 1
-	} else if b.Header.Timestamp.Sub(previousBlock.Header.Timestamp) > targetBlockTime*2 {
-		return previousBlock.Header.Difficulty - 1
+	if previousBlock == nil {
+		return b.Header.Difficulty
 	}
-	return previousBlock.Header.Difficulty
+
+	elapsed := b.Header.Timestamp.Sub(previousBlock.Header.Timestamp)
+	switch {
+	case elapsed < targetBlockTime/2:
+		if previousBlock.Header.Difficulty >= math.MaxUint32 {
+			return previousBlock.Header.Difficulty
+		}
+		return previousBlock.Header.Difficulty + 1
+	case elapsed > targetBlockTime*2:
+		if previousBlock.Header.Difficulty <= 1 {
+			return 1
+		}
+		return previousBlock.Header.Difficulty - 1
+	default:
+		return previousBlock.Header.Difficulty
+	}
 }
 
 // Serialize serializes the block into a byte slice.
@@ -249,21 +380,40 @@ func (b *Block) createBlockHeaderForMining() []byte {
 	return []byte(headerData)
 }
 
-// updateWithHeliosProof updates the block with Helios proof data
+// updateWithHeliosProof updates the block with Helios proof data.
+//
+// The proof itself is retained so the block can be validated later. The block
+// hash stays the header hash: overwriting it with proof.FinalHash meant
+// Block.Validate's `Hash != CalculateHash()` check failed for every mined block.
+// The proof's own hash is checked separately by the Helios validator.
 func (b *Block) updateWithHeliosProof(proof *algorithm.HeliosProof) {
-	// Update block with Helios proof information
 	b.Header.Nonce = uint32(proof.Nonce)
 	b.Header.Timestamp = proof.Timestamp
-	b.Hash = proof.FinalHash
-
-	// Store Helios proof data in block (you might want to add a field for this)
-	// For now, we'll just update the hash
+	b.HeliosProof = proof
+	b.Hash = b.CalculateHash()
 }
 
-// CanAddTransaction checks if adding a new transaction would exceed the maximum block size.
+// CanAddTransaction checks if adding a new transaction would exceed the maximum
+// block size.
+//
+// It sums the encoded transaction sizes instead of gob-encoding the whole block
+// on every call, which was O(block) work per candidate transaction.
 func (b *Block) CanAddTransaction(tx Transaction) bool {
-	blockSize, _ := b.Serialize()
-	return len(blockSize)+tx.Size() <= MaxBlockSize
+	if tx == nil {
+		return false
+	}
+	return b.currentSize()+tx.Size() <= MaxBlockSize
+}
+
+// currentSize returns the approximate encoded size of the block's transactions.
+func (b *Block) currentSize() int {
+	size := blockHeaderOverhead
+	for _, tx := range b.Transactions {
+		if tx != nil {
+			size += tx.Size()
+		}
+	}
+	return size
 }
 
 // CreateBloomFilter creates a Bloom filter for quick transaction lookups within the block.
@@ -286,21 +436,28 @@ func (b *Block) CreateBloomFilter() *BloomFilter {
 }
 
 // Mine performs the proof-of-work algorithm to mine the block.
-func (b *Block) Mine(difficulty uint) {
+//
+// It returns an error when the nonce space is exhausted. The previous version
+// looped forever incrementing a uint32 nonce with no ceiling: once the nonce
+// wrapped it re-tried the same hashes indefinitely, so a difficulty the machine
+// could not reach hung the caller permanently.
+func (b *Block) Mine(difficulty uint) error {
 	// For difficulty n, we need the hash to start with n zeros in hex
 	// This means the first n*4 bits must be zero
 	prefix := strings.Repeat("0", int(difficulty))
 
-	for {
+	for nonce := uint64(0); nonce <= math.MaxUint32; nonce++ {
+		b.Header.Nonce = uint32(nonce)
 		hash := b.CalculateHash()
 
 		// Check if hash starts with the required number of zeros
 		if strings.HasPrefix(hash, prefix) {
 			b.Hash = hash // Update Hash for backwards compatibility
-			return
+			return nil
 		}
-		b.Header.Nonce++
 	}
+
+	return fmt.Errorf("exhausted the nonce space without finding a proof at difficulty %d", difficulty)
 }
 
 // CalculateBlockReward calculates the block reward based on the current block height.
@@ -310,18 +467,44 @@ func (b *Block) CalculateBlockReward(currentBlockHeight int64) float64 {
 }
 
 // CalculateHash calculates and returns the hash of the block.
+//
+// The header is serialised as fixed-width big-endian fields rather than
+// fmt.Sprintf. Two problems with the old formulation:
+//
+//  1. It interpolated Timestamp.String(), which renders the monotonic clock
+//     reading ("m=+0.057091985") for a time produced by time.Now(). JSON drops
+//     that, so a block's hash changed the instant it round-tripped through disk
+//     or the network and every `Hash != CalculateHash()` check failed. It also
+//     embedded the machine's local timezone abbreviation.
+//  2. Concatenating variable-length fields without delimiters is ambiguous:
+//     distinct headers could produce identical preimages.
 func (b *Block) CalculateHash() string {
-	record := fmt.Sprintf("%d%s%x%s%d%d",
-		b.Header.Version,
-		b.Header.PreviousHash,
-		b.Header.MerkleRoot,
-		b.Header.Timestamp.String(),
-		b.Header.Difficulty,
-		b.Header.Nonce)
-	h := sha256.New()
-	h.Write([]byte(record))
-	hashed := h.Sum(nil)
-	return hex.EncodeToString(hashed)
+	var buf bytes.Buffer
+
+	writeUint32 := func(v uint32) {
+		var tmp [4]byte
+		binary.BigEndian.PutUint32(tmp[:], v)
+		buf.Write(tmp[:])
+	}
+	writeInt64 := func(v int64) {
+		var tmp [8]byte
+		binary.BigEndian.PutUint64(tmp[:], uint64(v))
+		buf.Write(tmp[:])
+	}
+	writeBytes := func(v []byte) {
+		writeUint32(uint32(len(v)))
+		buf.Write(v)
+	}
+
+	writeUint32(uint32(b.Header.Version))
+	writeBytes([]byte(b.Header.PreviousHash))
+	writeBytes(b.Header.MerkleRoot)
+	writeInt64(b.Header.Timestamp.UTC().UnixNano())
+	writeUint32(b.Header.Difficulty)
+	writeUint32(b.Header.Nonce)
+
+	hashed := sha256.Sum256(buf.Bytes())
+	return hex.EncodeToString(hashed[:])
 }
 
 // MerkleNode represents a node in the Merkle tree.
@@ -337,29 +520,35 @@ type MerkleTree struct {
 }
 
 // NewMerkleTree creates a new Merkle tree from a list of data.
+//
+// Padding is applied at every level, not just the leaves. The old version padded
+// only the leaf level, so an even leaf count that halved to an odd count read
+// past the end of the slice: six transactions produced three internal nodes and
+// then panicked with "index out of range [3] with length 3".
+//
+// Leaf and internal hashes are domain-separated with a 0x00/0x01 prefix. Without
+// that, duplicating the final node to pad an odd level makes two different
+// transaction lists produce the same root (the CVE-2012-2459 malleability).
 func NewMerkleTree(data [][]byte) *MerkleTree {
-	var nodes []*MerkleNode
-
 	if len(data) == 0 {
 		// Return nil root for empty tree
 		return &MerkleTree{Root: nil}
 	}
 
-	if len(data)%2 != 0 {
-		data = append(data, data[len(data)-1])
-	}
-
+	nodes := make([]*MerkleNode, 0, len(data))
 	for _, datum := range data {
-		node := NewMerkleNode(nil, nil, datum)
-		nodes = append(nodes, node)
+		nodes = append(nodes, NewMerkleNode(nil, nil, datum))
 	}
 
 	for len(nodes) > 1 {
-		var newLevel []*MerkleNode
+		// Pad this level, not just the first one.
+		if len(nodes)%2 != 0 {
+			nodes = append(nodes, nodes[len(nodes)-1])
+		}
 
+		newLevel := make([]*MerkleNode, 0, len(nodes)/2)
 		for i := 0; i < len(nodes); i += 2 {
-			node := NewMerkleNode(nodes[i], nodes[i+1], nil)
-			newLevel = append(newLevel, node)
+			newLevel = append(newLevel, NewMerkleNode(nodes[i], nodes[i+1], nil))
 		}
 
 		nodes = newLevel
@@ -368,16 +557,28 @@ func NewMerkleTree(data [][]byte) *MerkleTree {
 	return &MerkleTree{Root: nodes[0]}
 }
 
+// Merkle domain separation prefixes.
+const (
+	merkleLeafPrefix     byte = 0x00
+	merkleInternalPrefix byte = 0x01
+)
+
 // NewMerkleNode creates a new Merkle node.
 func NewMerkleNode(left, right *MerkleNode, data []byte) *MerkleNode {
 	node := MerkleNode{}
 
 	if left == nil && right == nil {
-		hash := sha256.Sum256(data)
+		hash := sha256.Sum256(append([]byte{merkleLeafPrefix}, data...))
 		node.Data = hash[:]
 	} else {
-		prevHashes := append(left.Data, right.Data...)
-		hash := sha256.Sum256(prevHashes)
+		// Build the preimage in a fresh buffer. `append(left.Data, right.Data...)`
+		// writes into left.Data's backing array whenever it has spare capacity,
+		// silently corrupting the left node.
+		combined := make([]byte, 0, 1+len(left.Data)+len(right.Data))
+		combined = append(combined, merkleInternalPrefix)
+		combined = append(combined, left.Data...)
+		combined = append(combined, right.Data...)
+		hash := sha256.Sum256(combined)
 		node.Data = hash[:]
 	}
 
@@ -393,10 +594,17 @@ type BloomFilter struct {
 	k      uint
 }
 
+// maxBloomHashes is the number of 8-byte windows available in a SHA-256 digest.
+// k above this would slice past the end of the hash.
+const maxBloomHashes = sha256.Size / 8
+
 // Add adds data to the Bloom filter.
 func (bf *BloomFilter) Add(data []byte) {
+	if len(bf.bitset) == 0 {
+		return
+	}
 	h := sha256.Sum256(data)
-	for i := uint(0); i < bf.k; i++ {
+	for i := uint(0); i < bf.k && i < maxBloomHashes; i++ {
 		idx := binary.BigEndian.Uint64(h[i*8:]) % uint64(len(bf.bitset)*8)
 		bf.bitset[idx/8] |= 1 << (idx % 8)
 	}
@@ -404,8 +612,11 @@ func (bf *BloomFilter) Add(data []byte) {
 
 // Contains checks if the Bloom filter possibly contains the given data.
 func (bf *BloomFilter) Contains(data []byte) bool {
+	if len(bf.bitset) == 0 {
+		return false
+	}
 	h := sha256.Sum256(data)
-	for i := uint(0); i < bf.k; i++ {
+	for i := uint(0); i < bf.k && i < maxBloomHashes; i++ {
 		idx := binary.BigEndian.Uint64(h[i*8:]) % uint64(len(bf.bitset)*8)
 		if bf.bitset[idx/8]&(1<<(idx%8)) == 0 {
 			return false

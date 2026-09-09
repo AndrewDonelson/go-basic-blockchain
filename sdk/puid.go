@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"encoding/base64"
 	"encoding/binary"
+	"encoding/json"
 	"fmt"
 	"strings"
 )
@@ -71,19 +72,16 @@ func NewPUID(organizationID, appID, userID, assetID *BigInt) *PUID {
 // The string should be in the format: "organizationID:appID:userID:assetID" and can optionally be base64-encoded.
 func NewPUIDFromString(puidStr string) (*PUID, error) {
 
-	// Check if the input string is base64-encoded
-	if isBase64Encoded(puidStr) {
-		// Decode the base64 string
-		decoded, err := base64.StdEncoding.DecodeString(puidStr)
-		if err != nil {
-			return nil, err
-		}
-
-		// Create a new PUID from the decoded bytes
-		puidStr = string(decoded[:])
-	}
-
+	// A colon-separated PUID is never base64, so try the canonical form first.
+	// The old code called isBase64Encoded() first, which returns true for plenty
+	// of ordinary strings ("1234" decodes cleanly), and so corrupted valid input.
 	parts := strings.Split(puidStr, ":")
+	if len(parts) != 4 {
+		// Not the canonical form -- it may be a base64-encoded canonical form.
+		if decoded, err := base64.StdEncoding.DecodeString(puidStr); err == nil {
+			parts = strings.Split(string(decoded), ":")
+		}
+	}
 	if len(parts) != 4 {
 		return nil, fmt.Errorf("invalid PUID string format: %s", puidStr)
 	}
@@ -134,8 +132,59 @@ func (p *PUID) Bytes() []byte {
 }
 
 // String returns the string representation of the PUID.
+//
+// The field order is organizationID:appID:userID:assetID, matching both NewPUID's
+// parameter order and NewPUIDFromString's parser. It previously emitted
+// userID:organizationID:appID:assetID, so String -> NewPUIDFromString silently
+// scrambled three of the four fields.
 func (p *PUID) String() string {
-	return p.UserID.String() + ":" + p.OrganizationID.String() + ":" + p.AppID.String() + ":" + p.AssetID.String()
+	return p.OrganizationID.String() + ":" + p.AppID.String() + ":" + p.UserID.String() + ":" + p.AssetID.String()
+}
+
+// MarshalJSON encodes the PUID as its canonical string form.
+//
+// Without this the PUID serialised as a nested object of BigInt objects, which
+// NewPUIDFromString could not read back -- identities did not survive a round
+// trip through disk or the network.
+func (p *PUID) MarshalJSON() ([]byte, error) {
+	if p == nil {
+		return []byte("null"), nil
+	}
+	return json.Marshal(p.String())
+}
+
+// UnmarshalJSON decodes a PUID from its canonical string form, accepting the
+// legacy nested-object encoding so existing data still loads.
+func (p *PUID) UnmarshalJSON(data []byte) error {
+	if string(data) == "null" {
+		return nil
+	}
+
+	var asString string
+	if err := json.Unmarshal(data, &asString); err == nil {
+		parsed, err := NewPUIDFromString(asString)
+		if err != nil {
+			return err
+		}
+		*p = *parsed
+		return nil
+	}
+
+	// Legacy encoding: {"UserID":{"Val":1},...}
+	var legacy struct {
+		UserID         BigInt
+		OrganizationID BigInt
+		AppID          BigInt
+		AssetID        BigInt
+	}
+	if err := json.Unmarshal(data, &legacy); err != nil {
+		return err
+	}
+	p.UserID = legacy.UserID
+	p.OrganizationID = legacy.OrganizationID
+	p.AppID = legacy.AppID
+	p.AssetID = legacy.AssetID
+	return nil
 }
 
 // Base64 returns the base64 representation of the PUID.

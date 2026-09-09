@@ -123,6 +123,19 @@ func buildMerkleTree(leaves []string) string {
     }
     
     // If odd number of leaves, duplicate the last one
+    //
+    // ⚠️ SECURITY NOTE: this is CVE-2012-2459, and it is a real weakness.
+    // Duplicating the last leaf means the 3-leaf list [a b c] and the genuine
+    // 4-leaf list [a b c c] produce the SAME root -- so two different transaction
+    // sets are indistinguishable by their Merkle root.
+    //
+    // The fix is domain separation: hash leaves as SHA256(0x00 ‖ data) and
+    // internal nodes as SHA256(0x01 ‖ left ‖ right), so a duplicated leaf can
+    // never be confused with an internal node. See NewMerkleNode in sdk/block.go,
+    // and case 10 in learn/SECURITY_CASE_STUDIES.md.
+    //
+    // Try it: make this function domain-separated, then write a test proving
+    // [a b c] and [a b c c] now differ.
     if len(leaves)%2 != 0 {
         leaves = append(leaves, leaves[len(leaves)-1])
     }

@@ -1,466 +1,192 @@
 # Wallet Guide
 
-Complete guide to wallet creation, management, and security in the Go Basic Blockchain.
+Wallets hold an ECDSA P-256 keypair plus a small key/value store, encrypted at
+rest with a passphrase-derived key.
 
-## 🎯 Overview
+> **This file was rewritten.** The previous version documented functions that do
+> not exist (`sdk.CreateWallet`, `wallet.SignTransaction`,
+> `sdk.OpenWallet(walletData, passphrase)`) and a web interface that is not part
+> of this repository. Everything below is checked against `sdk/wallet.go`.
 
-Wallets in the Go Basic Blockchain provide secure storage for private keys and enable transaction signing. Each wallet is encrypted with a strong passphrase and supports multiple transaction types.
+## 🔐 How a wallet is protected
 
-## 🔐 Security Features
+| Layer | Mechanism |
+|---|---|
+| Key derivation | scrypt (N=2^20, r=8, p=1 in production), 32-byte random salt per encryption |
+| Encryption | AES-256-GCM, 12-byte random nonce |
+| At rest | `{DATA_PATH}/wallets/{address}.json`, mode `0600` in a `0700` directory |
+| Writes | Temp file → `fsync` → atomic `rename`, so an interrupted write cannot truncate a key |
 
-### Encryption Standards
+### KDF parameters are recorded per wallet
 
-**AES-GCM Encryption**:
-- 256-bit key encryption
-- Galois/Counter Mode for authenticated encryption
-- Protection against tampering and forgery
+`EncryptionParams` stores `ScryptN`/`ScryptR`/`ScryptP` alongside the ciphertext,
+so a wallet always decrypts with the parameters it was encrypted with. Earlier
+code chose the cost at runtime from `testing.Testing()` and never wrote it down —
+a wallet created under test could not be opened in production, because the KDF
+silently derived a different key and decryption failed with no explanation.
 
-**Scrypt Key Derivation**:
-- Memory-hard key derivation function
-- Configurable parameters for security vs performance
-- Salt-based protection against rainbow table attacks
+## 💼 Creating a wallet
 
-**Password Requirements**:
-- Minimum 12 characters
-- Mix of uppercase, lowercase, numbers, symbols
-- No common patterns or dictionary words
+### Via the API
 
-### Key Management
-
-**Private Key Generation**:
-- Cryptographically secure random generation
-- Elliptic curve cryptography (secp256k1)
-- Deterministic key derivation
-
-**Public Key Derivation**:
-- Derived from private key using elliptic curve
-- Compressed and uncompressed formats
-- Address generation from public key
-
-## 💼 Wallet Creation
-
-### Via Web Interface
-
-1. **Navigate to Wallet Section**:
-   - Open `http://localhost:8200`
-   - Click "Create Wallet" button
-
-2. **Enter Strong Passphrase**:
-   - Use at least 12 characters
-   - Include uppercase, lowercase, numbers, symbols
-   - Avoid common patterns
-
-3. **Save Wallet File**:
-   - Download encrypted wallet file
-   - Store in secure location
-   - Backup multiple copies
-
-### Via API
-
-**Create Wallet**:
 ```bash
-curl -X POST http://localhost:8200/api/wallet/create \
+curl -X POST http://localhost:8200/blockchain/wallets/new \
+  -H "Authorization: Bearer $BLOCKCHAIN_API_KEY" \
   -H "Content-Type: application/json" \
-  -d '{"passphrase": "your-strong-passphrase"}'
+  -d '{"name":"my-wallet","passphrase":"Passw0rd!Passw0rd!","tags":["personal"]}'
 ```
 
-**Response**:
 ```json
 {
-  "address": "wallet123abc...",
-  "public_key": "04abc123...",
-  "encrypted": true,
-  "created_at": 1640995200
+  "wallet_id": "1:1:1738000000:1738000000123456789",
+  "address": "…64 hex chars…",
+  "name": "my-wallet",
+  "tags": ["personal"]
 }
 ```
 
-### Via Code
+**You supply the passphrase.** The server used to generate one and return it in
+the response body — a secret travelling back over a channel the server does not
+control, landing in caches, proxy logs and browser history. It no longer does.
+
+### In code
 
 ```go
-import "github.com/yourusername/go-basic-blockchain/sdk"
+opts := sdk.NewWalletOptions(
+    sdk.NewBigInt(1),                      // organizationID
+    sdk.NewBigInt(1),                      // appID
+    sdk.NewBigInt(1),                      // userID
+    sdk.NewBigInt(time.Now().UnixNano()),  // assetID -- make it unique
+    "my-wallet",
+    "Passw0rd!Passw0rd!",
+    []string{"personal"},
+)
 
-// Create new wallet
-wallet, err := sdk.CreateWallet("your-strong-passphrase")
+wallet, err := sdk.NewWallet(opts)
 if err != nil {
-    log.Fatal(err)
+    return err
 }
-
-// Get wallet address
-address := wallet.GetAddress()
-fmt.Printf("Wallet address: %s\n", address)
 ```
 
-## 🔑 Wallet Operations
+`NewWallet` creates the keypair, derives the address, and **saves the wallet
+locked**. To use it you must unlock it.
 
-### Opening a Wallet
+Two things to know:
 
-**Via Web Interface**:
-1. Click "Open Wallet"
-2. Upload wallet file
-3. Enter passphrase
-4. Access wallet functions
+- **`assetID` is honoured.** It used to be discarded and replaced with `0`, so
+  every wallet in the system shared the identity `<org>:<app>:<user>:0`.
+- **A new wallet has a zero balance.** It used to be created holding
+  `fundWalletAmount` tokens from nowhere, and `NewBankTransaction` then checked
+  affordability against that fabricated number.
 
-**Via API**:
-```bash
-curl -X POST http://localhost:8200/api/wallet/open \
-  -H "Content-Type: application/json" \
-  -d '{
-    "wallet_data": "encrypted-wallet-data...",
-    "passphrase": "your-passphrase"
-  }'
-```
+## 🔑 Opening and closing
 
-**Via Code**:
 ```go
-// Open existing wallet
-wallet, err := sdk.OpenWallet(walletData, passphrase)
+// Load from disk and unlock in one step.
+wallet, err := sdk.OpenWallet(address, passphrase)
+
+// Or, on a wallet you already have in memory:
+err := wallet.Unlock(passphrase)   // decrypt in place
+err  = wallet.Lock(passphrase)     // encrypt in place, no disk write
+err  = wallet.Close(passphrase)    // lock and persist
+err  = wallet.Open(passphrase)     // load from disk and unlock
+```
+
+> ### ⚠️ If you are upgrading, read this
+>
+> **`Wallet.Open()` used to call `localStorage.Set` — it *wrote* the in-memory
+> wallet over the stored one instead of reading it.** `LocalWalletList()` built an
+> empty `Wallet` shell per file and called `Open("")` on each, so **listing your
+> wallets destroyed every private key on disk**, replacing each file with a
+> 169-byte stub. There was no backup path.
+>
+> `Open` now loads. To enumerate wallets without loading them, use
+> `sdk.ListWalletAddresses()`, which reads filenames only.
+
+Behaviour of `Open`:
+
+- An empty passphrase loads metadata and leaves the wallet locked.
+- A non-empty passphrase **must** unlock successfully or `Open` returns an error.
+  It used to skip unlocking for any passphrase under 12 characters and return
+  `nil`, so callers could not tell success from a silent no-op.
+
+## 💰 Balance and data
+
+```go
+balance := wallet.GetBalance()        // from the wallet's own key/value store
+name    := wallet.GetWalletName()
+tags    := wallet.GetTags()
+
+err := wallet.SetData("balance", 100.0)
+v, err := wallet.GetData("some-key")  // errors if the key is absent
+```
+
+**There are two notions of balance, and they are not the same thing:**
+
+1. `wallet.GetBalance()` — the value in the wallet's own encrypted store.
+2. `blockchain.GetBalance(address)` — derived by scanning the chain: coinbase
+   output credited to its recipient, bank transfers moving value between parties,
+   and fees paid out to the miner and developer per `MINER_REWARD_PCT` /
+   `DEV_REWARD_PCT`.
+
+The chain is authoritative. Unifying these behind a single state model is
+outstanding work — see `_design/` and the roadmap in `docs/intro.md`.
+
+## 💸 Signing and sending
+
+```go
+tx, err := sdk.NewBankTransaction(from, to, 10.0)
 if err != nil {
-    log.Fatal(err)
-}
-```
-
-### Getting Balance
-
-**Via Web Interface**:
-- Balance displayed in wallet dashboard
-- Real-time updates
-- Transaction history
-
-**Via API**:
-```bash
-curl http://localhost:8200/api/wallet/balance/wallet123abc...
-```
-
-**Response**:
-```json
-{
-  "address": "wallet123abc...",
-  "balance": 150.75,
-  "confirmed_balance": 150.75,
-  "pending_balance": 0,
-  "last_updated": 1640995200
-}
-```
-
-**Via Code**:
-```go
-balance := wallet.GetBalance()
-fmt.Printf("Balance: %.2f\n", balance)
-```
-
-### Transaction History
-
-**Via API**:
-```bash
-curl "http://localhost:8200/api/wallet/transactions/wallet123abc...?limit=20"
-```
-
-**Response**:
-```json
-{
-  "address": "wallet123abc...",
-  "transactions": [
-    {
-      "id": "tx123...",
-      "type": "BANK",
-      "from": "wallet1...",
-      "to": "wallet2...",
-      "amount": 10.5,
-      "timestamp": 1640995190,
-      "block_height": 1234,
-      "confirmed": true
-    }
-  ],
-  "total": 45
-}
-```
-
-## 💸 Creating Transactions
-
-### Bank Transaction (Transfer Coins)
-
-**Via Web Interface**:
-1. Click "Send Coins"
-2. Enter recipient address
-3. Enter amount
-4. Enter passphrase
-5. Click "Send"
-
-**Via API**:
-```bash
-curl -X POST http://localhost:8200/api/transaction/create \
-  -H "Content-Type: application/json" \
-  -d '{
-    "type": "BANK",
-    "from": "wallet123abc...",
-    "to": "wallet456def...",
-    "amount": 10.5,
-    "passphrase": "your-passphrase"
-  }'
-```
-
-**Via Code**:
-```go
-// Create bank transaction
-tx := &sdk.BankTransaction{
-    From:   wallet.GetAddress(),
-    To:     recipientAddress,
-    Amount: 10.5,
+    return err
 }
 
-// Sign transaction
-signedTx, err := wallet.SignTransaction(tx, passphrase)
+tx.Signature, err = tx.Sign([]byte(from.PrivatePEM()))
 if err != nil {
-    log.Fatal(err)
+    return err
 }
 
-// Broadcast transaction
-err = blockchain.AddTransaction(signedTx)
-if err != nil {
-    log.Fatal(err)
-}
+_, err = from.SendTransaction(tx, blockchain)
 ```
 
-### Message Transaction (Encrypted Message)
+Note `SendTransaction(tx, bc)` — the old signature took an unused leading `to
+string` parameter.
 
-**Via API**:
-```bash
-curl -X POST http://localhost:8200/api/transaction/create \
-  -H "Content-Type: application/json" \
-  -d '{
-    "type": "MESSAGE",
-    "from": "wallet123abc...",
-    "to": "wallet456def...",
-    "message": "Hello, blockchain!",
-    "passphrase": "your-passphrase"
-  }'
-```
+> ### ⚠️ Signatures cover the whole transaction
+>
+> Signing operates on `SigningBytes()`, which each protocol implements over **all
+> of its own fields**. Previously `Sign` marshalled only the embedded base `Tx`,
+> so `Bank.Amount`, `Message.Message`, `Persist.Data` and `Coinbase.TokenCount`
+> sat outside the signed bytes: a signature for 1 token verified just as happily
+> for 1,000,000. If you are implementing a new protocol, **you must override
+> `SigningBytes`, `Sign`, `Verify`, `Hash` and `Send`** — Go has no virtual
+> dispatch on embedded structs, so inheriting them silently leaves your fields
+> unsigned. See `sdk/banktx.go` for the pattern.
 
-**Via Code**:
-```go
-// Create message transaction
-tx := &sdk.MessageTransaction{
-    From:    wallet.GetAddress(),
-    To:      recipientAddress,
-    Message: "Hello, blockchain!",
-}
+## 🔒 Practical guidance
 
-// Sign and broadcast
-signedTx, err := wallet.SignTransaction(tx, passphrase)
-if err != nil {
-    log.Fatal(err)
-}
+**Passphrases** must be 12–24 characters with at least two each of uppercase,
+lowercase, digits and specials (`testPasswordStrength` in `sdk/common.go`).
 
-err = blockchain.AddTransaction(signedTx)
-if err != nil {
-    log.Fatal(err)
-}
-```
+**Back up `{DATA_PATH}/wallets/`.** A lost wallet file is a lost key: there is no
+mnemonic recovery wired up. `sdk/mnemonic.go` wraps BIP-39 but nothing uses it,
+and there is no BIP-32 derivation or key export. This is a known gap.
 
-## 🔒 Security Best Practices
+**The node's own wallet** is created at startup from `NODE_WALLET_PASSPHRASE`. If
+that is unset, one is generated and logged **once**, prominently — save it. It
+used to be generated and immediately discarded, which meant the node wallet was
+encrypted with a key nobody had and every restart orphaned another file on disk.
 
-### Passphrase Security
+**Genesis wallets** no longer log their passphrases in plaintext.
 
-**Strong Passphrase Requirements**:
-- Minimum 12 characters
-- Mix of character types
-- No common patterns
-- Unique for each wallet
+## 🧪 Related tests
 
-**Passphrase Examples**:
-```
-✅ Good: "MySecureWallet2024!@#"
-✅ Good: "K9#mN2$pL8@vX5&qR7"
-❌ Bad: "password123"
-❌ Bad: "123456789"
-❌ Bad: "qwertyuiop"
-```
-
-### Wallet File Security
-
-**Storage Recommendations**:
-- Encrypted external drive
-- Multiple secure backups
-- Offline storage
-- Regular backup updates
-
-**Backup Strategy**:
-- Primary backup on encrypted drive
-- Secondary backup in secure cloud
-- Tertiary backup in safe deposit box
-- Regular backup verification
-
-### Network Security
-
-**API Security**:
-- Use HTTPS in production
-- Rotate API keys regularly
-- Monitor for suspicious activity
-- Implement rate limiting
-
-**Transaction Security**:
-- Verify recipient addresses
-- Double-check amounts
-- Use secure connections
-- Monitor transaction confirmations
-
-## 🛠️ Advanced Features
-
-### Multi-Signature Support
-
-**Creating Multi-Sig Wallet**:
-```go
-// Create multi-signature wallet
-multiSig := sdk.CreateMultiSigWallet([]string{
-    "wallet1...",
-    "wallet2...",
-    "wallet3...",
-}, 2) // Require 2 of 3 signatures
-```
-
-**Signing Multi-Sig Transaction**:
-```go
-// Sign with first wallet
-signed1 := wallet1.SignMultiSigTransaction(tx, passphrase1)
-
-// Sign with second wallet
-signed2 := wallet2.SignMultiSigTransaction(tx, passphrase2)
-
-// Combine signatures
-finalTx := multiSig.CombineSignatures(signed1, signed2)
-```
-
-### Hardware Wallet Integration
-
-**Supported Hardware**:
-- Ledger Nano S/X
-- Trezor Model T
-- KeepKey
-
-**Integration Code**:
-```go
-// Connect to hardware wallet
-hw := sdk.ConnectHardwareWallet("ledger")
-
-// Get address
-address := hw.GetAddress()
-
-// Sign transaction
-signedTx := hw.SignTransaction(tx)
-```
-
-### Watch-Only Wallets
-
-**Creating Watch-Only Wallet**:
-```go
-// Create watch-only wallet from public key
-watchWallet := sdk.CreateWatchOnlyWallet(publicKey)
-
-// Monitor transactions
-transactions := watchWallet.GetTransactions()
-```
-
-## 🔧 Troubleshooting
-
-### Common Issues
-
-**"Invalid Passphrase" Error**:
-- Check for typos
-- Verify caps lock status
-- Try copy-paste from secure note
-- Check for extra spaces
-
-**"Wallet Not Found" Error**:
-- Verify wallet file path
-- Check file permissions
-- Ensure wallet file is not corrupted
-- Try importing wallet again
-
-**"Insufficient Balance" Error**:
-- Check confirmed vs pending balance
-- Account for transaction fees
-- Wait for pending transactions to confirm
-- Verify transaction amounts
-
-**"Transaction Failed" Error**:
-- Check network connectivity
-- Verify recipient address
-- Ensure sufficient balance
-- Check transaction fee
-
-### Recovery Procedures
-
-**Lost Passphrase**:
-- No recovery possible
-- Create new wallet
-- Transfer any remaining funds
-- Update backup strategy
-
-**Corrupted Wallet File**:
-- Try backup copies
-- Use wallet recovery tools
-- Contact support if needed
-- Create new wallet if necessary
-
-**Stolen Wallet**:
-- Immediately create new wallet
-- Transfer funds to new wallet
-- Report incident
-- Review security practices
-
-## 📊 Wallet Statistics
-
-### Performance Metrics
-
-**Creation Time**:
-- Standard wallet: <1 second
-- Multi-sig wallet: <2 seconds
-- Hardware wallet: <5 seconds
-
-**Transaction Signing**:
-- Bank transaction: <100ms
-- Message transaction: <200ms
-- Multi-sig transaction: <500ms
-
-**Memory Usage**:
-- Standard wallet: 1MB
-- Multi-sig wallet: 2MB
-- Hardware wallet: 5MB
-
-### Security Metrics
-
-**Encryption Strength**:
-- AES-256-GCM: 256-bit key
-- Scrypt: N=1048576 (production)
-- Scrypt: N=16384 (testing)
-
-**Key Derivation**:
-- Salt: 32 bytes
-- Iterations: 1,048,576
-- Memory: 8MB
-
-## 🔮 Future Enhancements
-
-### Planned Features
-
-**Advanced Security**:
-- Hardware security modules (HSM)
-- Threshold signatures
-- Zero-knowledge proofs
-- Quantum-resistant cryptography
-
-**User Experience**:
-- Mobile wallet app
-- Web wallet interface
-- Desktop wallet application
-- Browser extension
-
-**Functionality**:
-- Smart contract integration
-- DeFi protocol support
-- NFT wallet features
-- Cross-chain transactions
-
----
-
-**For more information about wallet security and advanced features, see the [Security](security.md) and [Development](development.md) documentation.** 
+| Test | Guards |
+|---|---|
+| `TestWalletOpenDoesNotDestroyTheWalletFile` | `Open` reads, never writes |
+| `TestWalletRoundTripThroughDisk` | Save → load → unlock preserves keys and data |
+| `TestWalletDecryptRejectsShortCiphertext` | Truncated ciphertext errors instead of panicking |
+| `TestNewWalletHonoursAssetID` | `assetID` is not discarded |
+| `TestNewWalletDoesNotMintBalance` | A new wallet starts at zero |
+| `TestWalletFilesAreNotWorldReadable` | Mode `0600` |
+| `TestLocalStorageWritesAtomically` | Temp file + rename, correct mode, no leftovers |
+| `TestSignatureCoversProtocolFields` | Tampering with a protocol field invalidates the signature |

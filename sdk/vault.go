@@ -8,6 +8,7 @@ import (
 	"crypto/rand"
 	"crypto/x509"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"time"
 )
@@ -46,17 +47,36 @@ func (p *PEM) Encode(privateKey *ecdsa.PrivateKey, publicKey *ecdsa.PublicKey) (
 // private and public keys as input, and returns the corresponding ECDSA private and
 // public keys. The function first decodes the PEM-encoded private key, then decodes
 // the PEM-encoded public key, and returns both the private and public keys.
-func (p *PEM) Decode(pemEncoded string, pemEncodedPub string) (*ecdsa.PrivateKey, *ecdsa.PublicKey) {
+// Decode decodes the private and public keys from PEM format.
+//
+// Every step is checked. The previous version dereferenced the results of
+// pem.Decode without a nil check (a panic on any malformed PEM) and did an
+// unchecked type assertion on the parsed public key (a panic on any non-ECDSA
+// key), while discarding all four errors.
+func (p *PEM) Decode(pemEncoded string, pemEncodedPub string) (*ecdsa.PrivateKey, *ecdsa.PublicKey, error) {
 	block, _ := pem.Decode([]byte(pemEncoded))
-	x509Encoded := block.Bytes
-	privateKey, _ := x509.ParseECPrivateKey(x509Encoded)
+	if block == nil {
+		return nil, nil, errors.New("failed to decode PEM block containing the private key")
+	}
+	privateKey, err := x509.ParseECPrivateKey(block.Bytes)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to parse EC private key: %w", err)
+	}
 
 	blockPub, _ := pem.Decode([]byte(pemEncodedPub))
-	x509EncodedPub := blockPub.Bytes
-	genericPublicKey, _ := x509.ParsePKIXPublicKey(x509EncodedPub)
-	publicKey := genericPublicKey.(*ecdsa.PublicKey)
+	if blockPub == nil {
+		return nil, nil, errors.New("failed to decode PEM block containing the public key")
+	}
+	genericPublicKey, err := x509.ParsePKIXPublicKey(blockPub.Bytes)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to parse public key: %w", err)
+	}
+	publicKey, ok := genericPublicKey.(*ecdsa.PublicKey)
+	if !ok {
+		return nil, nil, errors.New("public key is not an ECDSA key")
+	}
 
-	return privateKey, publicKey
+	return privateKey, publicKey, nil
 }
 
 // GetPrivate returns the PEM encoded private key
@@ -135,18 +155,12 @@ func NewVaultWithData(name string, tags []string, balance float64) *Vault {
 		Data:     make(map[string]interface{}),
 	}
 
-	// Set initial data
-	if err := vault.SetData("name", name); err != nil {
-		// Log error but continue
-		_ = err // Suppress unused variable warning
-	}
-	if err := vault.SetData("tags", tags); err != nil {
-		// Log error but continue
-		_ = err // Suppress unused variable warning
-	}
-	if err := vault.SetData("balance", balance); err != nil {
-		// Log error but continue
-		_ = err // Suppress unused variable warning
+	// Set initial data. SetData only fails on a nil vault, which cannot happen
+	// here, but the errors are surfaced rather than silently discarded.
+	for key, value := range map[string]interface{}{"name": name, "tags": tags, "balance": balance} {
+		if err := vault.SetData(key, value); err != nil {
+			LogInfof("failed to seed vault field %q: %v", key, err)
+		}
 	}
 
 	return vault
@@ -173,42 +187,53 @@ func (v *Vault) SetData(key string, value interface{}) error {
 	return nil
 }
 
-// GetData returns the data (keypairs) associated with the wallet.
-// This wallet allows the user to store arbitrary data (keypairs) in the wallet.
-// The data included built-in data such as the wallet name, tags, and balance.
+// GetData returns a value from the vault's key/value store.
+//
+// A missing key is now an error. Returning (nil, nil) meant callers such as
+// GetWalletName did `value.(string)` on a nil interface and panicked.
 func (v *Vault) GetData(key string) (interface{}, error) {
-	return v.Data[key], nil
+	if v == nil || v.Data == nil {
+		return nil, fmt.Errorf("vault has no data")
+	}
+
+	value, ok := v.Data[key]
+	if !ok {
+		return nil, fmt.Errorf("key %q not found in vault", key)
+	}
+	return value, nil
 }
 
 // NewKeyPair creates a new keypair for the wallet
-func (v *Vault) NewKeyPair() (err error) {
-	// Try different elliptic curves in order of preference
-	curves := []elliptic.Curve{
-		elliptic.P256(),
-		elliptic.P384(),
-		elliptic.P521(),
+// NewKeyPair creates a new P-256 keypair for the wallet.
+//
+// The previous version looped over P-256/P-384/P-521 "in order of preference".
+// That fallback is unreachable -- ecdsa.GenerateKey on P-256 fails only if the
+// system entropy source is broken, in which case the other curves fail too -- and
+// the loop shadowed err, so the final error message always formatted the outer
+// nil as "%!v(<nil>)".
+func (v *Vault) NewKeyPair() error {
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		return fmt.Errorf("failed to generate P-256 keypair: %w", err)
 	}
-	curveNames := []string{"P-256", "P-384", "P-521"}
-	for i, curve := range curves {
-		key, err := ecdsa.GenerateKey(curve, rand.Reader)
-		if err == nil {
-			LogVerbosef("Successfully generated key with curve %s", curveNames[i])
-			v.Key = key
-			v.Pem = NewPEM(key)
-			return nil
-		}
-		LogVerbosef("Failed to generate key with curve %s: %v", curveNames[i], err)
-	}
-	// If all curves fail, do not set v.Key or v.Pem
-	return fmt.Errorf("failed to generate keypair with any supported curve: %v", err)
+
+	v.Key = key
+	v.Pem = NewPEM(key)
+	return nil
 }
 
-// PrivatePEM returns the private key
+// PrivatePEM returns the PEM-encoded private key, or "" when there is none.
 func (v *Vault) PrivatePEM() string {
+	if v == nil || v.Pem == nil {
+		return ""
+	}
 	return v.Pem.GetPrivate()
 }
 
-// PublicPEM returns the public key
+// PublicPEM returns the PEM-encoded public key, or "" when there is none.
 func (v *Vault) PublicPEM() string {
+	if v == nil || v.Pem == nil {
+		return ""
+	}
 	return v.Pem.GetPublic()
 }

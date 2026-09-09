@@ -53,35 +53,38 @@ sdk/
 ### Optimized Test Suite
 
 **Performance Metrics**:
-- **Total Execution Time**: ~9.5 seconds
-- **Test Count**: 50+ tests
-- **Coverage**: 39.8%
-- **Performance**: 30x faster than before
+- **Total Execution Time**: ~17 seconds; ~85 seconds under `-race`
+- **Coverage**: 57.0% (`sdk`), 85–97% across the Helios packages
+- **Race Detector**: the full suite runs clean
 
 **Optimization Features**:
-- Smart scrypt configuration (N=16384 for tests)
-- Isolated test data paths
-- Timeout protection (60-second limits)
+- Reduced scrypt cost for tests (N=16384), **recorded in the wallet** so a wallet
+  always decrypts with the parameters it was encrypted with
+- Isolated test data paths (`t.TempDir()`)
+- Timeout protection
 - Parallel test execution
 
 ### Test Configuration
 
-**Scrypt Optimization**:
-```go
-// Test configuration (faster)
-const (
-    TestScryptN = 16384
-    TestScryptR = 8
-    TestScryptP = 1
-)
+**Scrypt Cost Profiles**:
 
-// Production configuration (secure)
-const (
-    ProdScryptN = 1048576
-    ProdScryptR = 8
-    ProdScryptP = 1
+The cost profile is selected at wallet-creation time and then **persisted in the
+wallet's `EncryptionParams`**, so decryption always uses the same parameters as
+encryption. An earlier version chose the profile at runtime from
+`testing.Testing()` and never recorded it, which meant a wallet created under test
+could not be opened in production (the KDF silently derived a different key) and
+pulled the `testing` package into the shipped binary.
+
+```go
+var (
+    productionScryptParams = scryptParams{N: 1048576, R: 8, P: 1} // 2^20
+    fastScryptParams       = scryptParams{N: 16384, R: 8, P: 1}   // 2^14, tests only
+    defaultScryptParams    = productionScryptParams
 )
 ```
+
+The test binary lowers it via an `init()` in `sdk/testsupport_test.go`, so no
+production code references `testing`.
 
 **Timeout Protection**:
 ```go
@@ -99,12 +102,20 @@ func TestWallet_Create(t *testing.T) {
 
 ### Coverage Analysis
 
-**Current Coverage**:
-- **Overall**: 39.8%
-- **Core Functions**: 85%+
-- **API Endpoints**: 75%+
-- **Wallet Operations**: 90%+
-- **Blockchain Logic**: 80%+
+**Current Coverage** (`go test -cover ./...`):
+
+| Package | Coverage |
+|---|---|
+| `internal/application/services` | 100.0% |
+| `internal/helios/validation` | 96.8% |
+| `internal/helios/difficulty` | 94.4% |
+| `internal/helios/algorithm` | 89.8% |
+| `internal/helios/sidechain` | 85.2% |
+| `internal/progress` | 77.9% |
+| `sdk` | 57.0% |
+| `cmd/gbb-cli` | 33.6% |
+| `internal/menu` | 28.0% |
+| `cmd/chaind` | 12.8% |
 
 **Coverage Targets**:
 - **Minimum**: 80% overall
@@ -129,7 +140,7 @@ go tool cover -func=coverage.out
 **Coverage Output**:
 ```
 PASS
-coverage: 39.8% of statements
+coverage: 57.0% of statements
 ok      github.com/yourusername/go-basic-blockchain/sdk 9.5s
 ```
 
@@ -513,7 +524,7 @@ const (
 - **Race Conditions**: 0
 
 **Coverage Quality**:
-- **Line Coverage**: 39.8%
+- **Line Coverage**: 57.0% (`sdk`)
 - **Function Coverage**: 85%
 - **Branch Coverage**: 70%
 - **Statement Coverage**: 40%

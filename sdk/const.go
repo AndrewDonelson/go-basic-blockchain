@@ -21,6 +21,7 @@ const (
 	minerRewardPCT        = 50.0    // Miner reward is 50% of the transaction fee
 	devRewardPCT          = 50.0    // Developer reward is 50% of the transaction fee
 	MaxBlockSize          = 1000000 // Maximum block size in bytes (1MB)
+	MaxMessageLength      = 4096    // Maximum MESSAGE protocol body length in bytes
 	indexCacheSize        = 65536   // Size of the block/transaction index cache (1,572,864 bytes or 1.5 MB)
 
 	// Token Related
@@ -55,7 +56,12 @@ const (
 
 	// Cryptographic Constants
 	saltSize = 32
-	maxNonce = 12 // bytes
+	// gcmNonceSize is the AES-GCM nonce length in bytes.
+	gcmNonceSize = 12
+	// maxMiningNonce bounds the simple proof-of-work search. This used to be
+	// `maxNonce = 12`, the *AES-GCM nonce size*, so simple PoW gave up after 12
+	// attempts and returned an unmined block that was persisted anyway.
+	maxMiningNonce = 1 << 32
 
 	// Formatting
 	logDateTimeFormat = "2006-01-02 15:04:05"
@@ -71,6 +77,9 @@ const (
 	MessageProtocolID  = "MESSAGE"
 	CoinbaseProtocolID = "COINBASE"
 	ChainProtocolID    = "CHAIN"
+	// P2PProtocolID is used for node-to-node control messages. It was missing from
+	// AvailableProtocols, so every P2P control transaction failed validation.
+	P2PProtocolID = "P2P"
 )
 
 // AvailableProtocols is a list of all available protocols
@@ -80,4 +89,5 @@ var AvailableProtocols = []string{
 	MessageProtocolID,
 	PersistProtocolID,
 	ChainProtocolID,
+	P2PProtocolID,
 }

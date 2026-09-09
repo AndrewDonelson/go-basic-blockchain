@@ -6,9 +6,9 @@ import (
 	//"encoding/json"
 
 	"fmt"
-	"log"
 	"os"
 	"path/filepath"
+	"sync"
 
 	jsoniter "github.com/json-iterator/go"
 )
@@ -25,8 +25,55 @@ type LocalStorageOptions struct {
 
 // LocalStorage represents the data persist manager using the Go standard library's file system.
 // The dataPath field specifies the path where all data is stored.
+//
+// mu serialises reads and writes. This is a process-wide singleton written from
+// the mining goroutine, the API handlers and the interactive menu at the same
+// time; without it, concurrent Set calls interleaved and could corrupt a file.
 type LocalStorage struct {
 	dataPath string
+	mu       sync.RWMutex
+}
+
+// writeFileAtomic writes data to path via a temporary file and an atomic rename,
+// so a crash or a concurrent reader can never observe a half-written file.
+//
+// The previous direct os.WriteFile truncated the target first: an interrupted
+// write left a truncated wallet or block on disk with no way to recover it.
+func writeFileAtomic(path string, data []byte, perm os.FileMode) error {
+	dir := filepath.Dir(path)
+	tmp, err := os.CreateTemp(dir, "."+filepath.Base(path)+".tmp-*")
+	if err != nil {
+		return fmt.Errorf("create temp file: %w", err)
+	}
+	tmpName := tmp.Name()
+
+	cleanup := func() {
+		tmp.Close()
+		os.Remove(tmpName)
+	}
+
+	if err := tmp.Chmod(perm); err != nil {
+		cleanup()
+		return fmt.Errorf("chmod temp file: %w", err)
+	}
+	if _, err := tmp.Write(data); err != nil {
+		cleanup()
+		return fmt.Errorf("write temp file: %w", err)
+	}
+	// fsync before rename so the rename cannot expose an empty file after a crash.
+	if err := tmp.Sync(); err != nil {
+		cleanup()
+		return fmt.Errorf("sync temp file: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		os.Remove(tmpName)
+		return fmt.Errorf("close temp file: %w", err)
+	}
+	if err := os.Rename(tmpName, path); err != nil {
+		os.Remove(tmpName)
+		return fmt.Errorf("rename temp file: %w", err)
+	}
+	return nil
 }
 
 // localStorage is a global variable that holds an instance of the LocalStorage struct.
@@ -41,8 +88,12 @@ func NewLocalStorage(dataPath string) error {
 	if localStorage != nil {
 		// If already initialized, check if we need to update the data path
 		if localStorage.dataPath != dataPath && dataPath != "" {
+			localStorage.mu.Lock()
 			localStorage.dataPath = dataPath
-			localStorage.setup() // Re-setup with new path
+			localStorage.mu.Unlock()
+			if err := localStorage.setup(); err != nil {
+				return err
+			}
 			LogInfof("local storage reinitialized @ %s", localStorage.dataPath)
 		}
 		return nil
@@ -63,7 +114,10 @@ func NewLocalStorage(dataPath string) error {
 	}
 
 	// Perform any initial setup or data loading if needed
-	localStorage.setup()
+	if err := localStorage.setup(); err != nil {
+		localStorage = nil
+		return err
+	}
 
 	LogInfof("local storage initialized @ %s", localStorage.dataPath)
 	return nil
@@ -86,6 +140,15 @@ func LocalStorageAvailable() bool {
 	return localStorage != nil
 }
 
+// storagePerm returns the file mode for a persisted object. Wallets hold private
+// key material and must not be world-readable.
+func storagePerm(v interface{}) os.FileMode {
+	if _, ok := v.(*Wallet); ok {
+		return 0600
+	}
+	return 0644
+}
+
 // setup creates the necessary directories for the LocalStorage data persist manager.
 // It creates the following directories if they don't already exist:
 // - data directory (specified by ls.dataPath)
@@ -93,11 +156,12 @@ func LocalStorageAvailable() bool {
 // - blocks directory (under the data directory)
 // - wallets directory (under the data directory)
 // This function is called during the initialization of the LocalStorage instance.
-func (ls *LocalStorage) setup() {
-	// Create the data directory if it doesn't exist
-	err := os.MkdirAll(ls.dataPath, 0755)
-	if err != nil {
-		log.Fatal(err)
+func (ls *LocalStorage) setup() error {
+	// Create the data directory if it doesn't exist.
+	// These used to be log.Fatal: a library has no business terminating the
+	// host process because a directory could not be created.
+	if err := os.MkdirAll(ls.dataPath, 0755); err != nil {
+		return fmt.Errorf("create data directory: %w", err)
 	}
 
 	// Create the node directory if it doesn't exist
@@ -107,16 +171,16 @@ func (ls *LocalStorage) setup() {
 	// }
 
 	// Create the blocks directory if it doesn't exist
-	err = os.MkdirAll(filepath.Join(ls.dataPath, "blocks"), 0755)
-	if err != nil {
-		log.Fatal(err)
+	if err := os.MkdirAll(filepath.Join(ls.dataPath, "blocks"), 0755); err != nil {
+		return fmt.Errorf("create blocks directory: %w", err)
 	}
 
-	// Create the wallets directory if it doesn't exist
-	err = os.MkdirAll(filepath.Join(ls.dataPath, "wallets"), 0755)
-	if err != nil {
-		log.Fatal(err)
+	// Create the wallets directory if it doesn't exist. 0700: it holds keys.
+	if err := os.MkdirAll(filepath.Join(ls.dataPath, "wallets"), 0700); err != nil {
+		return fmt.Errorf("create wallets directory: %w", err)
 	}
+
+	return nil
 }
 
 // file returns the file path for the given type of data that needs to be persisted.
@@ -147,6 +211,9 @@ func (ls *LocalStorage) file(t interface{}) (filePath string, err error) {
 // It decodes the JSON data from the file corresponding to the type of the provided value.
 // If the file does not exist or the JSON data cannot be decoded, an error is returned.
 func (ls *LocalStorage) Get(key string, v interface{}) error {
+	ls.mu.RLock()
+	defer ls.mu.RUnlock()
+
 	filePath, err := ls.file(v)
 	if err != nil {
 		return err
@@ -174,18 +241,20 @@ func (ls *LocalStorage) Get(key string, v interface{}) error {
 // and encodes the value as JSON data in the file.
 // If an error occurs while creating the file or encoding the data, an error is returned.
 func (ls *LocalStorage) Set(key string, v interface{}) error {
+	ls.mu.Lock()
+	defer ls.mu.Unlock()
+
 	filePath, err := ls.file(v)
 	if err != nil {
 		return err
 	}
 
-	data, err := jsoniter.MarshalIndent(v, "", "  ")
+	data, err := jsoniter.Marshal(v)
 	if err != nil {
 		return fmt.Errorf("failed to marshal data: %w", err)
 	}
 
-	err = os.WriteFile(filePath, data, 0644)
-	if err != nil {
+	if err := writeFileAtomic(filePath, data, storagePerm(v)); err != nil {
 		return fmt.Errorf("failed to write file %s: %w", filePath, err)
 	}
 

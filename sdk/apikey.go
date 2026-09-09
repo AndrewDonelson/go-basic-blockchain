@@ -5,81 +5,93 @@ package sdk
 import (
 	"crypto/rand"
 	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/hex"
 	"errors"
 	"net"
 	"net/http"
 	"strings"
+	"sync"
+	"time"
 
 	logging "github.com/op/go-logging"
-	//"gorm.io/gorm/logger"
 )
 
-// APIKeyList is a map of API keys to their corresponding values.
-// This type is used to store and manage API keys.
+// APIKeyList is a map of principal (email address) to their hex-encoded API key.
 type APIKeyList map[string]string
 
-// APIKeyConfig is a configuration struct that holds the API key header name and a map of API keys.
-// The APIKeys field is a map of API keys to their corresponding values, used to store and manage API keys.
+// APIKeyConfig holds the API key header name and the set of accepted API keys.
 type APIKeyConfig struct {
 	APIKeyHeader string
 	APIKeys      APIKeyList
+	// accountStore, when set, allows keys issued to verified accounts to
+	// authenticate in addition to the statically configured keys.
+	accountStore AccountStore
 }
 
 const (
+	// authRateLimitAttempts / authRateLimitWindow throttle credential guessing.
+	authRateLimitAttempts = 10
+	authRateLimitWindow   = time.Minute
+
 	envAPIKeyHeader       = "API_KEY_HEADER"
 	envBlockchainAPIKey   = "BLOCKCHAIN_API_KEY"
 	envBlockchainAPIEmail = "BLOCKCHAIN_API_EMAIL"
 	envServerSeed         = "BLOCKCHAIN_SERVER_SEED"
-
-	legacyDemoAPIKey = "69a082ff3996745bd4b48bcc92d5bb40ff97115896183f1cb53a3409f818b15f"
-	legacyServerSeed = "0ebe1955e527d0a3f354315d0af97e88be3d4a499c9dacd0d947bf1bd5c71bca"
 )
 
-// defaultAPIKeyConfig builds API auth settings from environment and falls back
-// to legacy values for local development compatibility.
+// ErrNoAPIKeyConfigured is returned when the node has no usable API credentials.
+//
+// The node used to fall back to a demo key and server seed that were hardcoded in
+// this file and published in the repository, so any deployment that did not set
+// the environment variables accepted a key every reader of the source already
+// knew -- a complete authentication bypass, including on /consensus/*. There is
+// no fallback any more: with nothing configured, authentication fails closed.
+var ErrNoAPIKeyConfigured = errors.New(
+	"no API key configured: set BLOCKCHAIN_API_KEY (hex-encoded) to enable authenticated endpoints")
+
+// defaultAPIKeyConfig builds API auth settings from the environment.
+// It returns a config with an empty key set when nothing is configured; callers
+// must treat that as "authentication unavailable", never as "allow everything".
 func defaultAPIKeyConfig() APIKeyConfig {
 	header := getEnv(envAPIKeyHeader, "Authorization")
 	principal := getEnv(envBlockchainAPIEmail, "local-dev")
 	apiKey := getEnv(envBlockchainAPIKey, "")
-	if apiKey == "" {
-		apiKey = legacyDemoAPIKey
+
+	keys := APIKeyList{}
+	if apiKey != "" {
+		keys[principal] = apiKey
 	}
 
 	return APIKeyConfig{
 		APIKeyHeader: header,
-		APIKeys: APIKeyList{
-			principal: apiKey,
-		},
+		APIKeys:      keys,
 	}
 }
 
-func configuredServerSeed() string {
-	return getEnv(envServerSeed, legacyServerSeed)
+// configuredServerSeed returns the server seed used to derive per-account values.
+// It has no default: a published constant seed let anyone mint valid credentials.
+func configuredServerSeed() (string, error) {
+	seed := getEnv(envServerSeed, "")
+	if seed == "" {
+		return "", errors.New("no server seed configured: set BLOCKCHAIN_SERVER_SEED")
+	}
+	return seed, nil
 }
 
-// ***[API Key Middleware]***
-// curl -H "Authorization: Bearer 69a082ff3996745bd4b48bcc92d5bb40ff97115896183f1cb53a3409f818b15f" http://localhost:8080/protected
-
-// ApiKeyMiddleware is a middleware function that checks for a valid API key in the request header.
-// It takes an APIKeyConfig and a logging.Logger as input, and returns a middleware function
-// that can be used to wrap an http.Handler.
+// ApiKeyMiddleware returns middleware that authenticates requests by API key.
 //
-// The middleware first checks if the requested path is public (using the isPublicPath function),
-// and if so, skips the API key check and calls the next handler.
-//
-// If the path is secured, the middleware extracts the API key from the request header using the
-// bearerToken function, and then checks if the API key is valid by looking it up in the
-// decodedAPIKeys map. If the API key is not valid, the middleware responds with a 401 Unauthorized
-// error.
-//
-// If the API key is valid, the middleware calls the next handler with the original request context.
+// Public paths bypass the check. Every other path requires a bearer token that
+// matches either a configured key or a key issued to a verified account. All
+// comparisons are constant-time.
 func ApiKeyMiddleware(cfg APIKeyConfig, logger *logging.Logger) (func(handler http.Handler) http.Handler, error) {
 	apiKeyHeader := cfg.APIKeyHeader
-	apiKeys := cfg.APIKeys
+	if apiKeyHeader == "" {
+		apiKeyHeader = "Authorization"
+	}
 
 	decodedAPIKeys := make(map[string][]byte)
-	for name, value := range apiKeys {
+	for name, value := range cfg.APIKeys {
 		decodedKey, err := hex.DecodeString(value)
 		if err != nil {
 			return nil, err
@@ -88,17 +100,25 @@ func ApiKeyMiddleware(cfg APIKeyConfig, logger *logging.Logger) (func(handler ht
 		decodedAPIKeys[name] = decodedKey
 	}
 
+	if len(decodedAPIKeys) == 0 && cfg.accountStore == nil {
+		return nil, ErrNoAPIKeyConfigured
+	}
+
+	limiter := newRateLimiter(authRateLimitAttempts, authRateLimitWindow)
+
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			// If the path is public, skip the middleware checks
 			if isPublicPath(r.URL.Path) {
-				logger.Notice("public path, skipping API key check")
 				next.ServeHTTP(w, r)
 				return
 			}
 
-			logger.Notice("secured path, checking API key")
-			ctx := r.Context()
+			hostIP := clientIP(r)
+			if !limiter.allow(hostIP) {
+				RespondError(w, http.StatusTooManyRequests, "too many authentication attempts")
+				return
+			}
 
 			apiKey, err := bearerToken(r, apiKeyHeader)
 			if err != nil {
@@ -107,21 +127,31 @@ func ApiKeyMiddleware(cfg APIKeyConfig, logger *logging.Logger) (func(handler ht
 				return
 			}
 
-			if _, ok := apiKeyIsValid(apiKey, decodedAPIKeys); !ok {
-				hostIP, _, err := net.SplitHostPort(r.RemoteAddr)
-				if err != nil {
-					logger.Error("failed to parse remote address", "error", err)
-					hostIP = r.RemoteAddr
-				}
+			principal, ok := apiKeyIsValid(apiKey, decodedAPIKeys)
+			if !ok && cfg.accountStore != nil {
+				principal, ok = accountKeyIsValid(apiKey, cfg.accountStore)
+			}
+			if !ok {
 				logger.Error("no matching API key found", "remoteIP", hostIP)
-
 				RespondError(w, http.StatusUnauthorized, "invalid api key")
 				return
 			}
 
-			next.ServeHTTP(w, r.WithContext(ctx))
+			limiter.reset(hostIP)
+			next.ServeHTTP(w, r.WithContext(withPrincipal(r.Context(), principal)))
 		})
 	}, nil
+}
+
+// clientIP returns the address to rate-limit on. It deliberately ignores
+// X-Forwarded-For: that header is attacker-controlled, so trusting it here would
+// let a caller sidestep the limiter by varying one header.
+func clientIP(r *http.Request) string {
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		return r.RemoteAddr
+	}
+	return host
 }
 
 // bearerToken extracts the token from the Authorization header, assuming the header
@@ -140,72 +170,115 @@ func bearerToken(r *http.Request, header string) (string, error) {
 	return token, nil
 }
 
-// apiKeyIsValid checks if the given API key is valid and returns the principal (email address) if it is.
-// The function takes a raw API key string and a map of available API keys (where the keys are email addresses
-// and the values are the corresponding API keys). It attempts to match the raw API key against the available
-// keys, and if a match is found, it returns the email address and true. Otherwise, it returns an empty
-// string and false.
+// apiKeyIsValid checks a raw API key against the configured keys and returns the
+// matching principal.
 func apiKeyIsValid(rawKey string, availableKeys map[string][]byte) (string, bool) {
-	//expectedKey := generateAPIKeyForEmail("nlaakald@gmail.com") // Assuming you have this function
-	//logger.Info("Expected API Key:", expectedKey)
-	LogVerbosef("RAW Key API Key: %s", rawKey)
-
-	email, ok := matchAPIKeyToEmail(rawKey, availableKeys)
-	if ok {
-		return email, true
-	}
-
-	return "", false
+	return matchAPIKeyToEmail(rawKey, availableKeys)
 }
 
-// matchAPIKeyToEmail checks if the given API key is valid and returns the principal (email address) if it is.
-// The function takes a raw API key string and a map of available API keys (where the keys are email addresses
-// and the values are the corresponding API keys). It attempts to match the raw API key against the available
-// keys, and if a match is found, it returns the email address and true. Otherwise, it returns an empty
-// string and false.
+// matchAPIKeyToEmail compares the supplied key against every configured key in
+// constant time.
+//
+// This used to be `rawKey == hex.EncodeToString(key)`. Go's string comparison
+// short-circuits on the first differing byte, which leaks the key one byte at a
+// time to an attacker who can measure response latency. The loop below always
+// examines every candidate and every byte.
 func matchAPIKeyToEmail(rawKey string, availableKeys map[string][]byte) (string, bool) {
+	rawBytes, err := hex.DecodeString(rawKey)
+	if err != nil {
+		// Still walk the candidates so a malformed key is not distinguishable by
+		// timing from a well-formed but wrong one.
+		rawBytes = nil
+	}
+
+	matchedEmail := ""
+	found := 0
 	for email, key := range availableKeys {
-		if rawKey == hex.EncodeToString(key) {
-			return email, true
+		if subtle.ConstantTimeCompare(rawBytes, key) == 1 {
+			matchedEmail = email
+			found = 1
 		}
 	}
 
+	if found == 1 {
+		return matchedEmail, true
+	}
 	return "", false
 }
 
-// generateAPIKey creates a new random API key and its SHA256 hashed version.
-// It generates a 16-byte random API key, converts it to a hexadecimal string,
-// and then hashes the API key using SHA256. It returns the API key, the hashed
-// key, and any error that occurred during the process.
+// accountKeyIsValid checks a raw API key against the keys issued to verified
+// accounts. Only the SHA-256 hash of an issued key is ever stored.
+func accountKeyIsValid(rawKey string, store AccountStore) (string, bool) {
+	if store == nil || rawKey == "" {
+		return "", false
+	}
+
+	record, ok, err := store.GetVerifiedByAPIKeyHash(hashAPIKey(rawKey))
+	if err != nil || !ok {
+		return "", false
+	}
+	return record.Email, true
+}
+
+// hashAPIKey returns the hex-encoded SHA-256 of an API key. Only this value is
+// persisted, so a leaked account store does not yield usable credentials.
+func hashAPIKey(rawKey string) string {
+	sum := sha256.Sum256([]byte(rawKey))
+	return hex.EncodeToString(sum[:])
+}
+
+// generateAPIKey creates a new random API key and its SHA-256 hashed version.
 func generateAPIKey() (apiKey string, hashedKey string, err error) {
-	// Generate a random 16-byte API key.
-	randomBytes := make([]byte, 16)
-	_, err = rand.Read(randomBytes)
-	if err != nil {
+	// Generate a random 32-byte API key (256 bits).
+	randomBytes := make([]byte, 32)
+	if _, err = rand.Read(randomBytes); err != nil {
 		return "", "", err
 	}
 
-	// Convert the random bytes to a hexadecimal string to get the API key.
 	apiKey = hex.EncodeToString(randomBytes)
-
-	// Hash the API key using SHA256.
-	hash := sha256.Sum256([]byte(apiKey))
-	hashedKey = hex.EncodeToString(hash[:])
-
-	return apiKey, hashedKey, nil
+	return apiKey, hashAPIKey(apiKey), nil
 }
 
-// generateAPIKeyForEmail generates an API key by combining the server's seed and the provided email address,
-// hashing the combined string using SHA256, and returning the hex representation of the hash as the API key.
-//
-// The generated API key is intended to be associated with the provided email address.
-func generateAPIKeyForEmail(email string) string {
-	// Combine the server seed and the email
-	combined := configuredServerSeed() + email
+// rateLimiter is a small fixed-window limiter used to slow credential guessing.
+type rateLimiter struct {
+	mu       sync.Mutex
+	attempts map[string]*rateLimitEntry
+	limit    int
+	window   time.Duration
+}
 
-	// Hash the combined string
-	hash := sha256.Sum256([]byte(combined))
+type rateLimitEntry struct {
+	count      int
+	windowFrom time.Time
+}
 
-	// Return the hex representation of the hash as the API key
-	return hex.EncodeToString(hash[:])
+func newRateLimiter(limit int, window time.Duration) *rateLimiter {
+	return &rateLimiter{
+		attempts: make(map[string]*rateLimitEntry),
+		limit:    limit,
+		window:   window,
+	}
+}
+
+// allow records an attempt for key and reports whether it is within the limit.
+func (rl *rateLimiter) allow(key string) bool {
+	rl.mu.Lock()
+	defer rl.mu.Unlock()
+
+	now := time.Now()
+	entry, ok := rl.attempts[key]
+	if !ok || now.Sub(entry.windowFrom) > rl.window {
+		rl.attempts[key] = &rateLimitEntry{count: 1, windowFrom: now}
+		return true
+	}
+
+	entry.count++
+	return entry.count <= rl.limit
+}
+
+// reset clears the counter for key, so successful callers are never throttled.
+func (rl *rateLimiter) reset(key string) {
+	rl.mu.Lock()
+	defer rl.mu.Unlock()
+	delete(rl.attempts, key)
 }

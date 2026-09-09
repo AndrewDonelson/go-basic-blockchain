@@ -20,7 +20,7 @@ func TestFileAccountStore_LegacyStateMigration(t *testing.T) {
 			"legacy@example.com": map[string]interface{}{
 				"email":         "legacy@example.com",
 				"password_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-				"token":         "legacy-token",
+				"token_hash":    "legacy-token-hash",
 				"expires_at":    time.Now().Add(30 * time.Minute),
 			},
 		},
@@ -44,8 +44,8 @@ func TestFileAccountStore_LegacyStateMigration(t *testing.T) {
 	if !ok {
 		t.Fatal("expected pending record from legacy state")
 	}
-	if record.Token != "legacy-token" {
-		t.Fatalf("unexpected token in migrated pending record: %s", record.Token)
+	if record.TokenHash != "legacy-token-hash" {
+		t.Fatalf("unexpected token hash in migrated pending record: %s", record.TokenHash)
 	}
 
 	if err := store.SaveVerified(VerifiedAccountRecord{

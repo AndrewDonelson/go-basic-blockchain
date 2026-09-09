@@ -8,6 +8,12 @@ import (
 	"github.com/AndrewDonelson/go-basic-blockchain/internal/helios/algorithm"
 )
 
+// validProof returns a proof whose FinalHash genuinely satisfies a target of 10.
+//
+// The fixture previously used a hash of 0x0123456789ab... -- a 256-bit number
+// vastly larger than the target -- and the test passed anyway, because
+// ValidateProof compared proof.Difficulty (which the miner writes) against the
+// target instead of the hash. It is now a real hash value below the target.
 func validProof() *algorithm.HeliosProof {
 	return &algorithm.HeliosProof{
 		Nonce:        1,
@@ -15,7 +21,7 @@ func validProof() *algorithm.HeliosProof {
 		Stage1Result: []byte{1},
 		Stage2Result: []byte{2},
 		Stage3Result: []byte{3},
-		FinalHash:    "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+		FinalHash:    "0000000000000000000000000000000000000000000000000000000000000005",
 		Difficulty:   big.NewInt(10),
 		EnergyUsed:   1000,
 	}
@@ -73,10 +79,21 @@ func TestValidateProof(t *testing.T) {
 		t.Fatal("expected nil difficulty error")
 	}
 
+	// The proof's self-declared Difficulty is no longer what gates acceptance --
+	// the hash is. A proof that declares a difficulty above the target but whose
+	// hash genuinely meets it is valid; declaring a number is not work.
 	bad = *proof
 	bad.Difficulty = big.NewInt(11)
+	if err := pv.ValidateProof(&bad, big.NewInt(10)); err != nil {
+		t.Fatalf("acceptance must depend on the hash, not the declared difficulty: %v", err)
+	}
+
+	// Conversely, a hash above the target is rejected however the proof declares
+	// its difficulty. See TestValidateProofRejectsHashAboveTarget.
+	bad = *proof
+	bad.FinalHash = "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
 	if err := pv.ValidateProof(&bad, big.NewInt(10)); err == nil {
-		t.Fatal("expected difficulty mismatch error")
+		t.Fatal("expected a hash above the target to be rejected")
 	}
 }
 
@@ -176,5 +193,49 @@ func TestIsHexChar(t *testing.T) {
 		if isHexChar(r) {
 			t.Fatalf("expected %c to be non-hex", r)
 		}
+	}
+}
+
+// TestValidateProofRejectsHashAboveTarget is the regression guard for the check
+// that could never fail: ValidateProof compared proof.Difficulty against the
+// target, and HeliosAlgorithm.Mine sets proof.Difficulty to the target itself, so
+// the comparison was `x <= x`. A proof whose hash is far above the target -- i.e.
+// no work was done -- must be rejected.
+func TestValidateProofRejectsHashAboveTarget(t *testing.T) {
+	pv := NewProofValidator(nil)
+
+	proof := validProof()
+	proof.FinalHash = "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+	// Self-declared difficulty still "meets" the target, exactly as a dishonest
+	// miner would set it.
+	proof.Difficulty = big.NewInt(10)
+
+	if err := pv.ValidateProof(proof, big.NewInt(10)); err == nil {
+		t.Fatal("expected a proof whose hash exceeds the target to be rejected")
+	}
+}
+
+// TestValidateProofRejectsMalformedHash covers a FinalHash that is not hex.
+func TestValidateProofRejectsMalformedHash(t *testing.T) {
+	pv := NewProofValidator(nil)
+
+	proof := validProof()
+	proof.FinalHash = "zzzz567890abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+
+	if err := pv.ValidateProof(proof, big.NewInt(10)); err == nil {
+		t.Fatal("expected a non-hex final hash to be rejected")
+	}
+}
+
+// TestGetProofStatisticsHandlesNilDifficulty guards a nil dereference.
+func TestGetProofStatisticsHandlesNilDifficulty(t *testing.T) {
+	pv := NewProofValidator(nil)
+
+	proof := validProof()
+	proof.Difficulty = nil
+
+	stats := pv.GetProofStatistics(proof)
+	if stats["difficulty"] != "0" {
+		t.Fatalf("expected a nil difficulty to render as \"0\", got %v", stats["difficulty"])
 	}
 }

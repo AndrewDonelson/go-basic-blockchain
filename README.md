@@ -58,11 +58,52 @@ This repository includes a **comprehensive learning course** with **19 sections*
 - **Professional Build System**: Organized binary output with cross-compilation support
 
 ### **Current Status**
-- **Test Coverage:** 39.8%
-- **Test Suite Performance:** ~9.5 seconds (30x faster than before)
-- **Implementation Status:** ~95% complete
-- **Helios Consensus:** ✅ Fully integrated and tested
-- **Blockchain Functionality:** ✅ Fully operational with continuous mining
+
+This is a **single-node educational blockchain**. It mines, validates and persists
+a chain correctly; it does not yet form a network. The status below is deliberately
+specific about which is which.
+
+| Area | Status |
+|---|---|
+| Block production & persistence | ✅ Working — blocks mine, save, reload and re-validate |
+| Proof of work (Helios) | ✅ Working — deterministic, stored on the block, verified on every block |
+| Transaction signing | ✅ Working — signatures cover all protocol fields |
+| Wallets & key storage | ✅ Working — encrypted at rest, atomic writes |
+| REST API | ✅ Working — authenticated, rate limited, paginated |
+| P2P peer discovery | ⚠️ Partial — peers exchange node lists; no peer authentication |
+| Block/transaction propagation | ❌ Not implemented — nodes do not sync chains |
+| Fork choice / reorganisation | ❌ Not implemented — a block that does not extend the head is refused |
+| UTXO / account state model | ❌ Not implemented — balances are derived by scanning the chain |
+
+- **Test Coverage:** 57.0% (`sdk`); 89.8% / 94.4% / 85.2% / 96.8% across the Helios packages
+- **Test Suite Performance:** ~17 seconds for the full suite, ~85 seconds under `-race`
+
+> **Heads up if you are upgrading:** authentication now **fails closed**. There is
+> no built-in fallback API key any more, so `BLOCKCHAIN_API_KEY` and
+> `BLOCKCHAIN_SERVER_SEED` must be set before the API will accept a request. See
+> [`.env.example`](.env.example). Several endpoints also changed method and shape —
+> see the [API Reference](docs/api.md).
+
+## ⚙️ Configuration
+
+Copy [`.env.example`](.env.example) to `.local.env` and fill it in. Two variables
+have **no default** and must be set, because authentication fails closed rather
+than falling back to a built-in credential:
+
+```bash
+cp .env.example .local.env
+
+# Generate real values -- do not reuse these
+echo "BLOCKCHAIN_API_KEY=$(openssl rand -hex 32)"     >> .local.env
+echo "BLOCKCHAIN_SERVER_SEED=$(openssl rand -hex 32)" >> .local.env
+```
+
+| Variable | Required | Notes |
+|---|---|---|
+| `BLOCKCHAIN_API_KEY` | **yes** | Hex-encoded. Without it the API rejects every authenticated request. |
+| `BLOCKCHAIN_SERVER_SEED` | **yes** | Hex-encoded, used for per-account derivation. |
+| `NODE_WALLET_PASSPHRASE` | recommended | If unset, one is generated and logged **once** at startup. Save it or the node wallet is unrecoverable. |
+| `TRUST_PROXY_HEADERS` | no | Only enable behind a proxy you control — `X-Forwarded-For` is client-controlled. |
 
 ## 🚀 Quick Start
 
@@ -70,6 +111,10 @@ This repository includes a **comprehensive learning course** with **19 sections*
 1. Start with the [Learning Course](./learn/README.md)
 2. Follow the structured progression through all 19 sections
 3. Build your blockchain step by step with hands-on exercises
+4. Read [**Security Case Studies**](./learn/SECURITY_CASE_STUDIES.md) — thirteen
+   real defects that shipped in this codebase (signature forgery, a proof of work
+   that proved nothing, an `Open()` that deleted private keys), each with its
+   cause and the regression test that now guards it
 
 ### **For Blockchain Implementation**
 1. Clone the repository:
@@ -165,16 +210,20 @@ go-basic-blockchain/
 
 The project includes a comprehensive test suite with optimized performance:
 
-- **Test Coverage**: 39.8%
-- **Test Execution Time**: ~9.5 seconds (30x faster than before)
-- **Smart Scrypt Configuration**: Automatic switching between test and production security levels
-- **Timeout Protection**: All tests have 60-second timeouts to prevent hanging
-- **Helios Tests**: Comprehensive testing of the consensus algorithm
-- **Blockchain Tests**: All blockchain functionality tests passing
+- **Test Coverage**: 57.0% (`sdk`), 85–97% across the Helios packages
+- **Test Execution Time**: ~17 seconds; ~85 seconds with the race detector
+- **Race Detector**: The full suite runs clean under `go test -race`
+- **Regression Suite**: `sdk/regression_test.go` pins one test per historical
+  defect, each naming the behaviour it guards — useful reading on its own
+- **Scrypt Cost Profile**: Recorded per wallet in `EncryptionParams`, so a wallet
+  created under one profile always decrypts with the same one
+- **Timeout Protection**: All tests have timeouts to prevent hanging
 
 Run tests with:
 ```bash
-make test
+make test                    # full suite
+go test -race ./...          # with the race detector
+go test -cover ./...         # with coverage
 ```
 
 ## 🔧 Development

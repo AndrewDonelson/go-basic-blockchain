@@ -58,7 +58,7 @@ func TestAddTransaction(t *testing.T) {
 		Tx:     sdk.Tx{ID: puid},
 		Target: "all",
 		Action: "test",
-		Data:   "test-data",
+		Data:   []byte(`"test-data"`),
 	}
 
 	// We can only test that AddTransaction doesn't panic
@@ -68,7 +68,10 @@ func TestAddTransaction(t *testing.T) {
 // TestProcessQueue tests the ProcessQueue method
 // We can only verify it doesn't panic
 func TestProcessQueue(t *testing.T) {
-	t.Skip("Skipping TestProcessQueue due to mutex contention issues in concurrent test environment")
+	// Previously skipped "due to mutex contention issues": ProcessQueue held the
+	// write lock while calling handlers that took it again, so any non-"validate"
+	// action deadlocked. ProcessQueue now drains the queue under the lock and
+	// processes it outside, so this runs for real.
 
 	p2p := sdk.NewP2P()
 
@@ -113,7 +116,7 @@ func TestBroadcastMessage(t *testing.T) {
 		Tx:     sdk.Tx{ID: puid},
 		Target: "all",
 		Action: "test",
-		Data:   "test-data",
+		Data:   []byte(`"test-data"`),
 	}
 
 	// Test with empty network

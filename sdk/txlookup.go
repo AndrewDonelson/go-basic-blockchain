@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math/big"
 	"strings"
+	"sync"
 )
 
 // Index is a map of Block Number/Index (Key) and Transaction ID (Value) that is stored in memory and persisted to disk.
@@ -13,91 +14,166 @@ import (
 // Uses indexCacheSize (defined in const.go) is the size of the block/transaction index cache (1,572,864 bytes or 1.5 MB)
 type Index []string // Tx Lookup via BlockID (Key) and TxID (Value)
 
-// FIFOQueue represents a FIFO queue with a maximum capacity.
+// FIFOQueue is a bounded, insertion-ordered set of index entries.
+//
+// It is backed by a map plus a ring buffer rather than a plain slice. The old
+// implementation called a linear Exists() scan on every Enqueue, making index
+// construction O(n^2) at a capacity of 65,536, and Dequeue did
+// `q.queue = q.queue[1:]`, which never releases the head of the backing array --
+// so memory grew without bound despite the nominal capacity.
 type FIFOQueue struct {
-	queue    Index
+	mu       sync.RWMutex
+	entries  []string
+	position map[string]int
+	head     int
+	count    int
 	capacity int
 }
 
 // NewFIFOQueue creates a new FIFO queue with the specified capacity.
 func NewFIFOQueue(capacity int) *FIFOQueue {
-
-	// if not capacity is specified, use the default
+	// if no capacity is specified, use the default
 	if capacity <= 0 {
 		capacity = indexCacheSize
 	}
 
 	return &FIFOQueue{
-		queue:    make(Index, 0, capacity),
+		entries:  make([]string, capacity),
+		position: make(map[string]int, capacity),
 		capacity: capacity,
 	}
 }
 
-// Enqueue adds an element to the back of the queue.
-// If the queue is already at its maximum capacity, the oldest element is removed.
+// Enqueue adds an element to the back of the queue in O(1).
+// If the queue is at capacity, the oldest element is evicted first.
 func (q *FIFOQueue) Enqueue(element string) {
-	if len(q.queue) == q.capacity {
-		q.Dequeue()
+	q.mu.Lock()
+	defer q.mu.Unlock()
+
+	if element == "" {
+		return
+	}
+	if _, exists := q.position[element]; exists {
+		// Already present. The old code evicted the oldest entry *before* this
+		// check, so re-adding an existing element silently dropped an unrelated one.
+		return
 	}
 
-	if !q.Exists(element) {
-		q.queue = append(q.queue, element)
+	if q.count == q.capacity {
+		q.dequeueLocked()
 	}
+
+	idx := (q.head + q.count) % q.capacity
+	q.entries[idx] = element
+	q.position[element] = idx
+	q.count++
 }
 
-// Dequeue removes and returns the oldest element from the front of the queue.
-// If the queue is empty, an empty string is returned.
+// Dequeue removes and returns the oldest element, or "" when empty.
 func (q *FIFOQueue) Dequeue() string {
-	if len(q.queue) == 0 {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	return q.dequeueLocked()
+}
+
+func (q *FIFOQueue) dequeueLocked() string {
+	if q.count == 0 {
 		return ""
 	}
 
-	element := q.queue[0]
-	q.queue = q.queue[1:]
+	element := q.entries[q.head]
+	q.entries[q.head] = ""
+	delete(q.position, element)
+	q.head = (q.head + 1) % q.capacity
+	q.count--
 	return element
 }
 
 // Len returns the current number of elements in the queue.
 func (q *FIFOQueue) Len() int {
-	return len(q.queue)
+	q.mu.RLock()
+	defer q.mu.RUnlock()
+	return q.count
 }
 
 // IsEmpty checks if the queue is empty.
 func (q *FIFOQueue) IsEmpty() bool {
-	return len(q.queue) == 0
+	return q.Len() == 0
 }
 
-// Exists tells whether the Index contains entry.
+// Exists reports whether the queue contains an exact entry, in O(1).
 func (q *FIFOQueue) Exists(entry string) bool {
-	for _, n := range q.queue {
-		if len(n) > 0 && entry == n {
-			return true
-		}
-	}
+	q.mu.RLock()
+	defer q.mu.RUnlock()
 
-	return false
+	_, ok := q.position[entry]
+	return ok
 }
 
-// Find returns the first entry in the Index that contains the string s, or an empty string if no match is found.
+// Find returns the first entry containing s, or "" if there is no match.
 func (q *FIFOQueue) Find(s string) string {
-	for _, entry := range q.queue {
-		if len(entry) > 0 {
-			if strings.Contains(entry, s) {
-				return entry
-			}
+	q.mu.RLock()
+	defer q.mu.RUnlock()
+
+	for i := 0; i < q.count; i++ {
+		entry := q.entries[(q.head+i)%q.capacity]
+		if entry != "" && strings.Contains(entry, s) {
+			return entry
 		}
 	}
 	return ""
 }
 
-// Get returns the entire Index.
+// Get returns a snapshot of the queue in insertion order.
 func (q *FIFOQueue) Get() *Index {
-	return &q.queue
+	q.mu.RLock()
+	defer q.mu.RUnlock()
+
+	out := make(Index, 0, q.count)
+	for i := 0; i < q.count; i++ {
+		out = append(out, q.entries[(q.head+i)%q.capacity])
+	}
+	return &out
 }
 
-// Set sets the entire Index.
+// Set replaces the queue contents.
 func (q *FIFOQueue) Set(index *Index) {
-	q.queue = *index
+	if index == nil {
+		return
+	}
+
+	q.mu.Lock()
+	capacity := q.capacity
+	q.mu.Unlock()
+
+	entries := make([]string, capacity)
+	position := make(map[string]int, capacity)
+
+	count := 0
+	for _, entry := range *index {
+		if entry == "" {
+			continue
+		}
+		if _, dup := position[entry]; dup {
+			continue
+		}
+		if count == capacity {
+			// Keep the most recent `capacity` entries.
+			delete(position, entries[0])
+			copy(entries, entries[1:])
+			count--
+		}
+		entries[count] = entry
+		position[entry] = count
+		count++
+	}
+
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	q.entries = entries
+	q.position = position
+	q.head = 0
+	q.count = count
 }
 
 // IndexEntry is a struct that contains the blockNumber, txID and txHash for a transaction.
@@ -128,12 +204,28 @@ func (txlm *TXLookupManager) merge(blockNumber big.Int, txID string, txHash stri
 	return fmt.Sprintf("%s:%s:%s", blockNumber.String(), txID, txHash)
 }
 
-// split splits a merged string into Indexentry object contining the blockNumber, txID and txHash
-func (txlm *TXLookupManager) split(merged string) (entry *IndexEntry) {
-	entry = &IndexEntry{}
-	_, _ = fmt.Sscanf(merged, "%s:%s:%s", &entry.BlockNumber, &entry.TxID, &entry.TxHash)
+// split parses a merged "blockNumber:txID:txHash" string.
+//
+// This used to be fmt.Sscanf(merged, "%s:%s:%s", ...) with both return values
+// discarded. %s in Sscanf consumes up to whitespace, not up to a colon, so the
+// first verb swallowed the whole string and the remaining two never matched --
+// every IndexEntry it produced was empty.
+func (txlm *TXLookupManager) split(merged string) (*IndexEntry, error) {
+	parts := strings.SplitN(merged, ":", 3)
+	if len(parts) != 3 {
+		return nil, fmt.Errorf("malformed index entry: %q", merged)
+	}
 
-	return
+	blockNumber, ok := new(big.Int).SetString(parts[0], 10)
+	if !ok {
+		return nil, fmt.Errorf("malformed block number in index entry: %q", parts[0])
+	}
+
+	return &IndexEntry{
+		BlockNumber: *blockNumber,
+		TxID:        parts[1],
+		TxHash:      parts[2],
+	}, nil
 }
 
 // Exists tells whether the Index contains entry.
@@ -149,38 +241,53 @@ func (txlm *TXLookupManager) Initialized() bool {
 	return txlm.initalized
 }
 
-// Find efficiently search the index to see if thr tx hash exists and if so returns a populated IndexEntry{}
-func (txlm *TXLookupManager) Find(indexEntry *IndexEntry) (entry *IndexEntry, err error) {
-	// make sure indexEntry has only one of the three fields populated for the search
-	if indexEntry.BlockNumber.String() != "" && indexEntry.TxID != "" && indexEntry.TxHash != "" {
-		return entry, fmt.Errorf("Find() requires only one of the three fields populated")
-	} else if indexEntry.BlockNumber.String() != "" && indexEntry.TxID != "" {
-		return entry, fmt.Errorf("Find() requires only one of the three fields populated")
-	} else if indexEntry.BlockNumber.String() != "" && indexEntry.TxHash != "" {
-		return entry, fmt.Errorf("Find() requires only one of the three fields populated")
-	} else if indexEntry.TxID != "" && indexEntry.TxHash != "" {
-		return entry, fmt.Errorf("Find() requires only one of the three fields populated")
+// Find searches the index for an entry matching exactly one populated field of
+// the supplied IndexEntry.
+//
+// The presence test is now explicit. It used to be
+// `indexEntry.BlockNumber.String() != ""`, but a zero-valued big.Int stringifies
+// to "0", never "" -- so BlockNumber always looked populated and every lookup by
+// TxID or TxHash was rejected with "requires only one of the three fields
+// populated". The whole method was unreachable in practice.
+func (txlm *TXLookupManager) Find(indexEntry *IndexEntry) (*IndexEntry, error) {
+	if indexEntry == nil {
+		return nil, fmt.Errorf("Find() requires an index entry")
 	}
 
-	find := ""
-	if indexEntry.BlockNumber.String() != "" {
-		find = fmt.Sprintf("%s:", indexEntry.BlockNumber.String())
-	} else if indexEntry.TxID != "" {
-		find = fmt.Sprintf(":%s:", indexEntry.TxID)
-	} else if indexEntry.TxHash != "" {
-		find = fmt.Sprintf(":%s", indexEntry.TxHash)
+	hasBlock := indexEntry.BlockNumber.Sign() > 0
+	hasTxID := indexEntry.TxID != ""
+	hasHash := indexEntry.TxHash != ""
+
+	populated := 0
+	for _, set := range []bool{hasBlock, hasTxID, hasHash} {
+		if set {
+			populated++
+		}
 	}
 
-	if len(find) == 0 {
-		return entry, fmt.Errorf("Find() requires one of the three fields populated")
+	switch {
+	case populated == 0:
+		return nil, fmt.Errorf("Find() requires one of the three fields populated")
+	case populated > 1:
+		return nil, fmt.Errorf("Find() requires only one of the three fields populated")
+	}
+
+	var find string
+	switch {
+	case hasBlock:
+		find = indexEntry.BlockNumber.String() + ":"
+	case hasTxID:
+		find = ":" + indexEntry.TxID + ":"
+	default:
+		find = ":" + indexEntry.TxHash
 	}
 
 	found := txlm.index.Find(find)
-	if len(found) > 0 {
-		return txlm.split(found), nil
+	if found == "" {
+		return nil, fmt.Errorf("Find() failed to find entry")
 	}
 
-	return entry, fmt.Errorf("Find() failed to find entry")
+	return txlm.split(found)
 }
 
 // Set sets the index from BlockchainPersistData loaded from LocalStorage

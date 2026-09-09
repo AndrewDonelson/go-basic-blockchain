@@ -14,6 +14,17 @@ import (
 	progressbar "github.com/schollz/progressbar/v3"
 )
 
+// InstallLogWriter routes the standard logger through the progress indicator so
+// log output does not corrupt the status line.
+//
+// This is opt-in and idempotent. It must be called explicitly by the application
+// (cmd/chaind does), never implicitly by a constructor.
+func InstallLogWriter() {
+	installLogWriterOnce.Do(func() {
+		log.SetOutput(&statusAwareWriter{writer: os.Stderr})
+	})
+}
+
 // BlockchainStatus represents the current status of the blockchain
 type BlockchainStatus struct {
 	Action      string
@@ -74,11 +85,13 @@ func (w *statusAwareWriter) Write(p []byte) (int, error) {
 }
 
 // NewProgressIndicator creates a new progress indicator
+// NewProgressIndicator creates a new progress indicator.
+//
+// It no longer calls log.SetOutput. Redirecting the standard logger as a side
+// effect of constructing an object silently took over logging for the whole
+// process, including any host application that merely imports this package.
+// Callers that want the status-aware writer opt in with InstallLogWriter.
 func NewProgressIndicator() *ProgressIndicator {
-	installLogWriterOnce.Do(func() {
-		log.SetOutput(&statusAwareWriter{writer: os.Stderr})
-	})
-
 	// Check if we're in a terminal that supports colors and animations
 	isTerminal := isTerminalSupported()
 

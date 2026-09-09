@@ -249,6 +249,52 @@ func TestWallet_Create(t *testing.T) {
 
 ## 🔐 Security Guidelines
 
+> These guidelines are not abstract. Every rule below corresponds to a defect that
+> was actually found in this codebase and fixed; the audit is in `_design/`, and
+> `sdk/regression_test.go` pins one test per defect.
+
+### Lessons from the audit
+
+**Sign every field that carries value.** `Tx.Sign` marshalled only the embedded
+base transaction, so `Bank.Amount` was outside the signature — a signature for 1
+token verified for 1,000,000. When you add a protocol, override `SigningBytes`,
+`Sign`, `Verify`, `Hash` and `Send`. Go has no virtual dispatch on embedded
+structs; inheriting them silently leaves your fields unsigned.
+
+**Never ship a fallback credential.** A demo API key and server seed were
+constants in `sdk/apikey.go`, used whenever the environment was unconfigured —
+which is the default. Authentication now fails closed.
+
+**Compare secrets in constant time.** Use `crypto/subtle.ConstantTimeCompare`,
+never `==`, for API keys, password hashes and tokens.
+
+**Hash passwords server-side.** The API accepted a client-supplied
+`password_hash` and stored it verbatim, which made the stored value itself the
+credential.
+
+**A proof of work must be recomputable.** Any stage a verifier cannot reproduce
+constrains nothing. See `docs/helios.md`.
+
+**Verify before you claim success.** Three endpoints returned
+`{"accepted": true}` without inspecting the payload. If you cannot implement it
+yet, return `501`.
+
+**Never write when you meant to read.** `Wallet.Open` called `Set` instead of
+`Get` and destroyed every key file it touched. Write through
+`writeFileAtomic` (temp → fsync → rename) so an interrupted write cannot truncate
+a file, and give key material mode `0600`.
+
+**Handle the error.** The `if err != nil { _ = err }` idiom appeared 20+ times and
+is how a nil vault got marked "unlocked". `errcheck` is enabled in CI now.
+
+**Take the lock once.** `sync.Mutex` is not reentrant. Public method takes the
+lock, private `…Locked` method assumes it — three separate deadlocks came from
+breaking this.
+
+**Test the wire format.** Reflection-based JSON over embedded structs silently
+dropped fields for years, invisibly to `go vet` and to unit tests that never
+serialised anything. Round-trip every type that crosses a process boundary.
+
 ### Cryptographic Code
 
 **Use Secure Random**:
@@ -262,20 +308,18 @@ privateKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 privateKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.New(rand.NewSource(1)))
 ```
 
-**Validate Inputs**:
+**Validate Inputs** (illustrative — `IsUnlocked` is not a real method; check
+`w.Encrypted`):
 ```go
-func (w *Wallet) SignTransaction(tx Transaction) error {
-    // Validate transaction
+func signTransaction(w *Wallet, tx Transaction) (string, error) {
     if err := tx.Validate(); err != nil {
-        return fmt.Errorf("invalid transaction: %w", err)
+        return "", fmt.Errorf("invalid transaction: %w", err)
     }
-    
-    // Validate wallet state
-    if !w.IsUnlocked() {
-        return errors.New("wallet is locked")
+    if w.Encrypted {
+        return "", errors.New("wallet is locked")
     }
-    
-    return w.sign(tx)
+    // Sign() dispatches to the concrete protocol's SigningBytes().
+    return tx.Sign([]byte(w.PrivatePEM()))
 }
 ```
 

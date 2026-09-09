@@ -55,8 +55,14 @@ func executeAuthorizedRequest(method, url string, body []byte) (*http.Response, 
 	return http.DefaultClient.Do(req)
 }
 
-// startTestServer starts the API server for testing
+// startTestServer starts the API server for testing.
+//
+// Authentication now fails closed, so the test server must be given a key
+// explicitly. There is no longer a hardcoded fallback key compiled into the
+// binary for it to fall back on.
 func startTestServer(t *testing.T) {
+	t.Setenv(envBlockchainAPIKey, apiKey)
+	t.Setenv(envServerSeed, "5f4dcc3b5aa765d61d8327deb882cf995f4dcc3b5aa765d61d8327deb882cf99")
 	serverMutex.Lock()
 	defer serverMutex.Unlock()
 
@@ -168,6 +174,7 @@ func TestBlockchainAPI(t *testing.T) {
 	t.Run("Health Endpoint", testHealthEndpoint)
 	t.Run("Secured Route Auth Enforcement", testSecuredRouteAuthEnforcement)
 	t.Run("Account Endpoints", testAccountEndpoints)
+	t.Run("Account Takeover Refused", testAccountTakeoverIsRefused)
 	t.Run("Account Negative Paths", testAccountNegativePaths)
 	t.Run("Blockchain Endpoint", testBlockchainEndpoint)
 	t.Run("Blocks Endpoints", testBlocksEndpoints)
@@ -338,37 +345,75 @@ func testHealthEndpoint(t *testing.T) {
 	}
 }
 
+// postJSON is a helper for the account endpoints, which are now POST + JSON body
+// rather than GET + query string (credentials do not belong in a URL).
+func postJSON(t *testing.T, url string, body interface{}) *http.Response {
+	t.Helper()
+	payload, err := json.Marshal(body)
+	if err != nil {
+		t.Fatalf("marshal request body: %v", err)
+	}
+	resp, err := http.Post(url, "application/json", bytes.NewReader(payload))
+	if err != nil {
+		t.Fatalf("POST %s: %v", url, err)
+	}
+	return resp
+}
+
+// seedPendingAccount registers a pending account directly in the store and returns
+// the plaintext verification token.
+//
+// The token can no longer be recovered from the register response (that leak made
+// email verification meaningless), and the store keeps only its hash, so tests that
+// need to complete a verification seed the record themselves.
+func seedPendingAccount(t *testing.T, email, password string, expiresAt time.Time) string {
+	t.Helper()
+	hash, salt, err := hashAccountPassword(password)
+	if err != nil {
+		t.Fatalf("hash password: %v", err)
+	}
+	token := generateRandomToken()
+	err = testNode.API.accountStore.SavePending(PendingAccountRecord{
+		Email:        normalizeAccountEmail(email),
+		PasswordHash: hash,
+		PasswordSalt: salt,
+		TokenHash:    hashAPIKey(token),
+		ExpiresAt:    expiresAt,
+	})
+	if err != nil {
+		t.Fatalf("seed pending account: %v", err)
+	}
+	return token
+}
+
 func testAccountEndpoints(t *testing.T) {
 	email := fmt.Sprintf("apitest-%d@example.com", time.Now().UnixNano())
-	passwordHash := "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	password := "correct horse battery staple"
 
-	registerURL := baseURL + "/account/register?email=" + email + "&password_hash=" + passwordHash
-	registerResp, err := http.Get(registerURL)
-	if err != nil {
-		t.Fatalf("Failed to register account: %v", err)
-	}
+	registerResp := postJSON(t, baseURL+"/account/register",
+		map[string]string{"email": email, "password": password})
 	defer registerResp.Body.Close()
 
-	if registerResp.StatusCode != http.StatusOK {
-		t.Fatalf("Expected status OK for register, got %v", registerResp.Status)
+	if registerResp.StatusCode != http.StatusAccepted {
+		t.Fatalf("Expected 202 for register, got %v", registerResp.Status)
 	}
 
-	var registerBody struct {
-		Status            string `json:"status"`
-		Message           string `json:"message"`
-		VerificationToken string `json:"verification_token"`
-	}
-	err = json.NewDecoder(registerResp.Body).Decode(&registerBody)
+	registerRaw, err := io.ReadAll(registerResp.Body)
 	if err != nil {
-		t.Fatalf("Failed to decode register response: %v", err)
+		t.Fatalf("Failed to read register response: %v", err)
 	}
 
-	if registerBody.VerificationToken == "" {
-		t.Fatal("Expected verification token in register response")
+	// Regression guard: the verification token must never appear in the response.
+	// Returning it made the email-verification step trivially bypassable and
+	// enabled takeover of an already-registered address.
+	if strings.Contains(string(registerRaw), "verification_token") {
+		t.Fatalf("register response leaked the verification token: %s", registerRaw)
 	}
 
-	verifyURL := baseURL + "/account/verify?email=" + email + "&token=" + registerBody.VerificationToken
-	verifyResp, err := http.Get(verifyURL)
+	// Complete verification using a seeded token.
+	token := seedPendingAccount(t, email, password, time.Now().Add(30*time.Minute))
+
+	verifyResp, err := http.Get(baseURL + "/account/verify?email=" + email + "&token=" + token)
 	if err != nil {
 		t.Fatalf("Failed to verify account: %v", err)
 	}
@@ -382,20 +427,15 @@ func testAccountEndpoints(t *testing.T) {
 		Status string `json:"status"`
 		APIKey string `json:"api_key"`
 	}
-	err = json.NewDecoder(verifyResp.Body).Decode(&verifyBody)
-	if err != nil {
+	if err := json.NewDecoder(verifyResp.Body).Decode(&verifyBody); err != nil {
 		t.Fatalf("Failed to decode verify response: %v", err)
 	}
-
 	if verifyBody.APIKey == "" {
 		t.Fatal("Expected api_key in verify response")
 	}
 
-	loginURL := baseURL + "/account/login?email=" + email + "&password_hash=" + passwordHash
-	loginResp, err := http.Get(loginURL)
-	if err != nil {
-		t.Fatalf("Failed to login account: %v", err)
-	}
+	loginResp := postJSON(t, baseURL+"/account/login",
+		map[string]string{"email": email, "password": password})
 	defer loginResp.Body.Close()
 
 	if loginResp.StatusCode != http.StatusOK {
@@ -406,94 +446,133 @@ func testAccountEndpoints(t *testing.T) {
 		Status string `json:"status"`
 		APIKey string `json:"api_key"`
 	}
-	err = json.NewDecoder(loginResp.Body).Decode(&loginBody)
-	if err != nil {
+	if err := json.NewDecoder(loginResp.Body).Decode(&loginBody); err != nil {
 		t.Fatalf("Failed to decode login response: %v", err)
 	}
-
 	if loginBody.APIKey == "" {
 		t.Fatal("Expected api_key in login response")
+	}
+
+	// Keys are random per issuance, never a deterministic function of the email.
+	if loginBody.APIKey == verifyBody.APIKey {
+		t.Fatal("login reissued the same API key; keys must be freshly generated")
+	}
+
+	// The password itself must never be recoverable from the store.
+	record, ok, err := testNode.API.accountStore.GetVerified(email)
+	if err != nil || !ok {
+		t.Fatalf("verified record missing: ok=%v err=%v", ok, err)
+	}
+	if record.PasswordHash == password || record.PasswordHash == "" || record.PasswordSalt == "" {
+		t.Fatal("password must be stored as a salted server-side hash")
+	}
+	if !verifyAccountPassword(password, record.PasswordHash, record.PasswordSalt) {
+		t.Fatal("stored password hash does not verify the original password")
+	}
+}
+
+// testAccountTakeoverIsRefused is a regression test for the account-takeover hole:
+// registering an address that is already verified previously replaced the victim's
+// stored credential, with the verification token handed back in the response.
+func testAccountTakeoverIsRefused(t *testing.T) {
+	email := fmt.Sprintf("victim-%d@example.com", time.Now().UnixNano())
+	original := "victim original password"
+	attacker := "attacker chosen password"
+
+	token := seedPendingAccount(t, email, original, time.Now().Add(30*time.Minute))
+	verifyResp, err := http.Get(baseURL + "/account/verify?email=" + email + "&token=" + token)
+	if err != nil {
+		t.Fatalf("verify victim account: %v", err)
+	}
+	verifyResp.Body.Close()
+
+	// The attacker re-registers the victim's verified address.
+	takeoverResp := postJSON(t, baseURL+"/account/register",
+		map[string]string{"email": email, "password": attacker})
+	defer takeoverResp.Body.Close()
+
+	// The response is deliberately indistinguishable from a fresh registration so
+	// the endpoint cannot be used to enumerate accounts...
+	if takeoverResp.StatusCode != http.StatusAccepted {
+		t.Fatalf("Expected 202 for re-registration, got %v", takeoverResp.Status)
+	}
+
+	// ...but no pending record may have been created, and the victim's password
+	// must be untouched.
+	if _, pendingExists, err := testNode.API.accountStore.GetPending(email); err != nil {
+		t.Fatalf("read pending: %v", err)
+	} else if pendingExists {
+		t.Fatal("re-registering a verified address created a pending record")
+	}
+
+	loginAsAttacker := postJSON(t, baseURL+"/account/login",
+		map[string]string{"email": email, "password": attacker})
+	defer loginAsAttacker.Body.Close()
+	if loginAsAttacker.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("attacker password was accepted: got %v", loginAsAttacker.Status)
+	}
+
+	loginAsVictim := postJSON(t, baseURL+"/account/login",
+		map[string]string{"email": email, "password": original})
+	defer loginAsVictim.Body.Close()
+	if loginAsVictim.StatusCode != http.StatusOK {
+		t.Fatalf("victim can no longer log in: got %v", loginAsVictim.Status)
 	}
 }
 
 func testAccountNegativePaths(t *testing.T) {
-	badHashEmail := fmt.Sprintf("badhash-%d@example.com", time.Now().UnixNano())
-	badHashResp, err := http.Get(baseURL + "/account/register?email=" + badHashEmail + "&password_hash=short")
-	if err != nil {
-		t.Fatalf("Failed bad-hash registration request: %v", err)
+	shortPwEmail := fmt.Sprintf("shortpw-%d@example.com", time.Now().UnixNano())
+	shortResp := postJSON(t, baseURL+"/account/register",
+		map[string]string{"email": shortPwEmail, "password": "short"})
+	defer shortResp.Body.Close()
+	if shortResp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("Expected 400 for short password, got %v", shortResp.Status)
 	}
-	defer badHashResp.Body.Close()
 
-	if badHashResp.StatusCode != http.StatusBadRequest {
-		t.Fatalf("Expected 400 for bad hash register, got %v", badHashResp.Status)
+	badEmailResp := postJSON(t, baseURL+"/account/register",
+		map[string]string{"email": "not-an-email", "password": "a sufficiently long password"})
+	defer badEmailResp.Body.Close()
+	if badEmailResp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("Expected 400 for malformed email, got %v", badEmailResp.Status)
 	}
 
 	wrongTokenEmail := fmt.Sprintf("wrongtoken-%d@example.com", time.Now().UnixNano())
-	passwordHash := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-
-	regResp, err := http.Get(baseURL + "/account/register?email=" + wrongTokenEmail + "&password_hash=" + passwordHash)
-	if err != nil {
-		t.Fatalf("Failed wrong-token registration request: %v", err)
-	}
-	defer regResp.Body.Close()
-
-	if regResp.StatusCode != http.StatusOK {
-		t.Fatalf("Expected 200 for wrong-token registration setup, got %v", regResp.Status)
-	}
+	seedPendingAccount(t, wrongTokenEmail, "a sufficiently long password", time.Now().Add(30*time.Minute))
 
 	wrongVerifyResp, err := http.Get(baseURL + "/account/verify?email=" + wrongTokenEmail + "&token=definitely-wrong")
 	if err != nil {
 		t.Fatalf("Failed wrong-token verify request: %v", err)
 	}
 	defer wrongVerifyResp.Body.Close()
-
 	if wrongVerifyResp.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("Expected 401 for wrong token verify, got %v", wrongVerifyResp.Status)
 	}
 
 	expiredEmail := fmt.Sprintf("expired-%d@example.com", time.Now().UnixNano())
-	expiredToken := "expired-token"
-
-	err = testNode.API.accountStore.SavePending(PendingAccountRecord{
-		Email:        expiredEmail,
-		PasswordHash: passwordHash,
-		Token:        expiredToken,
-		ExpiresAt:    time.Now().Add(-1 * time.Minute),
-	})
-	if err != nil {
-		t.Fatalf("Failed to seed expired pending account: %v", err)
-	}
+	expiredToken := seedPendingAccount(t, expiredEmail, "a sufficiently long password", time.Now().Add(-1*time.Minute))
 
 	expiredVerifyResp, err := http.Get(baseURL + "/account/verify?email=" + expiredEmail + "&token=" + expiredToken)
 	if err != nil {
 		t.Fatalf("Failed expired-token verify request: %v", err)
 	}
 	defer expiredVerifyResp.Body.Close()
-
 	if expiredVerifyResp.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("Expected 401 for expired token verify, got %v", expiredVerifyResp.Status)
 	}
 
 	unverifiedEmail := fmt.Sprintf("unverified-%d@example.com", time.Now().UnixNano())
-
-	unverifiedRegisterResp, err := http.Get(baseURL + "/account/register?email=" + unverifiedEmail + "&password_hash=" + passwordHash)
-	if err != nil {
-		t.Fatalf("Failed unverified registration request: %v", err)
-	}
-	defer unverifiedRegisterResp.Body.Close()
-
-	if unverifiedRegisterResp.StatusCode != http.StatusOK {
-		t.Fatalf("Expected 200 for unverified registration setup, got %v", unverifiedRegisterResp.Status)
+	unverifiedRegister := postJSON(t, baseURL+"/account/register",
+		map[string]string{"email": unverifiedEmail, "password": "a sufficiently long password"})
+	defer unverifiedRegister.Body.Close()
+	if unverifiedRegister.StatusCode != http.StatusAccepted {
+		t.Fatalf("Expected 202 for unverified registration setup, got %v", unverifiedRegister.Status)
 	}
 
-	unverifiedLoginResp, err := http.Get(baseURL + "/account/login?email=" + unverifiedEmail + "&password_hash=" + passwordHash)
-	if err != nil {
-		t.Fatalf("Failed unverified login request: %v", err)
-	}
-	defer unverifiedLoginResp.Body.Close()
-
-	if unverifiedLoginResp.StatusCode != http.StatusUnauthorized {
-		t.Fatalf("Expected 401 for unverified login, got %v", unverifiedLoginResp.Status)
+	unverifiedLogin := postJSON(t, baseURL+"/account/login",
+		map[string]string{"email": unverifiedEmail, "password": "a sufficiently long password"})
+	defer unverifiedLogin.Body.Close()
+	if unverifiedLogin.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("Expected 401 for unverified login, got %v", unverifiedLogin.Status)
 	}
 }
 
@@ -534,20 +613,41 @@ func testBlocksEndpoints(t *testing.T) {
 		t.Errorf("Expected status OK, got %v", resp.Status)
 	}
 
-	// Use a dynamic type to handle JSON unmarshaling
-	var blocks []map[string]interface{}
-	err = json.NewDecoder(resp.Body).Decode(&blocks)
-	if err != nil {
+	// The endpoint now returns a paginated envelope rather than a bare array, so
+	// clients can tell "page beyond the end" from "no blocks at all".
+	var page struct {
+		Page   int                      `json:"page"`
+		Limit  int                      `json:"limit"`
+		Total  int                      `json:"total"`
+		Blocks []map[string]interface{} `json:"blocks"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&page); err != nil {
 		t.Fatalf("Failed to decode blocks: %v", err)
 	}
 
-	if len(blocks) == 0 {
+	if page.Total == 0 || len(page.Blocks) == 0 {
 		t.Error("There should be at least one block (genesis block)")
 	}
 
-	// Optional: Print block details for debugging
-	for i, block := range blocks {
-		t.Logf("Block %d: %+v", i, block)
+	// A page past the end must return an empty list, not the last block and not a
+	// panic. On an empty chain the old clamp produced startIndex == -1 and the
+	// reslice panicked.
+	farResp, err := executeAuthorizedRequest("GET", baseURL+"/blockchain/blocks?page=100000&limit=10", nil)
+	if err != nil {
+		t.Fatalf("Failed to get out-of-range block page: %v", err)
+	}
+	defer farResp.Body.Close()
+	if farResp.StatusCode != http.StatusOK {
+		t.Errorf("Expected 200 for out-of-range page, got %v", farResp.Status)
+	}
+	var farPage struct {
+		Blocks []map[string]interface{} `json:"blocks"`
+	}
+	if err := json.NewDecoder(farResp.Body).Decode(&farPage); err != nil {
+		t.Fatalf("Failed to decode out-of-range page: %v", err)
+	}
+	if len(farPage.Blocks) != 0 {
+		t.Errorf("Expected an empty page past the end, got %d blocks", len(farPage.Blocks))
 	}
 
 	// Test protocol query path behavior via legacy ambiguous route.
@@ -803,16 +903,54 @@ func testConsensusEndpoints(t *testing.T) {
 		t.Fatalf("Expected 400 for invalid consensus tx payload, got %v", invalidTxResp.Status)
 	}
 
-	validTxPayload := map[string]interface{}{"id": "tx-1", "protocol": "BANK"}
-	validTxBody, _ := json.Marshal(validTxPayload)
-	validTxResp, err := executeAuthorizedRequest("POST", baseURL+"/consensus/tx", validTxBody)
-	if err != nil {
-		t.Fatalf("Failed to call consensus tx endpoint with valid payload: %v", err)
+	// A well-formed but unsigned transaction must be refused. This endpoint used
+	// to parse the body into a discarded map and answer {"accepted":true} for
+	// anything at all, including this payload.
+	unsignedPayload := map[string]interface{}{
+		"id": "1:1:1:1", "protocol": "BANK", "version": 1, "amount": 5.0,
+		"from": "aa", "to": "bb",
 	}
-	defer validTxResp.Body.Close()
+	unsignedBody, _ := json.Marshal(unsignedPayload)
+	unsignedResp, err := executeAuthorizedRequest("POST", baseURL+"/consensus/tx", unsignedBody)
+	if err != nil {
+		t.Fatalf("Failed to call consensus tx endpoint with unsigned payload: %v", err)
+	}
+	defer unsignedResp.Body.Close()
 
-	if validTxResp.StatusCode != http.StatusOK {
-		t.Fatalf("Expected 200 for valid consensus tx payload, got %v", validTxResp.Status)
+	if unsignedResp.StatusCode != http.StatusUnprocessableEntity {
+		t.Fatalf("Expected 422 for an unsigned consensus tx, got %v", unsignedResp.Status)
+	}
+
+	var rejected struct {
+		Accepted bool   `json:"accepted"`
+		Reason   string `json:"reason"`
+	}
+	if err := json.NewDecoder(unsignedResp.Body).Decode(&rejected); err != nil {
+		t.Fatalf("Failed to decode consensus rejection: %v", err)
+	}
+	if rejected.Accepted {
+		t.Fatal("consensus endpoint accepted an unsigned transaction")
+	}
+
+	// A properly signed transaction is accepted and enters the mempool.
+	signedTx := buildSignedBankTransaction(t, 2.5)
+	signedBody, err := json.Marshal(signedTx)
+	if err != nil {
+		t.Fatalf("Failed to encode signed transaction: %v", err)
+	}
+	signedResp, err := executeAuthorizedRequest("POST", baseURL+"/consensus/tx", signedBody)
+	if err != nil {
+		t.Fatalf("Failed to submit signed consensus tx: %v", err)
+	}
+	defer signedResp.Body.Close()
+
+	if signedResp.StatusCode != http.StatusAccepted {
+		body, _ := io.ReadAll(signedResp.Body)
+		t.Fatalf("Expected 202 for a signed consensus tx, got %v (%s)", signedResp.Status, body)
+	}
+
+	if !testNode.Blockchain.HasTransactionID(signedTx.GetID()) {
+		t.Fatal("accepted transaction did not reach the mempool")
 	}
 
 	invalidBlockResp, err := executeAuthorizedRequest("POST", baseURL+"/consensus/block", []byte("not-json"))
@@ -833,8 +971,8 @@ func testConsensusEndpoints(t *testing.T) {
 	}
 	defer validBlockResp.Body.Close()
 
-	if validBlockResp.StatusCode != http.StatusOK {
-		t.Fatalf("Expected 200 for valid consensus block payload, got %v", validBlockResp.Status)
+	if validBlockResp.StatusCode != http.StatusUnprocessableEntity {
+		t.Fatalf("Expected 422 for a block that does not extend the head, got %v", validBlockResp.Status)
 	}
 
 	invalidP2PResp, err := executeAuthorizedRequest("POST", baseURL+"/consensus/p2p", []byte("not-json"))
@@ -860,45 +998,77 @@ func testConsensusEndpoints(t *testing.T) {
 	}
 }
 
-func testWalletCreation(t *testing.T) {
-	// Test wallet creation endpoint
-	resp, err := executeAuthorizedRequest("GET", baseURL+"/blockchain/wallets/new", nil)
+// apiWalletPassphrase is a caller-supplied passphrase for API-created wallets.
+// The server no longer invents one and hands it back in the response body.
+const apiWalletPassphrase = "Passw0rd!Passw0rd!"
+
+// createWalletViaAPI creates a wallet through the API and returns its address.
+func createWalletViaAPI(t *testing.T, name string) string {
+	t.Helper()
+
+	body, _ := json.Marshal(map[string]interface{}{
+		"name":       name,
+		"passphrase": apiWalletPassphrase,
+		"tags":       []string{"api-test"},
+	})
+	resp, err := executeAuthorizedRequest("POST", baseURL+"/blockchain/wallets/new", body)
 	if err != nil {
 		t.Fatalf("Failed to create wallet: %v", err)
 	}
 	defer resp.Body.Close()
 
-	// Wallet creation endpoint should respond successfully.
-	if resp.StatusCode != http.StatusOK {
-		t.Errorf("Expected status OK, got %v", resp.Status)
+	if resp.StatusCode != http.StatusCreated {
+		raw, _ := io.ReadAll(resp.Body)
+		t.Fatalf("Expected 201 for wallet creation, got %v (%s)", resp.Status, raw)
+	}
+
+	var created struct {
+		Address string `json:"address"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&created); err != nil {
+		t.Fatalf("Failed to decode wallet creation response: %v", err)
+	}
+	if created.Address == "" {
+		t.Fatal("wallet creation response missing address")
+	}
+	return created.Address
+}
+
+func testWalletCreation(t *testing.T) {
+	address := createWalletViaAPI(t, "creation-test")
+	if address == "" {
+		t.Fatal("expected an address")
+	}
+
+	// A weak or absent passphrase must be refused rather than silently
+	// substituted with a server-generated one.
+	weak, _ := json.Marshal(map[string]interface{}{"name": "weak", "passphrase": "short"})
+	weakResp, err := executeAuthorizedRequest("POST", baseURL+"/blockchain/wallets/new", weak)
+	if err != nil {
+		t.Fatalf("Failed weak-passphrase request: %v", err)
+	}
+	defer weakResp.Body.Close()
+	if weakResp.StatusCode != http.StatusBadRequest {
+		t.Errorf("Expected 400 for a weak passphrase, got %v", weakResp.Status)
+	}
+
+	// The response must never contain a passphrase.
+	body, _ := json.Marshal(map[string]interface{}{
+		"name": "no-secret-leak", "passphrase": apiWalletPassphrase,
+	})
+	resp, err := executeAuthorizedRequest("POST", baseURL+"/blockchain/wallets/new", body)
+	if err != nil {
+		t.Fatalf("Failed to create wallet: %v", err)
+	}
+	defer resp.Body.Close()
+	raw, _ := io.ReadAll(resp.Body)
+	if strings.Contains(string(raw), "passphrase") {
+		t.Errorf("wallet creation response leaked a passphrase: %s", raw)
 	}
 }
 
 func testWalletManagementEndpoints(t *testing.T) {
-	createResp, err := executeAuthorizedRequest("GET", baseURL+"/blockchain/wallets/new", nil)
-	if err != nil {
-		t.Fatalf("Failed to create wallet via management endpoint: %v", err)
-	}
-	defer createResp.Body.Close()
-
-	if createResp.StatusCode != http.StatusOK {
-		t.Fatalf("Expected status OK for wallet creation, got %v", createResp.Status)
-	}
-
-	var created struct {
-		WalletID   string `json:"wallet_id"`
-		Address    string `json:"address"`
-		Name       string `json:"name"`
-		Passphrase string `json:"passphrase"`
-	}
-	err = json.NewDecoder(createResp.Body).Decode(&created)
-	if err != nil {
-		t.Fatalf("Failed to decode wallet creation response: %v", err)
-	}
-
-	if created.Address == "" {
-		t.Fatal("wallet creation response missing address")
-	}
+	created := struct{ Address string }{Address: createWalletViaAPI(t, "management-test")}
 
 	listResp, err := executeAuthorizedRequest("GET", baseURL+"/blockchain/wallets", nil)
 	if err != nil {
@@ -953,7 +1123,7 @@ func testWalletManagementEndpoints(t *testing.T) {
 	}
 
 	updatePayload := map[string]interface{}{
-		"passphrase": created.Passphrase,
+		"passphrase": apiWalletPassphrase,
 		"name":       "UpdatedWalletName",
 		"tags":       []string{"api-updated", "wallet"},
 	}
@@ -977,7 +1147,7 @@ func testWalletManagementEndpoints(t *testing.T) {
 		t.Fatalf("Failed to reload updated wallet: %v", err)
 	}
 
-	err = updatedWallet.Unlock(created.Passphrase)
+	err = updatedWallet.Unlock(apiWalletPassphrase)
 	if err != nil {
 		t.Fatalf("Failed to unlock updated wallet: %v", err)
 	}
@@ -1267,13 +1437,32 @@ func testGlobalTransactionEndpoints(t *testing.T) {
 }
 
 func testTransactionCreation(t *testing.T) {
-	// This is a mock transaction creation test
-	// In a real scenario, you'd need to create wallets first
+	// A transaction between real wallets, signed with the sender's passphrase.
+	//
+	// This endpoint used to answer {"accepted":true} for the placeholder addresses
+	// below without creating, signing or queueing anything, so the test passed
+	// while nothing happened.
+	fromAddr := createWalletViaAPI(t, "tx-sender")
+	toAddr := createWalletViaAPI(t, "tx-recipient")
+
+	// Fund the sender through the wallet itself.
+	sender, err := OpenWallet(fromAddr, apiWalletPassphrase)
+	if err != nil {
+		t.Fatalf("Failed to open sender wallet: %v", err)
+	}
+	if err := sender.SetData("balance", 500.0); err != nil {
+		t.Fatalf("Failed to fund sender wallet: %v", err)
+	}
+	if err := sender.Close(apiWalletPassphrase); err != nil {
+		t.Fatalf("Failed to persist funded sender wallet: %v", err)
+	}
+
 	transaction := map[string]interface{}{
-		"protocol": "BANK",
-		"from":     "sender_address",
-		"to":       "recipient_address",
-		"amount":   100.0,
+		"protocol":   "BANK",
+		"from":       fromAddr,
+		"to":         toAddr,
+		"amount":     100.0,
+		"passphrase": apiWalletPassphrase,
 	}
 
 	jsonData, _ := json.Marshal(transaction)
@@ -1283,8 +1472,41 @@ func testTransactionCreation(t *testing.T) {
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusOK {
-		t.Errorf("Expected status OK, got %v", resp.Status)
+	if resp.StatusCode != http.StatusAccepted {
+		raw, _ := io.ReadAll(resp.Body)
+		t.Fatalf("Expected 202 for a valid transaction, got %v (%s)", resp.Status, raw)
+	}
+
+	var accepted struct {
+		Accepted bool   `json:"accepted"`
+		ID       string `json:"id"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&accepted); err != nil {
+		t.Fatalf("Failed to decode transaction response: %v", err)
+	}
+	if !accepted.Accepted || accepted.ID == "" {
+		t.Fatal("expected an accepted transaction with an ID")
+	}
+
+	// The transaction must actually be in the mempool, not merely reported as
+	// accepted.
+	if !testNode.Blockchain.HasTransactionID(accepted.ID) {
+		t.Fatal("accepted transaction did not reach the mempool")
+	}
+
+	// An unknown sender cannot be unlocked, so the request is refused.
+	unknown := map[string]interface{}{
+		"protocol": "BANK", "from": "sender_address", "to": toAddr,
+		"amount": 1.0, "passphrase": apiWalletPassphrase,
+	}
+	unknownJSON, _ := json.Marshal(unknown)
+	unknownResp, err := executeAuthorizedRequest("POST", baseURL+"/blockchain/wallets/tx", unknownJSON)
+	if err != nil {
+		t.Fatalf("Failed unknown-sender request: %v", err)
+	}
+	defer unknownResp.Body.Close()
+	if unknownResp.StatusCode != http.StatusUnauthorized {
+		t.Errorf("Expected 401 for an unknown sender wallet, got %v", unknownResp.Status)
 	}
 
 	invalidTx := map[string]interface{}{
@@ -1320,13 +1542,39 @@ func TestConsensusHandlers(t *testing.T) {
 		t.Fatalf("Expected 400 for invalid consensus tx payload, got %d", invalidRec.Code)
 	}
 
-	validTxPayload := map[string]interface{}{"id": "tx-1", "protocol": "BANK"}
-	validTxBody, _ := json.Marshal(validTxPayload)
-	validTxReq := httptest.NewRequest(http.MethodPost, "/consensus/tx", bytes.NewBuffer(validTxBody))
-	validTxRec := httptest.NewRecorder()
-	testNode.API.handleConsensusTx(validTxRec, validTxReq)
-	if validTxRec.Code != http.StatusOK {
-		t.Fatalf("Expected 200 for valid consensus tx payload, got %d", validTxRec.Code)
+	// A parseable but unsigned transaction is now rejected with 422 instead of
+	// being answered {"accepted":true} without inspection.
+	unsignedPayload := map[string]interface{}{
+		"id": "1:1:1:2", "protocol": "BANK", "version": 1, "amount": 1.0,
+		"from": "aa", "to": "bb",
+	}
+	unsignedBody, _ := json.Marshal(unsignedPayload)
+	unsignedReq := httptest.NewRequest(http.MethodPost, "/consensus/tx", bytes.NewBuffer(unsignedBody))
+	unsignedRec := httptest.NewRecorder()
+	testNode.API.handleConsensusTx(unsignedRec, unsignedReq)
+	if unsignedRec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("Expected 422 for an unsigned consensus tx, got %d", unsignedRec.Code)
+	}
+
+	// An unknown protocol is a decode failure, not an acceptance.
+	unknownBody, _ := json.Marshal(map[string]interface{}{"id": "1:1:1:3", "protocol": "NOPE"})
+	unknownReq := httptest.NewRequest(http.MethodPost, "/consensus/tx", bytes.NewBuffer(unknownBody))
+	unknownRec := httptest.NewRecorder()
+	testNode.API.handleConsensusTx(unknownRec, unknownReq)
+	if unknownRec.Code != http.StatusBadRequest {
+		t.Fatalf("Expected 400 for an unknown protocol, got %d", unknownRec.Code)
+	}
+
+	signedTx := buildSignedBankTransaction(t, 1.25)
+	signedBody, err := json.Marshal(signedTx)
+	if err != nil {
+		t.Fatalf("encode signed transaction: %v", err)
+	}
+	signedReq := httptest.NewRequest(http.MethodPost, "/consensus/tx", bytes.NewBuffer(signedBody))
+	signedRec := httptest.NewRecorder()
+	testNode.API.handleConsensusTx(signedRec, signedReq)
+	if signedRec.Code != http.StatusAccepted {
+		t.Fatalf("Expected 202 for a signed consensus tx, got %d (%s)", signedRec.Code, signedRec.Body.String())
 	}
 
 	invalidBlockReq := httptest.NewRequest(http.MethodPost, "/consensus/block", bytes.NewBufferString("not-json"))
@@ -1336,13 +1584,14 @@ func TestConsensusHandlers(t *testing.T) {
 		t.Fatalf("Expected 400 for invalid consensus block payload, got %d", invalidBlockRec.Code)
 	}
 
-	validBlockPayload := map[string]interface{}{"index": 1, "hash": "abc"}
+	// A block that does not extend the head is refused rather than "accepted".
+	validBlockPayload := map[string]interface{}{"index": "999999", "hash": "abc"}
 	validBlockBody, _ := json.Marshal(validBlockPayload)
 	validBlockReq := httptest.NewRequest(http.MethodPost, "/consensus/block", bytes.NewBuffer(validBlockBody))
 	validBlockRec := httptest.NewRecorder()
 	testNode.API.handleConsensusBlock(validBlockRec, validBlockReq)
-	if validBlockRec.Code != http.StatusOK {
-		t.Fatalf("Expected 200 for valid consensus block payload, got %d", validBlockRec.Code)
+	if validBlockRec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("Expected 422 for a block that does not extend the head, got %d", validBlockRec.Code)
 	}
 }
 
@@ -1487,4 +1736,43 @@ func TestBankTransaction(t *testing.T) {
 	// Optional: Verify wallet balances after transaction
 	t.Logf("Wallet 1 Balance After Tx: %.2f", wallet1.GetBalance())
 	t.Logf("Wallet 2 Balance After Tx: %.2f", wallet2.GetBalance())
+}
+
+// buildSignedBankTransaction creates a funded, signed Bank transaction suitable for
+// submission to /consensus/tx.
+func buildSignedBankTransaction(t *testing.T, amount float64) *Bank {
+	t.Helper()
+
+	pass := "Passw0rd!Passw0rd!"
+	from, err := NewWallet(NewWalletOptions(NewBigInt(1), NewBigInt(1), NewBigInt(1),
+		NewBigInt(time.Now().UnixNano()), "consensus-from", pass, []string{"test"}))
+	if err != nil {
+		t.Fatalf("create sender wallet: %v", err)
+	}
+	to, err := NewWallet(NewWalletOptions(NewBigInt(1), NewBigInt(1), NewBigInt(1),
+		NewBigInt(time.Now().UnixNano()+1), "consensus-to", pass, []string{"test"}))
+	if err != nil {
+		t.Fatalf("create recipient wallet: %v", err)
+	}
+
+	if err := from.Unlock(pass); err != nil {
+		t.Fatalf("unlock sender: %v", err)
+	}
+	if err := to.Unlock(pass); err != nil {
+		t.Fatalf("unlock recipient: %v", err)
+	}
+	if err := from.SetData("balance", amount+100.0); err != nil {
+		t.Fatalf("fund sender: %v", err)
+	}
+
+	tx, err := NewBankTransaction(from, to, amount)
+	if err != nil {
+		t.Fatalf("create bank transaction: %v", err)
+	}
+
+	tx.Signature, err = tx.Sign([]byte(from.PrivatePEM()))
+	if err != nil {
+		t.Fatalf("sign bank transaction: %v", err)
+	}
+	return tx
 }

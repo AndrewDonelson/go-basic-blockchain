@@ -106,6 +106,17 @@ By the end of this course, you will have:
 5. **Test your knowledge**: Take the quizzes at the end of each section
 6. **Review answers**: Check your understanding with the provided answer keys
 
+### **Security Case Studies**
+
+Alongside the phases, read [**Security Case Studies**](./SECURITY_CASE_STUDIES.md).
+It walks through thirteen real defects that shipped in this codebase — signature
+forgery, a proof of work that proved nothing, a `Open()` that deleted private
+keys, deadlocks, a chain that never persisted — with the cause of each and the
+regression test that now guards it.
+
+It is the most useful thing in this course. Working code shows you one way that
+works; these show you the ways that look like they work and do not.
+
 ### **Detailed Course Navigation**
 
 For a complete course overview with detailed navigation, progress tracking, and learning paths, see our [Complete Course Overview & Navigation Guide](./COURSE_OVERVIEW.md).

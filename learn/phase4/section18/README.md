@@ -1301,4 +1301,4 @@ blockchain/
 
 **Ready to make your blockchain production-ready? Let's start implementing production-grade features! 🚀**
 
-Next: [Section 19: Course Project & Next Steps](./section19/README.md)
+Next: [Section 19: Course Project & Next Steps](../section19/README.md)

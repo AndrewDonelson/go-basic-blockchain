@@ -184,24 +184,29 @@ func TestGenerateAPIKey(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NotEmpty(t, apiKey)
 	assert.NotEmpty(t, hashedKey)
-	assert.Len(t, apiKey, 32)    // 16 bytes as hex = 32 characters
+	assert.Len(t, apiKey, 64)    // 32 bytes as hex = 64 characters
 	assert.Len(t, hashedKey, 64) // SHA-256 hash as hex = 64 characters
 }
 
-// TestGenerateAPIKeyForEmail tests the generateAPIKeyForEmail function
-func TestGenerateAPIKeyForEmail(t *testing.T) {
-	email := "test@example.com"
-	key := generateAPIKeyForEmail(email)
-	assert.NotEmpty(t, key)
-	assert.Len(t, key, 64) // SHA-256 hash as hex = 64 characters
+// TestGeneratedAPIKeysAreUnique replaces TestGenerateAPIKeyForEmail.
+//
+// generateAPIKeyForEmail derived a key as SHA256(serverSeed + email): deterministic,
+// unrevocable, and forgeable by anyone who knew the seed -- which was a constant
+// published in this repository. Keys are now random per issuance and only their
+// hash is stored.
+func TestGeneratedAPIKeysAreUnique(t *testing.T) {
+	seen := make(map[string]struct{})
+	for i := 0; i < 100; i++ {
+		key, hashed, err := generateAPIKey()
+		assert.NoError(t, err)
+		assert.Len(t, key, 64)
+		assert.Len(t, hashed, 64)
+		assert.Equal(t, hashAPIKey(key), hashed)
 
-	// Test that the same email produces the same key
-	key2 := generateAPIKeyForEmail(email)
-	assert.Equal(t, key, key2)
-
-	// Test that different emails produce different keys
-	key3 := generateAPIKeyForEmail("other@example.com")
-	assert.NotEqual(t, key, key3)
+		_, dup := seen[key]
+		assert.False(t, dup, "generateAPIKey produced a duplicate key")
+		seen[key] = struct{}{}
+	}
 }
 
 // TestBearerToken tests the bearerToken function

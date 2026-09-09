@@ -14,8 +14,12 @@
 # Test folder with output
 test/
 
-# do not allow saving of .env file
+# do not allow saving of .env files (the bare ".env" pattern did not match
+# ".local.env", which is why that file was committed)
 .env
+.env.*
+*.env
+!.env.example
 
 # Output of the go coverage tool, specifically when used with LiteIDE
 *.out
@@ -27,6 +31,11 @@ test/
 go.work
 
 bin/
+
+# Compiled binaries. A 15 MB `chaind` binary was committed to the repository.
+chaind
+gbb-cli
+/demo
 
 # Blockchain data folders and files
 _data/
@@ -189,3 +198,6 @@ desktop.ini
 *.lookup
 *.state.backup
 *.db.backup
+
+# Design/analysis working documents (local only)
+_design/

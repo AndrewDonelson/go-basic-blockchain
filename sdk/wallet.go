@@ -13,10 +13,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
 	"path/filepath"
+	"strings"
 	"sync"
-	"testing"
 
 	"golang.org/x/crypto/scrypt"
 )
@@ -91,10 +90,31 @@ type Wallet struct {
 }
 
 // EncryptionParams holds the encryption parameters for the private key.
+//
+// The scrypt cost parameters are recorded per wallet. They used to be chosen at
+// runtime from testing.Testing() and never written down, so a wallet created under
+// test could not be opened in production (and vice versa) -- the KDF silently
+// derived a different key and decryption failed with no explanation.
 type EncryptionParams struct {
-	SaltSize  int // Size of the salt used for key derivation
-	NonceSize int // Size of the nonce used for encryption
+	SaltSize  int `json:"salt_size"`  // Size of the salt used for key derivation
+	NonceSize int `json:"nonce_size"` // Size of the AES-GCM nonce
+	ScryptN   int `json:"scrypt_n"`   // scrypt CPU/memory cost
+	ScryptR   int `json:"scrypt_r"`   // scrypt block size
+	ScryptP   int `json:"scrypt_p"`   // scrypt parallelisation
 }
+
+// scryptParams holds a scrypt cost profile.
+type scryptParams struct{ N, R, P int }
+
+var (
+	// productionScryptParams is the cost profile used for real wallets.
+	productionScryptParams = scryptParams{N: 1048576, R: 8, P: 1} // 2^20
+	// fastScryptParams is a deliberately cheap profile used only by the test suite.
+	fastScryptParams = scryptParams{N: 16384, R: 8, P: 1} // 2^14
+	// defaultScryptParams is what new wallets are created with. Tests lower it via
+	// an init() in the test build so the production code no longer imports "testing".
+	defaultScryptParams = productionScryptParams
+)
 
 // NewEncryptionParams creates a new EncryptionParams struct with the specified salt and nonce sizes.
 // The salt size and nonce size are used to configure the encryption parameters for a wallet's private key.
@@ -102,13 +122,25 @@ func NewEncryptionParams(saltSize, nonceSize int) *EncryptionParams {
 	return &EncryptionParams{
 		SaltSize:  saltSize,
 		NonceSize: nonceSize,
+		ScryptN:   defaultScryptParams.N,
+		ScryptR:   defaultScryptParams.R,
+		ScryptP:   defaultScryptParams.P,
 	}
 }
 
 // NewDefaultEncryptionParams creates a new EncryptionParams struct with default values.
-// The default salt size is 32 bytes and the default nonce size is 12 bytes.
+// The default salt size is 32 bytes and the default AES-GCM nonce size is 12 bytes.
 func NewDefaultEncryptionParams() *EncryptionParams {
-	return NewEncryptionParams(saltSize, maxNonce)
+	return NewEncryptionParams(saltSize, gcmNonceSize)
+}
+
+// scrypt returns the cost profile recorded in these params, falling back to the
+// production profile for wallets written before the parameters were persisted.
+func (e *EncryptionParams) scrypt() scryptParams {
+	if e == nil || e.ScryptN == 0 {
+		return productionScryptParams
+	}
+	return scryptParams{N: e.ScryptN, R: e.ScryptR, P: e.ScryptP}
 }
 
 // NewWallet creates a new wallet with a unique ID, name, and set of tags.
@@ -129,12 +161,17 @@ func NewWallet(options *WalletOptions) (*Wallet, error) {
 	// Create a new wallet with a unique ID, name, and set of tags.
 	LogInfof("Creating wallet: %s", options.Name)
 	wallet := &Wallet{
-		ID:               NewPUID(options.OrganizationID, options.AppID, options.UserID, NewBigInt(0)),
+		// options.AssetID was previously discarded and replaced with 0, so every
+		// wallet in the system shared the identity <org>:<app>:<user>:0.
+		ID:               NewPUID(options.OrganizationID, options.AppID, options.UserID, options.AssetID),
 		Address:          "",
 		Encrypted:        false,
 		EncryptionParams: NewDefaultEncryptionParams(),
-		vault:            NewVaultWithData(options.Name, options.Tags, float64(fundWalletAmount)),
-		Ciphertext:       []byte{},
+		// Balance starts at zero. Seeding it with fundWalletAmount created tokens
+		// out of nothing on every wallet creation, and NewBankTransaction then
+		// checked affordability against that fabricated number.
+		vault:      NewVaultWithData(options.Name, options.Tags, 0),
+		Ciphertext: []byte{},
 	}
 
 	// Generate a new private key.
@@ -146,9 +183,9 @@ func NewWallet(options *WalletOptions) (*Wallet, error) {
 	wallet.GetAddress()
 
 	// if verbose {
-	// 	log.Printf("Created new Wallet: %+v", PrettyPrint(wallet))
+	// 	LogVerbosef("Created new Wallet: %+v", PrettyPrint(wallet))
 	// } else {
-	// 	log.Printf("Created new Wallet: %s", wallet.GetAddress())
+	// 	LogVerbosef("Created new Wallet: %s", wallet.GetAddress())
 	// }
 
 	LogVerbosef("Wallet created: %s", wallet.GetAddress())
@@ -208,11 +245,15 @@ func (w *Wallet) GetWalletName() string {
 
 	name, err := w.GetData("name")
 	if err != nil {
-		log.Println(err)
+		LogInfof("error reading wallet name: %v", err)
 		return ""
 	}
 
-	return name.(string)
+	str, ok := name.(string)
+	if !ok {
+		return ""
+	}
+	return str
 }
 
 // GetBalance returns the wallet balance from the data (keypairs) associated with the wallet.
@@ -226,13 +267,13 @@ func (w *Wallet) GetBalance() float64 {
 
 	balance, err := w.GetData("balance")
 	if err != nil {
-		log.Println(err)
+		LogVerbosef("wallet data error: %v", err)
 		return 0
 	}
 
 	convertedBalance, err := ConvertToFloat64(balance)
 	if err != nil {
-		log.Printf("Error converting balance: %v", err)
+		LogVerbosef("Error converting balance: %v", err)
 		return 0
 	}
 	return convertedBalance
@@ -247,7 +288,7 @@ func (w *Wallet) GetTags() []string {
 	}
 	tags, err := w.GetData("tags")
 	if err != nil {
-		log.Println(err)
+		LogVerbosef("wallet data error: %v", err)
 		return nil
 	}
 	// Handle both []string and []interface{} (from JSON)
@@ -281,7 +322,7 @@ func (w *Wallet) GetAddress() string {
 	// Generate an address by hashing the public key and encoding it in hexadecimal.
 	pubBytes, err := w.PublicBytes()
 	if err != nil {
-		log.Printf("Error getting public key bytes: %s", err)
+		LogVerbosef("Error getting public key bytes: %s", err)
 		return ""
 	}
 
@@ -327,7 +368,7 @@ func (w *Wallet) PrivateBytes() ([]byte, error) {
 		return nil, errors.New("cannot get private key from an encrypted wallet")
 	}
 
-	if w.vault.Key == nil {
+	if w.vault == nil || w.vault.Key == nil {
 		return nil, errors.New("private key is nil")
 	}
 
@@ -347,7 +388,7 @@ func (w *Wallet) PrivatePEM() string {
 		return ""
 	}
 
-	if w.vault.Key == nil {
+	if w.vault == nil || w.vault.Key == nil || w.vault.Pem == nil {
 		return ""
 	}
 
@@ -362,7 +403,7 @@ func (w *Wallet) PublicKey() (*ecdsa.PublicKey, error) {
 		return nil, errors.New("cannot get public key from an encrypted wallet")
 	}
 
-	if w.vault.Key.PublicKey == (ecdsa.PublicKey{}) {
+	if w.vault == nil || w.vault.Key == nil || w.vault.Key.Curve == nil {
 		return nil, errors.New("public key is nil")
 	}
 
@@ -378,23 +419,22 @@ func (w *Wallet) PublicBytes() ([]byte, error) {
 		return nil, errors.New("cannot get public key from an encrypted wallet")
 	}
 
+	if w.vault == nil || w.vault.Key == nil {
+		return nil, errors.New("public key is nil")
+	}
+
 	pub := w.vault.Key.Public()
 	if pub == nil {
 		return nil, errors.New("public key is nil")
 	}
 
-	// Diagnostic: log the type
-	log.Printf("Public key type: %T", pub)
-	if ecdsaPub, ok := pub.(*ecdsa.PublicKey); ok {
-		log.Printf("Public key curve: %T", ecdsaPub.Curve)
-	} else {
+	if _, ok := pub.(*ecdsa.PublicKey); !ok {
 		return nil, errors.New("public key is not of type *ecdsa.PublicKey")
 	}
 
 	bytes, err := x509.MarshalPKIXPublicKey(pub)
 	if err != nil {
-		log.Printf("x509.MarshalPKIXPublicKey error: %v", err)
-		return nil, err
+		return nil, fmt.Errorf("failed to marshal public key: %w", err)
 	}
 
 	return bytes, nil
@@ -409,7 +449,9 @@ func (w *Wallet) PublicPEM() string {
 		return ""
 	}
 
-	if w.vault.Key.Public() == nil {
+	// Only the PEM is required: a wallet reconstructed from a block carries the
+	// public key for signature verification but has no private key.
+	if w.vault == nil || w.vault.Pem == nil {
 		return ""
 	}
 
@@ -422,7 +464,7 @@ func (w *Wallet) PublicPEM() string {
 // If the wallet has sufficient funds, it prints a log message and sends the transaction to the blockchain.
 // If the transaction is successfully sent, it returns the transaction.
 // If there is an error sending the transaction, it returns the error.
-func (w *Wallet) SendTransaction(to string, tx Transaction, bc *Blockchain) (*Transaction, error) {
+func (w *Wallet) SendTransaction(tx Transaction, bc *Blockchain) (*Transaction, error) {
 	if w.Encrypted {
 		return nil, errors.New("cannot send transaction from an encrypted wallet")
 	}
@@ -435,7 +477,7 @@ func (w *Wallet) SendTransaction(to string, tx Transaction, bc *Blockchain) (*Tr
 		return nil, fmt.Errorf("insufficient funds")
 	}
 
-	log.Printf("Sending TX (%s): %+v", tx.GetProtocol(), tx)
+	LogVerbosef("Sending TX (%s): %s", tx.GetProtocol(), tx.GetID())
 
 	// Send the transaction to the network.
 	err := tx.Send(bc)
@@ -483,7 +525,12 @@ func (w *Wallet) encrypt(key, data []byte) ([]byte, error) {
 // using the provided key and the extracted salt. It then uses the derived key to decrypt the ciphertext
 // using AES-GCM. The decrypted plaintext is returned.
 func (w *Wallet) decrypt(key, data []byte) ([]byte, error) {
-	salt, data := data[len(data)-32:], data[:len(data)-32]
+	// The salt is appended to the ciphertext by encrypt(). Slicing it off without
+	// a length check panicked on any short or corrupt payload.
+	if len(data) <= saltSize {
+		return nil, errors.New("ciphertext is too short to contain a salt")
+	}
+	salt, data := data[len(data)-saltSize:], data[:len(data)-saltSize]
 
 	key, _, err := w.deriveKey(key, salt)
 	if err != nil {
@@ -522,21 +569,11 @@ func (w *Wallet) deriveKey(password, salt []byte) ([]byte, []byte, error) {
 		}
 	}
 
-	// Use faster scrypt parameters for tests
-	var N, r, p int
-	if testing.Testing() {
-		// Fast parameters for tests
-		N = 16384 // 2^14 instead of 2^20
-		r = 8
-		p = 1
-	} else {
-		// Secure parameters for production
-		N = 1048576 // 2^20
-		r = 8
-		p = 1
-	}
+	// Use the cost profile recorded on this wallet, so a wallet always decrypts
+	// with the same parameters it was encrypted with.
+	sp := w.EncryptionParams.scrypt()
 
-	key, err := scrypt.Key(password, salt, N, r, p, 32)
+	key, err := scrypt.Key(password, salt, sp.N, sp.R, sp.P, 32)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -566,7 +603,7 @@ func (w *Wallet) Lock(passphrase string) error {
 	}
 
 	if verbose {
-		log.Printf("Locking wallet [%s]", w.ID)
+		LogVerbosef("Locking wallet [%s]", w.ID)
 	}
 
 	// Convert the passphrase to bytes.
@@ -588,7 +625,7 @@ func (w *Wallet) Lock(passphrase string) error {
 	w.Encrypted = true
 
 	if verbose {
-		log.Printf("Wallet [%s] locked", w.ID)
+		LogVerbosef("Wallet [%s] locked", w.ID)
 	}
 
 	return nil
@@ -608,7 +645,7 @@ func (w *Wallet) Unlock(passphrase string) error {
 	// Check if the wallet is already decrypted.
 	if w.Encrypted {
 		if verbose {
-			log.Printf("Unlocking wallet [%s]", w.ID)
+			LogVerbosef("Unlocking wallet [%s]", w.ID)
 		}
 
 		// Convert the passphrase to bytes.
@@ -620,9 +657,10 @@ func (w *Wallet) Unlock(passphrase string) error {
 			return err
 		}
 
+		// Swallowing this error used to leave Encrypted=false with a nil vault,
+		// so the next PrivatePEM()/PublicPEM() call nil-dereferenced.
 		if err := w.bytesToVault(dataAsBytes); err != nil {
-			// Log error but continue
-			_ = err // Suppress unused variable warning
+			return fmt.Errorf("failed to restore wallet vault: %w", err)
 		}
 
 		// Set the wallet's data.
@@ -651,62 +689,91 @@ func (w *Wallet) Close(passphrase string) error {
 	}
 
 	if verbose {
-		log.Printf("Wallet [%s] saved to disk", w.ID)
+		LogVerbosef("Wallet [%s] saved to disk", w.ID)
 	}
 
 	return nil
 }
 
-// Open loads the wallet from disk that was saved as a JSON file.
-// It also unlocks the value and restores the wallet.vault object.
+// Open loads the wallet from disk that was saved as a JSON file and, when a
+// passphrase is supplied, unlocks it so wallet.vault is usable.
+//
+// This previously called localStorage.Set, i.e. it *overwrote* the stored wallet
+// with whatever was in memory. LocalWalletList builds an empty Wallet shell per
+// file and calls Open on it, so listing wallets destroyed every private key on
+// disk. Loading must never write.
+//
+// An empty passphrase loads metadata only and leaves the wallet locked; any
+// non-empty passphrase must successfully unlock or Open reports an error rather
+// than silently returning a still-locked wallet.
 func (w *Wallet) Open(passphrase string) error {
-	err := localStorage.Set("wallet", w)
-	if err != nil {
-		return err
+	if w.Address == "" {
+		return errors.New("cannot open a wallet without an address")
 	}
 
-	if len(passphrase) >= 12 {
-		err = w.Unlock(passphrase)
-		if err != nil {
-			return fmt.Errorf("failed to load wallet: %v", err)
+	if err := localStorage.Get("wallet", w); err != nil {
+		return fmt.Errorf("failed to load wallet: %w", err)
+	}
+
+	if passphrase != "" {
+		if err := w.Unlock(passphrase); err != nil {
+			return fmt.Errorf("failed to unlock wallet: %w", err)
 		}
 	}
 
-	if verbose {
-		log.Printf("Wallet [%s] loaded (locked: %v) from disk", w.ID, w.Encrypted)
-	}
+	LogVerbosef("Wallet [%s] loaded (locked: %v) from disk", w.ID, w.Encrypted)
 
 	return nil
+}
+
+// ListWalletAddresses returns the addresses of every wallet on disk.
+//
+// It reads filenames only. LocalWalletList used to load each wallet through
+// Wallet.Open, which wrote instead of read and so destroyed every key file it
+// touched.
+func ListWalletAddresses() ([]string, error) {
+	ls, err := GetLocalStorage()
+	if err != nil {
+		return nil, err
+	}
+
+	files, err := filepath.Glob(filepath.Join(ls.dataPath, "wallets", "*.json"))
+	if err != nil {
+		return nil, fmt.Errorf("failed to list wallets: %w", err)
+	}
+
+	addresses := make([]string, 0, len(files))
+	for _, file := range files {
+		name := filepath.Base(file)
+		addresses = append(addresses, strings.TrimSuffix(name, filepath.Ext(name)))
+	}
+
+	return addresses, nil
+}
+
+// OpenWallet loads a wallet from disk and unlocks it with the given passphrase.
+func OpenWallet(address, passphrase string) (*Wallet, error) {
+	if address == "" {
+		return nil, errors.New("wallet address is required")
+	}
+
+	wallet := &Wallet{Address: address}
+	if err := wallet.Open(passphrase); err != nil {
+		return nil, err
+	}
+	return wallet, nil
 }
 
 // LocalWalletList searches the wallet folder for all JSON files, loads each one, and displays the Wallet ID, Name, Address, and Tags.
 func LocalWalletList() error {
-	walletList := make([]string, 0)
-
-	files, err := filepath.Glob(filepath.Join(walletFolder, "*.json"))
+	addresses, err := ListWalletAddresses()
 	if err != nil {
-		return fmt.Errorf("failed to list wallets: %v", err)
+		return err
 	}
 
-	for _, file := range files {
-		// Get the base name of the file without the extension
-		address := filepath.Base(file[:len(file)-len(filepath.Ext(file))])
-
-		wallet := &Wallet{Address: address}
-		err := wallet.Open("")
-		if err != nil {
-			log.Printf("Failed to load wallet from file %s: %v", file, err)
-			continue
-		}
-
-		walletList = append(walletList, fmt.Sprintf("ID: %s, Name: %s, Address: %s, Tags: %v", wallet.ID, wallet.GetWalletName(), wallet.GetAddress(), wallet.GetTags()))
-	}
-
-	log.Printf("Wallets in %s: %d", walletFolder, len(walletList))
-	if len(walletList) == 0 {
-		log.Println("No wallets found")
-	} else {
-		log.Println(PrettyPrint(walletList))
+	LogInfof("Wallets found: %d", len(addresses))
+	for _, address := range addresses {
+		LogInfof("  %s", address)
 	}
 
 	return nil

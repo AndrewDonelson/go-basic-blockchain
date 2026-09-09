@@ -527,4 +527,4 @@ func TestAuthenticationBypass(t *testing.T) {
 
 **Great job completing Section 16! 🎉**
 
-Ready for the next challenge? Move on to [Section 17: Build System & Deployment](./section17/README.md)!
+Ready for the next challenge? Move on to [Section 17: Build System & Deployment](../section17/README.md)!

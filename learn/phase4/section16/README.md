@@ -775,4 +775,4 @@ blockchain/
 
 **Ready to ensure your blockchain is reliable and secure? Let's start implementing comprehensive testing strategies! 🚀**
 
-Next: [Section 17: Build System & Deployment](./section17/README.md)
+Next: [Section 17: Build System & Deployment](../section17/README.md)

@@ -262,7 +262,7 @@ go test ./sdk -timeout 60s
 1. **Check the logs**: Look for error messages in console output
 2. **Verify prerequisites**: Ensure Go 1.19+ is installed
 3. **Check network**: Ensure port 8200 is available
-4. **Review documentation**: See [Troubleshooting](troubleshooting.md) for more details
+4. **Review documentation**: See Troubleshooting (guide not yet written) for more details
 
 ## 📚 Next Steps
 

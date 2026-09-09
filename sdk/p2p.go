@@ -17,6 +17,30 @@ type NodeInfo struct {
 	Address string `json:"address"`
 }
 
+const (
+	// maxP2PMessageSize caps a single peer message. Without a cap a peer could
+	// stream bytes without a newline until the process ran out of memory.
+	maxP2PMessageSize = 1 << 20 // 1 MiB
+	// p2pReadTimeout bounds how long a peer may keep a connection idle.
+	p2pReadTimeout = 60 * time.Second
+	// p2pHandshakeTimeout bounds the handshake exchange.
+	p2pHandshakeTimeout = 10 * time.Second
+)
+
+// readLimitedLine reads a newline-terminated message from an already size-limited
+// reader, converting a truncated read into an explicit error rather than silently
+// treating a partial message as complete.
+func readLimitedLine(reader *bufio.Reader) (string, error) {
+	message, err := reader.ReadString('\n')
+	if err != nil {
+		if errors.Is(err, io.EOF) && message != "" {
+			return "", fmt.Errorf("peer message exceeded %d bytes or was truncated", maxP2PMessageSize)
+		}
+		return "", err
+	}
+	return message, nil
+}
+
 // P2PTransactionState represents the current state of a P2P transaction
 type P2PTransactionState int
 
@@ -94,12 +118,66 @@ type P2P struct {
 }
 
 // P2PTransaction represents a transaction to be processed.
+//
+// Data is json.RawMessage rather than interface{}: after a JSON round-trip an
+// interface{} is never []byte (it is nil, a string, or a map), so the
+// `tx.Data.([]byte)` assertions this type used to require either panicked or
+// silently failed on every message that arrived over the wire.
 type P2PTransaction struct {
-	Tx
-	Target string
-	Action string
-	State  P2PTransactionState
-	Data   interface{}
+	Tx     `json:"tx"`
+	Target string              `json:"target"`
+	Action string              `json:"action"`
+	State  P2PTransactionState `json:"state"`
+	Data   json.RawMessage     `json:"data"`
+}
+
+// p2pTransactionWire is the on-the-wire shape of a P2PTransaction.
+//
+// P2PTransaction embeds Tx, which defines MarshalJSON on a pointer receiver. Go
+// promotes that method, so json.Marshal(&p2pTx) used to serialise *only the base
+// transaction* and silently drop Target, Action, State and Data -- every P2P
+// message on the network was undispatchable. Explicit marshalling keeps the
+// envelope intact.
+type p2pTransactionWire struct {
+	Tx     json.RawMessage     `json:"tx"`
+	Target string              `json:"target"`
+	Action string              `json:"action"`
+	State  P2PTransactionState `json:"state"`
+	Data   json.RawMessage     `json:"data"`
+}
+
+// MarshalJSON serialises the full P2P envelope.
+func (p P2PTransaction) MarshalJSON() ([]byte, error) {
+	base := p.Tx
+	txBytes, err := json.Marshal(&base)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal embedded transaction: %w", err)
+	}
+	return json.Marshal(p2pTransactionWire{
+		Tx:     txBytes,
+		Target: p.Target,
+		Action: p.Action,
+		State:  p.State,
+		Data:   p.Data,
+	})
+}
+
+// UnmarshalJSON restores the full P2P envelope.
+func (p *P2PTransaction) UnmarshalJSON(data []byte) error {
+	var wire p2pTransactionWire
+	if err := json.Unmarshal(data, &wire); err != nil {
+		return err
+	}
+	if len(wire.Tx) > 0 {
+		if err := json.Unmarshal(wire.Tx, &p.Tx); err != nil {
+			return fmt.Errorf("failed to unmarshal embedded transaction: %w", err)
+		}
+	}
+	p.Target = wire.Target
+	p.Action = wire.Action
+	p.State = wire.State
+	p.Data = wire.Data
+	return nil
 }
 
 // NewP2P creates a new P2P network.
@@ -139,21 +217,33 @@ func (p *P2P) IsRegistered(nodeID string) bool {
 
 // BroadcastMessage broadcasts a p2p message to all nodes in the network
 func (p *P2P) BroadcastMessage(msg P2PTransaction) error {
-	p.mutex.RLock()
-	defer p.mutex.RUnlock()
-
-	if len(p.nodes) == 0 {
+	peers := p.peerSnapshot()
+	if len(peers) == 0 {
 		return errors.New("no nodes in the network to broadcast to")
 	}
 
-	for _, node := range p.nodes {
-		err := node.ProcessP2PTransaction(msg)
-		if err != nil {
+	for _, node := range peers {
+		if err := node.ProcessP2PTransaction(msg); err != nil {
 			LogInfof("Error broadcasting to node %s: %v", node.ID, err)
 		}
 	}
 
 	return nil
+}
+
+// peerSnapshot returns the currently registered peers. Callers iterate the copy so
+// they never hold p.mutex while calling back into node code that re-enters it.
+func (p *P2P) peerSnapshot() []*Node {
+	p.mutex.RLock()
+	defer p.mutex.RUnlock()
+
+	peers := make([]*Node, 0, len(p.nodes))
+	for _, node := range p.nodes {
+		if node != nil {
+			peers = append(peers, node)
+		}
+	}
+	return peers
 }
 
 // AddTransaction adds a new transaction to the processing queue.
@@ -171,6 +261,9 @@ func (p *P2P) HasTransaction(id *PUID) bool {
 	defer p.mutex.RUnlock()
 
 	for _, node := range p.nodes {
+		if node == nil || node.Blockchain == nil {
+			continue
+		}
 		if node.Blockchain.HasTransaction(id) {
 			LogInfof("Transaction found in the network: %s", id)
 			return true
@@ -182,31 +275,40 @@ func (p *P2P) HasTransaction(id *PUID) bool {
 }
 
 // ProcessQueue processes the pending transactions in the queue.
+//
+// The queue is drained under the lock and then processed *without* it. Previously
+// this held p.mutex for the whole loop while calling handlers that each took
+// p.mutex again -- sync.Mutex is not reentrant, so the first "add"/"remove"/
+// "status"/"register" message deadlocked the P2P subsystem for the process
+// lifetime. (sdk/p2p_test.go skipped TestProcessQueue because of exactly this.)
 func (p *P2P) ProcessQueue() {
 	p.mutex.Lock()
-	defer p.mutex.Unlock()
+	pending := p.queue
+	p.queue = []P2PTransaction{}
+	p.mutex.Unlock()
 
-	for _, tx := range p.queue {
-		LogVerbosef("Processing transaction: %s (%s)", tx.ID, tx.Action)
+	for _, tx := range pending {
+		LogVerbosef("Processing transaction: %s (%s)", tx.GetID(), tx.Action)
 
+		var err error
 		switch tx.Action {
 		case "validate":
 			p.validateTransaction(tx)
 		case "status":
-			p.updateNodeStatus(tx)
+			err = p.updateNodeStatus(tx)
 		case "add":
-			p.addNode(tx)
+			err = p.addNode(tx)
 		case "remove":
-			p.removeNode(tx)
+			err = p.removeNode(tx)
 		case "register":
-			p.registerNode(tx)
+			err = p.registerNode(tx)
 		default:
-			LogInfof("Unknown transaction action: %s", tx.Action)
+			err = fmt.Errorf("unknown transaction action: %s", tx.Action)
+		}
+		if err != nil {
+			LogInfof("Error processing P2P transaction %s (%s): %v", tx.GetID(), tx.Action, err)
 		}
 	}
-
-	// Clear the queue
-	p.queue = []P2PTransaction{}
 }
 
 // Broadcast broadcasts a P2PTransaction to nodes in the network.
@@ -215,23 +317,31 @@ func (p *P2P) Broadcast(tx P2PTransaction) error {
 	if node := GetNode(); node != nil && node.ProgressIndicator != nil {
 		node.ProgressIndicator.UpdateAction("Broadcasting")
 	}
-	p.mutex.RLock()
-	defer p.mutex.RUnlock()
-
-	if len(p.nodes) == 0 {
-		LogInfof("No nodes to broadcast to")
+	// Snapshot under the read lock, then deliver without it: ProcessP2PTransaction
+	// reaches back into the P2P layer, which would re-enter this mutex.
+	peers := p.peerSnapshot()
+	if len(peers) == 0 {
+		LogVerbosef("No nodes to broadcast to")
 		return nil
 	}
 
-	for _, node := range p.nodes {
-		LogInfof("Broadcasting to node: %s", node.ID)
-		err := node.ProcessP2PTransaction(tx)
-		if err != nil {
+	// Deliver to every peer. Returning on the first failure meant one unreachable
+	// peer silently prevented delivery to all the peers after it.
+	var failures []string
+	for _, node := range peers {
+		LogVerbosef("Broadcasting to node: %s", node.ID)
+		if err := node.ProcessP2PTransaction(tx); err != nil {
 			LogInfof("Error broadcasting to node %s: %v", node.ID, err)
-			return fmt.Errorf("error broadcasting to node %s: %w", node.ID, err)
+			failures = append(failures, node.ID)
 		}
 	}
-	LogInfof("Broadcasted transaction: %s", tx.ID)
+
+	if len(failures) > 0 {
+		return fmt.Errorf("broadcast failed for %d of %d nodes: %s",
+			len(failures), len(peers), strings.Join(failures, ", "))
+	}
+
+	LogVerbosef("Broadcasted transaction: %s", tx.GetID())
 	return nil
 }
 
@@ -329,7 +439,14 @@ func (p *P2P) listenForConnections() {
 	for p.IsRunning() {
 		conn, err := p.listener.Accept()
 		if err != nil {
+			// A closed listener returns an error on every call, so `continue`
+			// here span the CPU at 100% after Stop().
+			if errors.Is(err, net.ErrClosed) || !p.IsRunning() {
+				return
+			}
 			LogInfof("Error accepting connection: %v", err)
+			// Back off so a persistent accept error cannot become a hot loop.
+			time.Sleep(100 * time.Millisecond)
 			continue
 		}
 		go p.handleConnection(conn)
@@ -347,29 +464,36 @@ func (p *P2P) handleConnection(conn net.Conn) {
 		return
 	}
 
-	// Read and process messages
-	reader := bufio.NewReader(conn)
+	// Read and process messages.
+	//
+	// Every read is bounded in both size and time. bufio.Reader.ReadString has no
+	// size limit, so a peer that never sent a newline could exhaust memory, and
+	// with no deadline a peer that simply stalled held a goroutine forever.
+	reader := bufio.NewReader(io.LimitReader(conn, maxP2PMessageSize))
 	for {
-		message, err := reader.ReadString('\n')
-		if err != nil {
-			if err != io.EOF {
-				LogInfof("Error reading message: %v", err)
-			}
-			break
+		if err := conn.SetReadDeadline(time.Now().Add(p2pReadTimeout)); err != nil {
+			LogInfof("Error setting read deadline: %v", err)
+			return
 		}
 
-		// Process the message
-		err = p.processMessage(strings.TrimSpace(message), conn)
+		message, err := readLimitedLine(reader)
 		if err != nil {
+			if !errors.Is(err, io.EOF) {
+				LogInfof("Error reading message: %v", err)
+			}
+			return
+		}
+
+		if err := p.processMessage(strings.TrimSpace(message), conn); err != nil {
 			LogInfof("Error processing message: %v", err)
-			break
+			return
 		}
 	}
 }
 
 func (p *P2P) performHandshake(conn net.Conn) error {
 	// Set a timeout for the handshake
-	if err := conn.SetDeadline(time.Now().Add(10 * time.Second)); err != nil {
+	if err := conn.SetDeadline(time.Now().Add(p2pHandshakeTimeout)); err != nil {
 		// Log error but continue
 		_ = err // Suppress unused variable warning
 	}
@@ -440,8 +564,11 @@ func (p *P2P) sendNodeList(conn net.Conn) error {
 	p.mutex.RLock()
 	defer p.mutex.RUnlock()
 
-	var nodeList []NodeInfo
+	nodeList := make([]NodeInfo, 0, len(p.nodes))
 	for _, node := range p.nodes {
+		if node == nil || node.Config == nil {
+			continue
+		}
 		nodeList = append(nodeList, NodeInfo{
 			ID:      node.ID,
 			Address: node.Config.P2PHostName,
@@ -472,27 +599,43 @@ func (p *P2P) processP2PTransaction(message string) error {
 	return nil
 }
 
+// discoverNodes asks known peers for their peer lists and registers anything new.
+//
+// It snapshots the peer set under a read lock and then performs network I/O and
+// registration *without* holding it. The previous version held RLock across the
+// whole loop while calling getSelfNodeID (RLock), IsRegistered (RLock) and
+// RegisterNode (Lock): recursive RLock on sync.RWMutex is documented as illegal
+// and deadlocks when a writer is queued, and the nested Lock deadlocked outright.
+// It also indexed p.nodes[p.getSelfNodeID()] which returns nil when the self node
+// is not registered, then dereferenced it.
 func (p *P2P) discoverNodes() {
-	p.mutex.RLock()
-	defer p.mutex.RUnlock()
+	selfID := p.getSelfNodeID()
 
-	for _, node := range p.nodes {
-		if node.ID != p.nodes[p.getSelfNodeID()].ID {
-			newNodes, err := p.requestNodeList(node)
-			if err != nil {
-				LogInfof("Error requesting node list from %s: %v", node.ID, err)
+	p.mutex.RLock()
+	peers := make([]*Node, 0, len(p.nodes))
+	for id, node := range p.nodes {
+		if id == selfID || node == nil || node.Config == nil {
+			continue
+		}
+		peers = append(peers, node)
+	}
+	p.mutex.RUnlock()
+
+	for _, node := range peers {
+		newNodes, err := p.requestNodeList(node)
+		if err != nil {
+			LogInfof("Error requesting node list from %s: %v", node.ID, err)
+			continue
+		}
+
+		for _, newNode := range newNodes {
+			if p.IsRegistered(newNode.ID) {
 				continue
 			}
-
-			for _, newNode := range newNodes {
-				if !p.IsRegistered(newNode.ID) {
-					err := p.RegisterNode(newNode)
-					if err != nil {
-						LogInfof("Error registering new node: %v", err)
-					} else {
-						LogInfof("Discovered new node: %s", newNode.ID)
-					}
-				}
+			if err := p.RegisterNode(newNode); err != nil {
+				LogInfof("Error registering new node: %v", err)
+			} else {
+				LogInfof("Discovered new node: %s", newNode.ID)
 			}
 		}
 	}
@@ -539,87 +682,100 @@ func (p *P2P) validateTransaction(tx P2PTransaction) {
 	// TODO: Implement actual validation logic
 }
 
-func (p *P2P) updateNodeStatus(tx P2PTransaction) {
-	LogVerbosef("Updating node status: %s", tx.ID)
+func (p *P2P) updateNodeStatus(tx P2PTransaction) error {
+	LogVerbosef("Updating node status: %s", tx.GetID())
 	var status NodeStatus
-	err := json.Unmarshal(tx.Data.([]byte), &status)
-	if err != nil {
-		LogInfof("Error unmarshaling node status: %v", err)
-		return
+	if err := json.Unmarshal(tx.Data, &status); err != nil {
+		return fmt.Errorf("error unmarshaling node status: %w", err)
 	}
 
 	p.mutex.Lock()
 	defer p.mutex.Unlock()
 
-	if node, exists := p.nodes[status.NodeID]; exists {
-		node.Status = status.Status
-		node.LastSeen = time.Now()
-		LogVerbosef("Updated status of node %s: %s", status.NodeID, status.Status)
-	} else {
-		LogInfof("Node %s not found in the network", status.NodeID)
+	node, exists := p.nodes[status.NodeID]
+	if !exists {
+		return fmt.Errorf("node %s not found in the network", status.NodeID)
 	}
+
+	node.Status = status.Status
+	node.LastSeen = time.Now()
+	LogVerbosef("Updated status of node %s: %s", status.NodeID, status.Status)
+	return nil
 }
 
-func (p *P2P) addNode(tx P2PTransaction) {
-	LogVerbosef("Adding new node: %s", tx.ID)
-	var newNode Node
-	err := json.Unmarshal(tx.Data.([]byte), &newNode)
+func (p *P2P) addNode(tx P2PTransaction) error {
+	LogVerbosef("Adding new node: %s", tx.GetID())
+	newNode, err := decodePeerNode(tx.Data)
 	if err != nil {
-		LogInfof("Error unmarshaling new node data: %v", err)
-		return
+		return fmt.Errorf("error unmarshaling new node data: %w", err)
 	}
 
-	err = p.RegisterNode(&newNode)
-	if err != nil {
-		LogInfof("Error registering new node: %v", err)
-	}
+	return p.RegisterNode(newNode)
 }
 
-func (p *P2P) removeNode(tx P2PTransaction) {
-	LogVerbosef("Removing node: %s", tx.ID)
+// decodePeerNode builds a remote peer from an announcement payload.
+//
+// Only the fields a peer is allowed to assert about itself are taken. Decoding
+// straight into a Node would let a remote host populate Blockchain, Wallet and
+// API pointers, and left Config nil -- which every consumer of node.Config
+// (sendNodeList, discoverNodes, requestNodeList) then dereferenced.
+func decodePeerNode(data []byte) (*Node, error) {
+	var info NodeInfo
+	if err := json.Unmarshal(data, &info); err != nil {
+		return nil, err
+	}
+	if info.ID == "" {
+		return nil, errors.New("peer announcement has no node ID")
+	}
+	return &Node{
+		ID:       info.ID,
+		Config:   &Config{P2PHostName: info.Address},
+		Status:   "known",
+		LastSeen: time.Now(),
+	}, nil
+}
+
+func (p *P2P) removeNode(tx P2PTransaction) error {
+	LogVerbosef("Removing node: %s", tx.GetID())
 	var nodeID string
-	err := json.Unmarshal(tx.Data.([]byte), &nodeID)
-	if err != nil {
-		LogInfof("Error unmarshaling node ID: %v", err)
-		return
+	if err := json.Unmarshal(tx.Data, &nodeID); err != nil {
+		return fmt.Errorf("error unmarshaling node ID: %w", err)
 	}
 
 	p.mutex.Lock()
 	defer p.mutex.Unlock()
 
-	if _, exists := p.nodes[nodeID]; exists {
-		delete(p.nodes, nodeID)
-		LogVerbosef("Removed node from the network: %s", nodeID)
-	} else {
-		LogInfof("Node %s not found in the network", nodeID)
+	if _, exists := p.nodes[nodeID]; !exists {
+		return fmt.Errorf("node %s not found in the network", nodeID)
 	}
+
+	delete(p.nodes, nodeID)
+	LogVerbosef("Removed node from the network: %s", nodeID)
+	return nil
 }
 
-func (p *P2P) registerNode(tx P2PTransaction) {
-	LogVerbosef("Registering new node: %s", tx.ID)
-	var newNode Node
-	err := json.Unmarshal(tx.Data.([]byte), &newNode)
+func (p *P2P) registerNode(tx P2PTransaction) error {
+	LogVerbosef("Registering new node: %s", tx.GetID())
+	newNode, err := decodePeerNode(tx.Data)
 	if err != nil {
-		LogInfof("Error unmarshaling new node data: %v", err)
-		return
+		return fmt.Errorf("error unmarshaling new node data: %w", err)
 	}
 
-	err = p.RegisterNode(&newNode)
-	if err != nil {
-		LogInfof("Error registering new node: %v", err)
-		return
+	if err := p.RegisterNode(newNode); err != nil {
+		return err
 	}
 
-	// Broadcast the new node to all other nodes
+	// Gossip the new node onward. A broadcast failure is not a registration
+	// failure, so it is reported but does not undo the local registration.
 	if err := p.BroadcastMessage(P2PTransaction{
 		Tx:     tx.Tx,
 		Target: "all",
 		Action: "add",
 		Data:   tx.Data,
 	}); err != nil {
-		// Log error but continue
-		_ = err // Suppress unused variable warning
+		LogVerbosef("Could not gossip new node %s: %v", newNode.ID, err)
 	}
+	return nil
 }
 
 func (p *P2P) BroadcastStatus(node *Node, status string) error {
@@ -632,7 +788,14 @@ func (p *P2P) BroadcastStatus(node *Node, status string) error {
 		return fmt.Errorf("error marshaling node status: %w", err)
 	}
 
-	tx, err := NewTransaction("p2p", node.Wallet, nil)
+	// This used to be NewTransaction("p2p", node.Wallet, nil), which failed twice
+	// over: "P2P" was not in AvailableProtocols, and a nil recipient is rejected.
+	// The function therefore returned an error 100% of the time.
+	if node.Wallet == nil {
+		return errors.New("cannot broadcast status: node has no wallet")
+	}
+
+	tx, err := NewTransaction(P2PProtocolID, node.Wallet, node.Wallet)
 	if err != nil {
 		return fmt.Errorf("error creating transaction: %w", err)
 	}
@@ -694,7 +857,7 @@ func (p *P2P) ConnectToSeedNode(address string) error {
 
 func (p *P2P) performClientHandshake(conn net.Conn) error {
 	// Set a timeout for the handshake
-	if err := conn.SetDeadline(time.Now().Add(10 * time.Second)); err != nil {
+	if err := conn.SetDeadline(time.Now().Add(p2pHandshakeTimeout)); err != nil {
 		// Log error but continue
 		_ = err // Suppress unused variable warning
 	}
@@ -722,8 +885,16 @@ func (p *P2P) performClientHandshake(conn net.Conn) error {
 		return fmt.Errorf("unexpected response: %s", response)
 	}
 
-	// 3. Send node information
-	selfNode := p.nodes[p.getSelfNodeID()]
+	// 3. Send node information.
+	// Indexing p.nodes with an unknown ID returns nil, and the old code
+	// dereferenced that immediately.
+	selfID := p.getSelfNodeID()
+	p.mutex.RLock()
+	selfNode := p.nodes[selfID]
+	p.mutex.RUnlock()
+	if selfNode == nil || selfNode.Config == nil {
+		return errors.New("cannot handshake: this node is not registered with the P2P network")
+	}
 	nodeInfo := NodeInfo{
 		ID:      selfNode.ID,
 		Address: selfNode.Config.P2PHostName,
@@ -752,7 +923,7 @@ func (p *P2P) performClientHandshake(conn net.Conn) error {
 
 func (p *P2P) requestNodeListFromSeed(conn net.Conn) ([]NodeInfo, error) {
 	// Set a timeout for the request
-	if err := conn.SetDeadline(time.Now().Add(10 * time.Second)); err != nil {
+	if err := conn.SetDeadline(time.Now().Add(p2pHandshakeTimeout)); err != nil {
 		// Log error but continue
 		_ = err // Suppress unused variable warning
 	}
@@ -791,6 +962,9 @@ func (p *P2P) getSelfNodeID() string {
 	defer p.mutex.RUnlock()
 	selfAddr := p.getBindAddress()
 	for id, node := range p.nodes {
+		if node == nil || node.Config == nil {
+			continue
+		}
 		if node.Config.P2PHostName == selfAddr {
 			return id
 		}

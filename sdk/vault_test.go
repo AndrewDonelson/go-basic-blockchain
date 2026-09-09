@@ -17,9 +17,24 @@ func TestPEMEncodeDecodeAndAccessors(t *testing.T) {
 		t.Fatal("expected non-empty PEM values")
 	}
 
-	priv, pub := pemObj.Decode(pemObj.GetPrivate(), pemObj.GetPublic())
+	priv, pub, err := pemObj.Decode(pemObj.GetPrivate(), pemObj.GetPublic())
+	if err != nil {
+		t.Fatalf("expected decode to succeed, got error: %v", err)
+	}
 	if priv == nil || pub == nil {
 		t.Fatal("expected decode to reconstruct private/public key")
+	}
+
+	// Decode now reports malformed input instead of panicking on a nil pem block
+	// or an unchecked type assertion.
+	if _, _, err := pemObj.Decode("not a pem block", pemObj.GetPublic()); err == nil {
+		t.Fatal("expected an error for a malformed private key PEM")
+	}
+	if _, _, err := pemObj.Decode(pemObj.GetPrivate(), "not a pem block"); err == nil {
+		t.Fatal("expected an error for a malformed public key PEM")
+	}
+	if _, _, err := pemObj.Decode(pemObj.GetPublic(), pemObj.GetPublic()); err == nil {
+		t.Fatal("expected an error when the private key PEM is not a private key")
 	}
 
 	if got := string(pemObj.AsBytes(pemObj.GetPrivate())); got == "" {

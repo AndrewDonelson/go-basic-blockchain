@@ -1,14 +1,21 @@
 package algorithm
 
 import (
+	"bytes"
 	"crypto/aes"
 	"crypto/cipher"
-	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
 	"math/big"
 	"time"
+)
+
+const (
+	// gcmNonceSize is the AES-GCM nonce length in bytes.
+	gcmNonceSize = 12
+	// defaultMiningTimeout bounds a single Mine call.
+	defaultMiningTimeout = 18 * time.Second
 )
 
 // HeliosProof represents a complete proof of work for the Helios algorithm
@@ -47,6 +54,9 @@ type HeliosConfig struct {
 
 	// Energy tracking
 	EnableEnergyTracking bool `json:"enable_energy_tracking"` // false initially
+
+	// MiningTimeout bounds a single Mine call. Zero means defaultMiningTimeout.
+	MiningTimeout time.Duration `json:"mining_timeout"`
 }
 
 // DefaultHeliosConfig returns the default configuration for Helios
@@ -148,13 +158,10 @@ func (h *HeliosAlgorithm) Mine(blockHeader []byte, targetDifficulty *big.Int) (*
 		proof.Stage3Result = stage3Result
 		energyUsed += time.Since(stage3Start).Nanoseconds()
 
-		// Combine all stage results for final hash
-		finalInput := append(blockHeader, []byte(fmt.Sprintf("%d", nonce))...)
-		finalInput = append(finalInput, proof.Stage1Result...)
-		finalInput = append(finalInput, proof.Stage2Result...)
-		finalInput = append(finalInput, proof.Stage3Result...)
-
-		finalHash := sha256.Sum256(finalInput)
+		// Combine all stage results for the final hash, in a fresh buffer so we do
+		// not append into the caller's blockHeader backing array.
+		finalHash := sha256.Sum256(heliosFinalPreimage(blockHeader, nonce,
+			proof.Stage1Result, proof.Stage2Result, proof.Stage3Result))
 		proof.FinalHash = hex.EncodeToString(finalHash[:])
 		proof.EnergyUsed = energyUsed
 
@@ -166,9 +173,11 @@ func (h *HeliosAlgorithm) Mine(blockHeader []byte, targetDifficulty *big.Int) (*
 
 		nonce++
 
-		// Optional: Add timeout to prevent infinite mining
-		if time.Since(startTime) > 18*time.Second {
-			return nil, fmt.Errorf("mining timeout reached")
+		// Bound the search. The caller treats this as a hard failure and abandons
+		// the block; it used to log and return the unmined block, which was then
+		// appended to the chain and persisted anyway.
+		if time.Since(startTime) > h.miningTimeout() {
+			return nil, fmt.Errorf("mining timeout reached after %s", h.miningTimeout())
 		}
 	}
 }
@@ -182,11 +191,23 @@ func (h *HeliosAlgorithm) executeMemoryPhase(blockHeader []byte, nonce uint64) (
 		memorySize = int(float64(memorySize) * h.config.MemoryScaleFactor)
 	}
 
+	// The buffer must hold at least one 32-byte digest: `copy(memory[:32], ...)`
+	// below panics with "slice bounds out of range" on anything smaller, which a
+	// small MemoryBaseSize or a fractional MemoryScaleFactor could produce.
+	if memorySize < sha256.Size {
+		memorySize = sha256.Size
+	}
+
 	// Create memory buffer
 	memory := make([]byte, memorySize)
 
-	// Initialize memory with block header and nonce
-	seed := append(blockHeader, []byte(fmt.Sprintf("%d", nonce))...)
+	// Initialize memory with block header and nonce.
+	// The seed is built in a fresh buffer: append(blockHeader, ...) writes into the
+	// caller's backing array whenever it has spare capacity, corrupting the header
+	// across mining iterations.
+	seed := make([]byte, 0, len(blockHeader)+20)
+	seed = append(seed, blockHeader...)
+	seed = append(seed, []byte(fmt.Sprintf("%d", nonce))...)
 	hash := sha256.Sum256(seed)
 	copy(memory[:32], hash[:])
 
@@ -199,10 +220,12 @@ func (h *HeliosAlgorithm) executeMemoryPhase(blockHeader []byte, nonce uint64) (
 			copy(memory[j:min(j+32, len(memory))], hash[:])
 		}
 
-		// Mix memory blocks
-		for j := 0; j < len(memory)-32; j += 32 {
+		// Mix memory blocks. The upper bound keeps both 32-byte windows inside the
+		// buffer: memory[(j+32)%len : (j+32)%len+32] read out of range whenever
+		// len(memory) was not a multiple of 32 (reachable via MemoryScaleFactor).
+		for j := 0; j+64 <= len(memory); j += 32 {
 			block1 := memory[j : j+32]
-			block2 := memory[(j+32)%len(memory) : (j+32)%len(memory)+32]
+			block2 := memory[j+32 : j+64]
 
 			// XOR blocks
 			for k := 0; k < 32; k++ {
@@ -219,39 +242,46 @@ func (h *HeliosAlgorithm) executeMemoryPhase(blockHeader []byte, nonce uint64) (
 // executeTimeLockPhase implements Stage 2: Time-Lock Phase (30% weight)
 // Uses VDF-inspired sequential computation
 func (h *HeliosAlgorithm) executeTimeLockPhase(stage1Result []byte) ([]byte, error) {
-	// Calculate time-lock duration based on difficulty
-	duration := h.config.TimeLockBaseDuration
-	if h.config.TimeLockScaleFactor != 1.0 {
-		duration = time.Duration(float64(duration) * h.config.TimeLockScaleFactor)
-	}
-
-	// Sequential computation that cannot be parallelized
+	// Sequential hash chain: each iteration depends on the previous one, so the
+	// work cannot be parallelised across cores.
+	//
+	// This used to time.Sleep on every iteration *of every nonce attempt*.
+	// Sleeping is not computation: it consumes no resources, is free to skip if
+	// the output is fabricated, and a miner running N goroutines pays the same
+	// wall-clock cost as one. The chain length is the work.
 	result := stage1Result
 	for i := 0; i < h.config.TimeLockIterations; i++ {
-		// Sequential hash chain
 		hash := sha256.Sum256(result)
 		result = hash[:]
-
-		// Add small delay to ensure sequential nature
-		time.Sleep(duration / time.Duration(h.config.TimeLockIterations))
 	}
 
 	return result, nil
 }
 
 // executeCryptographicPhase implements Stage 3: Cryptographic Phase (30% weight)
-// Uses AES-NI optimized encryption
+// Uses AES-NI optimized encryption.
+//
+// The key and nonce are DERIVED from the stage-2 result, not drawn from
+// crypto/rand. This is the difference between a proof of work and a decoration:
+// with random inputs the stage was non-deterministic, so a verifier could not
+// recompute it and ValidateProof had to trust the stage outputs the miner
+// supplied. That in turn meant a miner could invent arbitrary bytes for all three
+// stages and brute-force only the cheap final SHA-256 -- skipping the memory-hard
+// phase, the sequential phase and this one entirely, at zero cost.
 func (h *HeliosAlgorithm) executeCryptographicPhase(stage2Result []byte) ([]byte, error) {
-	// Generate random key and nonce
-	key := make([]byte, h.config.CryptoKeySize)
-	nonce := make([]byte, 12) // GCM requires 12-byte nonce
+	if h.config.CryptoKeySize <= 0 {
+		return nil, fmt.Errorf("crypto key size must be positive, got %d", h.config.CryptoKeySize)
+	}
 
-	if _, err := rand.Read(key); err != nil {
-		return nil, fmt.Errorf("failed to generate key: %w", err)
-	}
-	if _, err := rand.Read(nonce); err != nil {
-		return nil, fmt.Errorf("failed to generate nonce: %w", err)
-	}
+	// Derive the key and nonce deterministically, with domain separation so the
+	// two are never equal.
+	keyDigest := sha256.Sum256(append([]byte("helios/stage3/key"), stage2Result...))
+	nonceDigest := sha256.Sum256(append([]byte("helios/stage3/nonce"), stage2Result...))
+
+	key := make([]byte, h.config.CryptoKeySize)
+	copy(key, keyDigest[:])
+	nonce := make([]byte, gcmNonceSize)
+	copy(nonce, nonceDigest[:])
 
 	// Create AES cipher
 	block, err := aes.NewCipher(key)
@@ -268,25 +298,71 @@ func (h *HeliosAlgorithm) executeCryptographicPhase(stage2Result []byte) ([]byte
 	// Encrypt stage2 result multiple times
 	result := stage2Result
 	for i := 0; i < h.config.CryptoIterations; i++ {
-		// Encrypt with GCM
 		encrypted := gcm.Seal(nil, nonce, result, nil)
 
-		// Use encrypted result as input for next iteration
-		result = encrypted[:h.config.CryptoKeySize] // Truncate to key size
+		// Truncate to key size. Guard the bound: a CryptoKeySize larger than the
+		// ciphertext would slice out of range.
+		n := h.config.CryptoKeySize
+		if n > len(encrypted) {
+			n = len(encrypted)
+		}
+		result = encrypted[:n]
 	}
 
 	return result, nil
 }
 
-// ValidateProof validates a Helios proof
-func (h *HeliosAlgorithm) ValidateProof(proof *HeliosProof, blockHeader []byte, targetDifficulty *big.Int) error {
-	// Reconstruct final hash
-	finalInput := append(blockHeader, []byte(fmt.Sprintf("%d", proof.Nonce))...)
-	finalInput = append(finalInput, proof.Stage1Result...)
-	finalInput = append(finalInput, proof.Stage2Result...)
-	finalInput = append(finalInput, proof.Stage3Result...)
+// heliosFinalPreimage builds the preimage of the final proof hash.
+func heliosFinalPreimage(blockHeader []byte, nonce uint64, stage1, stage2, stage3 []byte) []byte {
+	nonceBytes := []byte(fmt.Sprintf("%d", nonce))
+	buf := make([]byte, 0, len(blockHeader)+len(nonceBytes)+len(stage1)+len(stage2)+len(stage3))
+	buf = append(buf, blockHeader...)
+	buf = append(buf, nonceBytes...)
+	buf = append(buf, stage1...)
+	buf = append(buf, stage2...)
+	buf = append(buf, stage3...)
+	return buf
+}
 
-	finalHash := sha256.Sum256(finalInput)
+// ValidateProof validates a Helios proof against a block header and target.
+//
+// Every stage is RECOMPUTED from the header and nonce rather than taken on trust.
+// The old implementation re-hashed the stage outputs stored *in the proof*, so the
+// three stages constrained nothing: a miner could supply any bytes and grind only
+// the final SHA-256. Recomputation is what makes the work binding.
+func (h *HeliosAlgorithm) ValidateProof(proof *HeliosProof, blockHeader []byte, targetDifficulty *big.Int) error {
+	if proof == nil {
+		return fmt.Errorf("proof cannot be nil")
+	}
+	if targetDifficulty == nil {
+		return fmt.Errorf("target difficulty cannot be nil")
+	}
+
+	stage1, err := h.executeMemoryPhase(blockHeader, proof.Nonce)
+	if err != nil {
+		return fmt.Errorf("failed to recompute memory phase: %w", err)
+	}
+	if !bytes.Equal(stage1, proof.Stage1Result) {
+		return fmt.Errorf("stage 1 result does not match the recomputed value")
+	}
+
+	stage2, err := h.executeTimeLockPhase(stage1)
+	if err != nil {
+		return fmt.Errorf("failed to recompute time-lock phase: %w", err)
+	}
+	if !bytes.Equal(stage2, proof.Stage2Result) {
+		return fmt.Errorf("stage 2 result does not match the recomputed value")
+	}
+
+	stage3, err := h.executeCryptographicPhase(stage2)
+	if err != nil {
+		return fmt.Errorf("failed to recompute cryptographic phase: %w", err)
+	}
+	if !bytes.Equal(stage3, proof.Stage3Result) {
+		return fmt.Errorf("stage 3 result does not match the recomputed value")
+	}
+
+	finalHash := sha256.Sum256(heliosFinalPreimage(blockHeader, proof.Nonce, stage1, stage2, stage3))
 	reconstructedHash := hex.EncodeToString(finalHash[:])
 
 	if reconstructedHash != proof.FinalHash {
@@ -294,7 +370,7 @@ func (h *HeliosAlgorithm) ValidateProof(proof *HeliosProof, blockHeader []byte, 
 			proof.FinalHash, reconstructedHash)
 	}
 
-	// Check difficulty
+	// Check difficulty against the recomputed hash.
 	hashInt := new(big.Int).SetBytes(finalHash[:])
 	if hashInt.Cmp(targetDifficulty) > 0 {
 		return fmt.Errorf("proof does not meet target difficulty")
@@ -303,17 +379,10 @@ func (h *HeliosAlgorithm) ValidateProof(proof *HeliosProof, blockHeader []byte, 
 	return nil
 }
 
-// Helper functions
-func min(a, b int) int {
-	if a < b {
-		return a
+// miningTimeout returns the configured mining timeout, or the default.
+func (h *HeliosAlgorithm) miningTimeout() time.Duration {
+	if h.config.MiningTimeout > 0 {
+		return h.config.MiningTimeout
 	}
-	return b
-}
-
-func max(a, b int) int {
-	if a > b {
-		return a
-	}
-	return b
+	return defaultMiningTimeout
 }
