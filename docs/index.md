@@ -17,7 +17,7 @@ Welcome to the comprehensive documentation for the Go Basic Blockchain project. 
 - **[Dynamic Difficulty](difficulty.md)** - How the chain retargets itself
 - **[Verifiable Delay Function](vdf.md)** - Wesolowski VDF over a class group
 - **[Memory Hardness](memory-hardness.md)** - Argon2id for stage 1
-- **[Sidechains](sidechains.md)** - Per-game block space, publisher identity, and anchoring
+- **[Sidechains](sidechains.md)** - Per-game block space, publisher registration, anchoring, and bonded data availability
 - **[UTXO Set](utxo.md)** - The authoritative record of who owns what
 - **[Mempool Policy](mempool.md)** - Fee ordering, replace-by-fee, eviction, block size
 - **[Nonces & Replay Protection](nonces.md)** - Per-sender sequencing

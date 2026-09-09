@@ -60,8 +60,21 @@ type txWire struct {
 	FromHeight      uint64 `json:"from_height,omitempty"`
 	ToHeight        uint64 `json:"to_height,omitempty"`
 	TipHash         string `json:"tip_hash,omitempty"`
+	HeaderRoot      string `json:"header_root,omitempty"`
 	AnchorPayloads  uint64 `json:"anchor_payload_count,omitempty"`
 	AnchorSignature string `json:"anchor_signature,omitempty"`
+
+	// Registration-specific fields.
+	RegistrationKind      uint32 `json:"registration_kind,omitempty"`
+	RegistrationName      string `json:"registration_name,omitempty"`
+	RegistrationKey       string `json:"registration_key,omitempty"`
+	BondUnits             int64  `json:"bond_units,omitempty"`
+	RegistrationSignature string `json:"registration_signature,omitempty"`
+
+	// Availability-specific fields.
+	AvailabilityKind      uint32                 `json:"availability_kind,omitempty"`
+	AvailabilityChallenge *AvailabilityChallenge `json:"availability_challenge,omitempty"`
+	AvailabilityProof     *AvailabilityProof     `json:"availability_proof,omitempty"`
 }
 
 // toWire projects the base transaction onto the wire shape.
@@ -181,6 +194,19 @@ func DecodeTransaction(data []byte) (Transaction, error) {
 			return nil, err
 		}
 		return &AnchorTx{Tx: base, Anchor: anchor, AnchorSignature: signature}, nil
+
+	case RegisterProtocolID:
+		registration, err := registrationFromWire(w)
+		if err != nil {
+			return nil, err
+		}
+		registration.Tx = base
+		return registration, nil
+
+	case AvailabilityProtocolID:
+		availability := availabilityFromWire(w)
+		availability.Tx = base
+		return availability, nil
 
 	case ChainProtocolID, P2PProtocolID:
 		return &base, nil

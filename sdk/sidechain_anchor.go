@@ -50,7 +50,43 @@ var (
 	// ErrAnchorUnauthorised is returned when an anchor is not signed by the
 	// publisher that owns the sidechain.
 	ErrAnchorUnauthorised = errors.New("sidechain anchor is not authorised")
+
+	// ErrAnchorSpanTooLarge is returned when one anchor tries to commit more
+	// blocks than the window rules allow.
+	ErrAnchorSpanTooLarge = errors.New("sidechain anchor covers too many blocks")
 )
+
+// sidechainHeaderDomain separates the tree of block hashes inside an anchor from
+// every other tree in the system.
+const sidechainHeaderDomain = "gbb/sidechain/header"
+
+// MaxAnchorSpan bounds how many sidechain blocks one anchor may commit.
+//
+// This is half of what bounds the mutable window. Until a range is anchored the
+// publisher can reorder or drop within it, so an unbounded span would let one
+// anchor commit a year of history that had been rewritable the entire time --
+// technically a commitment, practically no guarantee at all.
+//
+// Exceeding it is not fatal to a publisher who has fallen behind: they submit
+// several anchors instead of one, and each is contiguous with the last.
+const MaxAnchorSpan uint64 = 4096
+
+// MaxAnchorGap bounds how many main-chain blocks may pass between one anchor and
+// the next before a sidechain is marked delinquent.
+//
+// This is the other half of the window bound. MaxAnchorSpan limits how much
+// history one anchor may commit; this limits how long history may stay
+// uncommitted. Together they say: at any moment, at most MaxAnchorSpan blocks,
+// written within the last MaxAnchorGap main-chain blocks, are still rewritable.
+// That is a bounded claim a player or a store can actually rely on, where "the
+// publisher anchors when they feel like it" is not.
+//
+// A late anchor is still accepted. Refusing it would be perverse: a publisher
+// whose node was down for an afternoon could never catch up, and their whole
+// history would be permanently uncommittable. Lateness is recorded instead, and
+// it is visible to anyone who asks -- which is the proportionate response to an
+// outage, as against withholding data, which is a fault and is bonded.
+const MaxAnchorGap int64 = 1000
 
 // SidechainAnchor commits a range of a sidechain's history to the main chain.
 //
@@ -68,10 +104,42 @@ type SidechainAnchor struct {
 	// sidechain's chaining makes it cover every block below.
 	TipHash []byte
 
+	// HeaderRoot is a Merkle root over the block hashes in [FromHeight,
+	// ToHeight].
+	//
+	// TipHash alone already commits the range -- the blocks chain by
+	// PreviousHash -- but proving anything about one block against it means
+	// producing every header between that block and the tip. That is O(range),
+	// and an availability challenge that expensive is one nobody issues, which
+	// would leave availability as a promise rather than an obligation.
+	//
+	// The header root makes any block in the range provable in O(log range), and
+	// each block's own PayloadRoot then makes any single payload provable the
+	// same way. Together they are what let a challenge be answered cheaply by an
+	// honest publisher and not at all by one withholding data.
+	HeaderRoot []byte
+
 	// PayloadCount is what the publisher claims the range contains. It is
 	// advisory -- nothing on the main chain can check it without the data -- and
 	// is carried so an auditor holding the blocks can compare.
 	PayloadCount uint64
+}
+
+// offsetOf locates a sidechain height within an anchor's range.
+//
+// Returning the index and the count together, behind a bounds check, is what
+// lets every caller convert to int safely: MaxAnchorSpan is enforced by
+// Validate, so a range that reaches here is small enough that the conversion
+// cannot lose anything on any platform Go supports.
+func (a SidechainAnchor) offsetOf(height uint64) (index, count int, ok bool) {
+	if height < a.FromHeight || height > a.ToHeight {
+		return 0, 0, false
+	}
+	span := a.ToHeight - a.FromHeight + 1
+	if span > MaxAnchorSpan {
+		return 0, 0, false
+	}
+	return int(height - a.FromHeight), int(span), true //nolint:gosec // bounded by MaxAnchorSpan
 }
 
 // SidechainID returns the identity this anchor commits.
@@ -92,6 +160,14 @@ func (a SidechainAnchor) Validate() error {
 		return fmt.Errorf("%w: tip hash is %d bytes, expected %d",
 			ErrInvalidAnchor, len(a.TipHash), sha256.Size)
 	}
+	if len(a.HeaderRoot) != sha256.Size {
+		return fmt.Errorf("%w: header root is %d bytes, expected %d",
+			ErrInvalidAnchor, len(a.HeaderRoot), sha256.Size)
+	}
+	if span := a.ToHeight - a.FromHeight + 1; span > MaxAnchorSpan {
+		return fmt.Errorf("%w: an anchor covers %d blocks, the limit is %d",
+			ErrAnchorSpanTooLarge, span, MaxAnchorSpan)
+	}
 	return nil
 }
 
@@ -110,9 +186,11 @@ func (a SidechainAnchor) SigningBytes() []byte {
 		buf.Write(tmp[:])
 	}
 
-	binary.BigEndian.PutUint64(tmp[:], uint64(len(a.TipHash)))
-	buf.Write(tmp[:])
-	buf.Write(a.TipHash)
+	for _, field := range [][]byte{a.TipHash, a.HeaderRoot} {
+		binary.BigEndian.PutUint64(tmp[:], uint64(len(field)))
+		buf.Write(tmp[:])
+		buf.Write(field)
+	}
 
 	return buf.Bytes()
 }
@@ -148,6 +226,7 @@ func BuildAnchor(chain *Sidechain) (*SidechainAnchor, error) {
 	}
 
 	var payloads uint64
+	hashes := make([][]byte, 0, to-from+1)
 	for height := from; height <= to; height++ {
 		block, found := chain.BlockAt(height)
 		if !found {
@@ -155,68 +234,38 @@ func BuildAnchor(chain *Sidechain) (*SidechainAnchor, error) {
 				ErrInvalidAnchor, height)
 		}
 		payloads += uint64(block.Header.PayloadCount)
+		hashes = append(hashes, block.Hash)
 	}
 
 	id := chain.ID()
-	return &SidechainAnchor{
+	anchor := &SidechainAnchor{
 		PublisherID:  id.PublisherID,
 		GameID:       id.GameID,
 		FromHeight:   from,
 		ToHeight:     to,
 		TipHash:      append([]byte{}, tip.Hash...),
+		HeaderRoot:   merkleRoot(sidechainHeaderDomain, hashes),
 		PayloadCount: payloads,
-	}, nil
-}
-
-// PublisherRegistry resolves which key may anchor a publisher's sidechains.
-//
-// Authorisation is the difference between "a sidechain" and "anybody's
-// sidechain": without it one publisher could anchor another's identity and
-// commit a history they do not own. Registration binds a PublisherID to a key
-// once; every anchor afterwards is checked against it.
-type PublisherRegistry struct {
-	mu   sync.RWMutex
-	keys map[uint64]string // publisher id -> public key PEM
-}
-
-// NewPublisherRegistry creates an empty registry.
-func NewPublisherRegistry() *PublisherRegistry {
-	return &PublisherRegistry{keys: map[uint64]string{}}
-}
-
-// Register binds a publisher id to a public key.
-//
-// A publisher id may be claimed once. Allowing re-registration would let whoever
-// registered last take over an existing publisher's sidechains, which is the same
-// account-takeover shape this project already had to fix once at the API layer.
-func (r *PublisherRegistry) Register(publisherID uint64, publicKeyPEM string) error {
-	if publisherID == 0 {
-		return fmt.Errorf("%w: publisher id must not be zero", ErrInvalidSidechainID)
 	}
-	if publicKeyPEM == "" {
-		return fmt.Errorf("%w: public key is empty", ErrInvalidSidechainID)
+	if err := anchor.Validate(); err != nil {
+		return nil, err
 	}
-
-	r.mu.Lock()
-	defer r.mu.Unlock()
-
-	if existing, taken := r.keys[publisherID]; taken {
-		if existing == publicKeyPEM {
-			return nil // idempotent
-		}
-		return fmt.Errorf("publisher %d is already registered to a different key", publisherID)
-	}
-
-	r.keys[publisherID] = publicKeyPEM
-	return nil
+	return anchor, nil
 }
 
-// PublicKey returns a publisher's registered key.
-func (r *PublisherRegistry) PublicKey(publisherID uint64) (string, bool) {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	key, ok := r.keys[publisherID]
-	return key, ok
+// anchorState is the ledger's record for one sidechain.
+type anchorState struct {
+	// anchors is every anchor for this sidechain, in order. The history is kept
+	// rather than only the tip because an availability proof has to be checked
+	// against the anchor that covers the height in question, which is usually
+	// not the latest one.
+	anchors []SidechainAnchor
+	// lastMainHeight is the main-chain height that recorded the latest anchor,
+	// which is what a gap is measured against.
+	lastMainHeight int64
+	// delinquent records that this sidechain has at some point left history
+	// uncommitted for longer than MaxAnchorGap.
+	delinquent bool
 }
 
 // AnchorLedger tracks what has been anchored, per sidechain.
@@ -227,7 +276,7 @@ func (r *PublisherRegistry) PublicKey(publisherID uint64) (string, bool) {
 type AnchorLedger struct {
 	mu       sync.RWMutex
 	registry *PublisherRegistry
-	latest   map[string]SidechainAnchor
+	states   map[string]*anchorState
 }
 
 // NewAnchorLedger creates a ledger backed by a publisher registry.
@@ -235,7 +284,7 @@ func NewAnchorLedger(registry *PublisherRegistry) *AnchorLedger {
 	if registry == nil {
 		registry = NewPublisherRegistry()
 	}
-	return &AnchorLedger{registry: registry, latest: map[string]SidechainAnchor{}}
+	return &AnchorLedger{registry: registry, states: map[string]*anchorState{}}
 }
 
 // Registry returns the ledger's publisher registry.
@@ -245,8 +294,47 @@ func (l *AnchorLedger) Registry() *PublisherRegistry { return l.registry }
 func (l *AnchorLedger) Latest(id SidechainID) (SidechainAnchor, bool) {
 	l.mu.RLock()
 	defer l.mu.RUnlock()
-	anchor, ok := l.latest[id.String()]
-	return anchor, ok
+
+	state, ok := l.states[id.String()]
+	if !ok || len(state.anchors) == 0 {
+		return SidechainAnchor{}, false
+	}
+	return state.anchors[len(state.anchors)-1], true
+}
+
+// AnchorCovering returns the anchor that commits a given sidechain height.
+func (l *AnchorLedger) AnchorCovering(id SidechainID, height uint64) (SidechainAnchor, bool) {
+	l.mu.RLock()
+	defer l.mu.RUnlock()
+
+	state, ok := l.states[id.String()]
+	if !ok {
+		return SidechainAnchor{}, false
+	}
+
+	// Anchors are contiguous and ordered, so a binary search is exact.
+	low, high := 0, len(state.anchors)-1
+	for low <= high {
+		mid := (low + high) / 2
+		switch {
+		case height < state.anchors[mid].FromHeight:
+			high = mid - 1
+		case height > state.anchors[mid].ToHeight:
+			low = mid + 1
+		default:
+			return state.anchors[mid], true
+		}
+	}
+	return SidechainAnchor{}, false
+}
+
+// IsDelinquent reports whether a sidechain has ever exceeded MaxAnchorGap.
+func (l *AnchorLedger) IsDelinquent(id SidechainID) bool {
+	l.mu.RLock()
+	defer l.mu.RUnlock()
+
+	state, ok := l.states[id.String()]
+	return ok && state.delinquent
 }
 
 // Verify checks an anchor against the ledger without recording it.
@@ -261,7 +349,12 @@ func (l *AnchorLedger) Verify(anchor SidechainAnchor, signature []byte) error {
 	id := anchor.SidechainID()
 
 	l.mu.RLock()
-	previous, hasPrevious := l.latest[id.String()]
+	state, hasState := l.states[id.String()]
+	var previous SidechainAnchor
+	hasPrevious := hasState && len(state.anchors) > 0
+	if hasPrevious {
+		previous = state.anchors[len(state.anchors)-1]
+	}
 	l.mu.RUnlock()
 
 	// Contiguity is what makes an anchor a commitment rather than a snapshot. A
@@ -278,10 +371,9 @@ func (l *AnchorLedger) Verify(anchor SidechainAnchor, signature []byte) error {
 			ErrAnchorNotContiguous, id, anchor.FromHeight)
 	}
 
-	publicKey, registered := l.registry.PublicKey(anchor.PublisherID)
-	if !registered {
-		return fmt.Errorf("%w: publisher %d is not registered",
-			ErrAnchorUnauthorised, anchor.PublisherID)
+	publicKey, err := l.registry.AuthoriseSidechain(id)
+	if err != nil {
+		return fmt.Errorf("%w: %w", ErrAnchorUnauthorised, err)
 	}
 	if len(signature) == 0 {
 		return fmt.Errorf("%w: anchor is unsigned", ErrAnchorUnauthorised)
@@ -295,15 +387,9 @@ func (l *AnchorLedger) Verify(anchor SidechainAnchor, signature []byte) error {
 }
 
 // Record verifies an anchor and commits it to the ledger.
-func (l *AnchorLedger) Record(anchor SidechainAnchor, signature []byte) error {
-	if err := l.Verify(anchor, signature); err != nil {
-		return err
-	}
-
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	l.latest[anchor.SidechainID().String()] = anchor
-	return nil
+func (l *AnchorLedger) Record(anchor SidechainAnchor, signature []byte, mainHeight int64) error {
+	_, err := l.recordForUndo(anchor, signature, mainHeight)
+	return err
 }
 
 // VerifyAgainstChain checks that a sidechain's blocks actually produce an
@@ -334,12 +420,22 @@ func VerifyAgainstChain(anchor SidechainAnchor, chain *Sidechain) error {
 
 	// Walk the range and confirm it is a chain. The tip hash covers the prefix
 	// only if the links are intact, so this is what turns one hash into a
-	// statement about every block below it.
-	for height := anchor.ToHeight; height > 0; height-- {
+	// statement about every block in the range.
+	//
+	// Only this anchor's own range is checked. Everything below it was covered
+	// by the anchor before it, and contiguity is what makes that argument hold
+	// -- which is why a gap between anchors is refused rather than tolerated.
+	hashes := make([][]byte, 0, anchor.ToHeight-anchor.FromHeight+1)
+	for height := anchor.FromHeight; height <= anchor.ToHeight; height++ {
 		block, ok := chain.BlockAt(height)
 		if !ok {
 			return fmt.Errorf("%w: the chain has a gap at height %d",
 				ErrInvalidAnchor, height)
+		}
+		hashes = append(hashes, block.Hash)
+
+		if height == 0 {
+			continue
 		}
 		parent, ok := chain.BlockAt(height - 1)
 		if !ok {
@@ -350,6 +446,11 @@ func VerifyAgainstChain(anchor SidechainAnchor, chain *Sidechain) error {
 			return fmt.Errorf("%w: broken link at height %d: %w",
 				ErrInvalidAnchor, height, err)
 		}
+	}
+
+	if !bytes.Equal(merkleRoot(sidechainHeaderDomain, hashes), anchor.HeaderRoot) {
+		return fmt.Errorf("%w: the range does not match the anchored header root",
+			ErrInvalidAnchor)
 	}
 
 	return nil
@@ -364,7 +465,7 @@ func VerifyAgainstChain(anchor SidechainAnchor, chain *Sidechain) error {
 // rejected would silently skip a range.
 //
 // It returns nil when the chain has nothing new to commit.
-func AnchorSidechain(chain *Sidechain, identity *PeerIdentity, ledger *AnchorLedger) (*SidechainAnchor, error) {
+func AnchorSidechain(chain *Sidechain, identity *PeerIdentity, ledger *AnchorLedger, mainHeight int64) (*SidechainAnchor, error) {
 	if ledger == nil {
 		return nil, fmt.Errorf("%w: ledger is nil", ErrInvalidAnchor)
 	}
@@ -379,7 +480,7 @@ func AnchorSidechain(chain *Sidechain, identity *PeerIdentity, ledger *AnchorLed
 		return nil, err
 	}
 
-	if err := ledger.Record(*anchor, signature); err != nil {
+	if err := ledger.Record(*anchor, signature, mainHeight); err != nil {
 		return nil, err
 	}
 
@@ -387,12 +488,14 @@ func AnchorSidechain(chain *Sidechain, identity *PeerIdentity, ledger *AnchorLed
 	return anchor, nil
 }
 
-// anchorRestore remembers a sidechain's anchor as it was before a block was
-// applied, distinguishing "had none" from "had one".
+// anchorRestore remembers a sidechain's anchor state as it was before a block
+// was applied.
 type anchorRestore struct {
-	Key      string
-	Previous SidechainAnchor
-	Existed  bool
+	Key            string
+	Existed        bool
+	AnchorCount    int
+	LastMainHeight int64
+	Delinquent     bool
 }
 
 // recordForUndo verifies and records an anchor, returning what to restore if the
@@ -402,7 +505,7 @@ type anchorRestore struct {
 // leave the ledger claiming a range was committed when the block committing it
 // is no longer on the chain -- and the next honest anchor would then fail
 // contiguity forever.
-func (l *AnchorLedger) recordForUndo(anchor SidechainAnchor, signature []byte) (anchorRestore, error) {
+func (l *AnchorLedger) recordForUndo(anchor SidechainAnchor, signature []byte, mainHeight int64) (anchorRestore, error) {
 	if err := l.Verify(anchor, signature); err != nil {
 		return anchorRestore{}, err
 	}
@@ -412,19 +515,50 @@ func (l *AnchorLedger) recordForUndo(anchor SidechainAnchor, signature []byte) (
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
-	previous, existed := l.latest[key]
-	l.latest[key] = anchor
-	return anchorRestore{Key: key, Previous: previous, Existed: existed}, nil
+	state, existed := l.states[key]
+	if !existed {
+		state = &anchorState{}
+		l.states[key] = state
+	}
+
+	restore := anchorRestore{
+		Key:            key,
+		Existed:        existed,
+		AnchorCount:    len(state.anchors),
+		LastMainHeight: state.lastMainHeight,
+		Delinquent:     state.delinquent,
+	}
+
+	// A gap longer than MaxAnchorGap means history sat uncommitted for longer
+	// than the rules allow. The anchor still lands -- see MaxAnchorGap for why
+	// refusing it would be worse -- but the lapse is recorded permanently.
+	if len(state.anchors) > 0 && mainHeight-state.lastMainHeight > MaxAnchorGap {
+		state.delinquent = true
+	}
+
+	state.anchors = append(state.anchors, anchor)
+	state.lastMainHeight = mainHeight
+
+	return restore, nil
 }
 
-// restore puts a sidechain's anchor back to a previous state.
+// restore puts a sidechain's anchor state back to a previous point.
 func (l *AnchorLedger) restore(r anchorRestore) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
-	if r.Existed {
-		l.latest[r.Key] = r.Previous
+	if !r.Existed {
+		delete(l.states, r.Key)
 		return
 	}
-	delete(l.latest, r.Key)
+
+	state, ok := l.states[r.Key]
+	if !ok {
+		return
+	}
+	if r.AnchorCount <= len(state.anchors) {
+		state.anchors = state.anchors[:r.AnchorCount]
+	}
+	state.lastMainHeight = r.LastMainHeight
+	state.delinquent = r.Delinquent
 }

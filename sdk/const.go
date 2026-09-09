@@ -92,6 +92,12 @@ const (
 	// It is what makes a sidechain more than a private database: see
 	// sdk/sidechain_anchor.go.
 	AnchorProtocolID = "ANCHOR"
+	// RegisterProtocolID allocates publisher and game ids. See sdk/publisher.go
+	// for why they are allocated rather than chosen.
+	RegisterProtocolID = "REGISTER"
+	// AvailabilityProtocolID carries availability challenges and the proofs that
+	// answer them. See sdk/availability.go.
+	AvailabilityProtocolID = "AVAILABILITY"
 )
 
 // AvailableProtocols is a list of all available protocols
@@ -103,4 +109,6 @@ var AvailableProtocols = []string{
 	ChainProtocolID,
 	P2PProtocolID,
 	AnchorProtocolID,
+	RegisterProtocolID,
+	AvailabilityProtocolID,
 }

@@ -30,6 +30,34 @@ func buildChain(t *testing.T, id SidechainID, count int) *Sidechain {
 	return chain
 }
 
+// anchorOver builds a well-formed anchor for an explicit range, so a test can
+// choose a range BuildAnchor would never produce.
+func anchorOver(t *testing.T, chain *Sidechain, from, to uint64) SidechainAnchor {
+	t.Helper()
+
+	id := chain.ID()
+	hashes := make([][]byte, 0, to-from+1)
+	var payloads uint64
+	for height := from; height <= to; height++ {
+		block, ok := chain.BlockAt(height)
+		if !ok {
+			t.Fatalf("no block at height %d", height)
+		}
+		hashes = append(hashes, block.Hash)
+		payloads += uint64(block.Header.PayloadCount)
+	}
+
+	return SidechainAnchor{
+		PublisherID:  id.PublisherID,
+		GameID:       id.GameID,
+		FromHeight:   from,
+		ToHeight:     to,
+		TipHash:      append([]byte{}, hashes[len(hashes)-1]...),
+		HeaderRoot:   merkleRoot(sidechainHeaderDomain, hashes),
+		PayloadCount: payloads,
+	}
+}
+
 func TestSidechainIDRejectsZeroComponents(t *testing.T) {
 	cases := []struct {
 		name      string
@@ -272,31 +300,43 @@ func TestSidechainPayloadRootDetectsReordering(t *testing.T) {
 	}
 }
 
-// newRegisteredPublisher returns an identity registered in the ledger.
-func newRegisteredPublisher(t *testing.T, ledger *AnchorLedger, publisherID uint64) *PeerIdentity {
+// registerPublisher allocates a publisher and one game through the real
+// registration path, and returns the identity plus the allocated sidechain id.
+//
+// Tests use the allocating path rather than a shortcut so that the ids they
+// exercise are the ids consensus would actually hand out.
+func registerPublisher(t *testing.T, ledger *AnchorLedger) (*PeerIdentity, SidechainID) {
 	t.Helper()
 
 	identity, err := NewPeerIdentity()
 	if err != nil {
 		t.Fatalf("NewPeerIdentity: %v", err)
 	}
-	if err := ledger.Registry().Register(publisherID, identity.PublicPEM); err != nil {
-		t.Fatalf("Register: %v", err)
-	}
-	return identity
-}
 
-func TestAnchorCommitsThenAdvancesTheWatermark(t *testing.T) {
-	id, err := NewSidechainID(1, 1)
+	registry := ledger.Registry()
+	publisherID, err := registry.RegisterPublisher(identity.PublicPEM, "test publisher",
+		MinPublisherBondUnits, 0)
+	if err != nil {
+		t.Fatalf("RegisterPublisher: %v", err)
+	}
+	gameID, err := registry.RegisterGame(publisherID, "test game", 0)
+	if err != nil {
+		t.Fatalf("RegisterGame: %v", err)
+	}
+
+	id, err := NewSidechainID(publisherID, gameID)
 	if err != nil {
 		t.Fatalf("NewSidechainID: %v", err)
 	}
+	return identity, id
+}
 
+func TestAnchorCommitsThenAdvancesTheWatermark(t *testing.T) {
 	ledger := NewAnchorLedger(NewPublisherRegistry())
-	identity := newRegisteredPublisher(t, ledger, id.PublisherID)
+	identity, id := registerPublisher(t, ledger)
 	chain := buildChain(t, id, 3)
 
-	anchor, err := AnchorSidechain(chain, identity, ledger)
+	anchor, err := AnchorSidechain(chain, identity, ledger, 1)
 	if err != nil {
 		t.Fatalf("AnchorSidechain: %v", err)
 	}
@@ -312,7 +352,7 @@ func TestAnchorCommitsThenAdvancesTheWatermark(t *testing.T) {
 
 	// A second call with no new blocks must be a no-op rather than a
 	// zero-length anchor, or the ledger fills with duplicates on every tick.
-	repeat, err := AnchorSidechain(chain, identity, ledger)
+	repeat, err := AnchorSidechain(chain, identity, ledger, 2)
 	if err != nil {
 		t.Fatalf("second AnchorSidechain: %v", err)
 	}
@@ -331,7 +371,7 @@ func TestAnchorCommitsThenAdvancesTheWatermark(t *testing.T) {
 		}
 	}
 
-	next, err := AnchorSidechain(chain, identity, ledger)
+	next, err := AnchorSidechain(chain, identity, ledger, 3)
 	if err != nil {
 		t.Fatalf("third AnchorSidechain: %v", err)
 	}
@@ -349,16 +389,11 @@ func TestAnchorCommitsThenAdvancesTheWatermark(t *testing.T) {
 }
 
 func TestAnchorDetectsRewrittenHistory(t *testing.T) {
-	id, err := NewSidechainID(1, 1)
-	if err != nil {
-		t.Fatalf("NewSidechainID: %v", err)
-	}
-
 	ledger := NewAnchorLedger(NewPublisherRegistry())
-	identity := newRegisteredPublisher(t, ledger, id.PublisherID)
+	identity, id := registerPublisher(t, ledger)
 	chain := buildChain(t, id, 4)
 
-	anchor, err := AnchorSidechain(chain, identity, ledger)
+	anchor, err := AnchorSidechain(chain, identity, ledger, 1)
 	if err != nil {
 		t.Fatalf("AnchorSidechain: %v", err)
 	}
@@ -386,69 +421,48 @@ func TestAnchorDetectsRewrittenHistory(t *testing.T) {
 }
 
 func TestAnchorRequiresContiguity(t *testing.T) {
-	id, err := NewSidechainID(1, 1)
-	if err != nil {
-		t.Fatalf("NewSidechainID: %v", err)
-	}
-
 	ledger := NewAnchorLedger(NewPublisherRegistry())
-	identity := newRegisteredPublisher(t, ledger, id.PublisherID)
+	identity, id := registerPublisher(t, ledger)
 	chain := buildChain(t, id, 5)
 
 	// The first anchor must start at height 0; starting later would leave the
 	// beginning of the history permanently uncommitted.
-	gapFirst := SidechainAnchor{
-		PublisherID: id.PublisherID, GameID: id.GameID,
-		FromHeight: 2, ToHeight: 4,
-		TipHash: mustBlockHash(t, chain, 4),
-	}
+	gapFirst := anchorOver(t, chain, 2, 4)
 	signature, err := SignAnchor(identity, gapFirst)
 	if err != nil {
 		t.Fatalf("SignAnchor: %v", err)
 	}
-	if err := ledger.Record(gapFirst, signature); !errors.Is(err, ErrAnchorNotContiguous) {
+	if err := ledger.Record(gapFirst, signature, 1); !errors.Is(err, ErrAnchorNotContiguous) {
 		t.Fatalf("expected ErrAnchorNotContiguous for a late first anchor, got %v", err)
 	}
 
-	good := SidechainAnchor{
-		PublisherID: id.PublisherID, GameID: id.GameID,
-		FromHeight: 0, ToHeight: 2,
-		TipHash: mustBlockHash(t, chain, 2),
-	}
+	good := anchorOver(t, chain, 0, 2)
 	signature, err = SignAnchor(identity, good)
 	if err != nil {
 		t.Fatalf("SignAnchor: %v", err)
 	}
-	if err := ledger.Record(good, signature); err != nil {
+	if err := ledger.Record(good, signature, 1); err != nil {
 		t.Fatalf("Record: %v", err)
 	}
 
 	// Re-anchoring a range already committed is the rewrite path: it would let a
 	// publisher replace 1..2 with different contents under a fresh commitment.
-	overlap := SidechainAnchor{
-		PublisherID: id.PublisherID, GameID: id.GameID,
-		FromHeight: 1, ToHeight: 4,
-		TipHash: mustBlockHash(t, chain, 4),
-	}
+	overlap := anchorOver(t, chain, 1, 4)
 	signature, err = SignAnchor(identity, overlap)
 	if err != nil {
 		t.Fatalf("SignAnchor: %v", err)
 	}
-	if err := ledger.Record(overlap, signature); !errors.Is(err, ErrAnchorNotContiguous) {
+	if err := ledger.Record(overlap, signature, 2); !errors.Is(err, ErrAnchorNotContiguous) {
 		t.Fatalf("expected ErrAnchorNotContiguous for an overlapping anchor, got %v", err)
 	}
 
 	// A gap would leave heights 3 uncommitted forever.
-	skip := SidechainAnchor{
-		PublisherID: id.PublisherID, GameID: id.GameID,
-		FromHeight: 4, ToHeight: 4,
-		TipHash: mustBlockHash(t, chain, 4),
-	}
+	skip := anchorOver(t, chain, 4, 4)
 	signature, err = SignAnchor(identity, skip)
 	if err != nil {
 		t.Fatalf("SignAnchor: %v", err)
 	}
-	if err := ledger.Record(skip, signature); !errors.Is(err, ErrAnchorNotContiguous) {
+	if err := ledger.Record(skip, signature, 2); !errors.Is(err, ErrAnchorNotContiguous) {
 		t.Fatalf("expected ErrAnchorNotContiguous for a gap, got %v", err)
 	}
 }
@@ -463,19 +477,17 @@ func mustBlockHash(t *testing.T, chain *Sidechain, height uint64) []byte {
 }
 
 func TestAnchorRejectsUnauthorisedPublishers(t *testing.T) {
+	ledger := NewAnchorLedger(NewPublisherRegistry())
+
+	// The id the first registration will allocate, built before anyone has
+	// registered so the unregistered case can be exercised against it.
 	id, err := NewSidechainID(1, 1)
 	if err != nil {
 		t.Fatalf("NewSidechainID: %v", err)
 	}
-
-	ledger := NewAnchorLedger(NewPublisherRegistry())
 	chain := buildChain(t, id, 2)
 
-	anchor := SidechainAnchor{
-		PublisherID: id.PublisherID, GameID: id.GameID,
-		FromHeight: 0, ToHeight: 1,
-		TipHash: mustBlockHash(t, chain, 1),
-	}
+	anchor := anchorOver(t, chain, 0, 1)
 
 	stranger, err := NewPeerIdentity()
 	if err != nil {
@@ -487,19 +499,22 @@ func TestAnchorRejectsUnauthorisedPublishers(t *testing.T) {
 	}
 
 	// Nothing is registered yet: an unknown publisher cannot anchor at all.
-	if err := ledger.Record(anchor, signature); !errors.Is(err, ErrAnchorUnauthorised) {
+	if err := ledger.Record(anchor, signature, 1); !errors.Is(err, ErrAnchorUnauthorised) {
 		t.Fatalf("expected ErrAnchorUnauthorised for an unregistered publisher, got %v", err)
 	}
 
-	owner := newRegisteredPublisher(t, ledger, id.PublisherID)
+	owner, allocated := registerPublisher(t, ledger)
+	if !allocated.Equal(id) {
+		t.Fatalf("the first registration allocated %s, expected %s", allocated, id)
+	}
 
 	// Now registered -- but the signature belongs to somebody else. This is the
 	// takeover case: another party committing a history under this publisher's id.
-	if err := ledger.Record(anchor, signature); !errors.Is(err, ErrAnchorUnauthorised) {
+	if err := ledger.Record(anchor, signature, 1); !errors.Is(err, ErrAnchorUnauthorised) {
 		t.Fatalf("expected ErrAnchorUnauthorised for a foreign signature, got %v", err)
 	}
 
-	if err := ledger.Record(anchor, nil); !errors.Is(err, ErrAnchorUnauthorised) {
+	if err := ledger.Record(anchor, nil, 1); !errors.Is(err, ErrAnchorUnauthorised) {
 		t.Fatalf("expected ErrAnchorUnauthorised for an unsigned anchor, got %v", err)
 	}
 
@@ -507,26 +522,17 @@ func TestAnchorRejectsUnauthorisedPublishers(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SignAnchor: %v", err)
 	}
-	if err := ledger.Record(anchor, signature); err != nil {
+	if err := ledger.Record(anchor, signature, 1); err != nil {
 		t.Fatalf("the owner's own anchor was rejected: %v", err)
 	}
 }
 
 func TestAnchorSignatureIsBoundToItsRange(t *testing.T) {
-	id, err := NewSidechainID(1, 1)
-	if err != nil {
-		t.Fatalf("NewSidechainID: %v", err)
-	}
-
 	ledger := NewAnchorLedger(NewPublisherRegistry())
-	identity := newRegisteredPublisher(t, ledger, id.PublisherID)
+	identity, id := registerPublisher(t, ledger)
 	chain := buildChain(t, id, 3)
 
-	anchor := SidechainAnchor{
-		PublisherID: id.PublisherID, GameID: id.GameID,
-		FromHeight: 0, ToHeight: 2,
-		TipHash: mustBlockHash(t, chain, 2), PayloadCount: 3,
-	}
+	anchor := anchorOver(t, chain, 0, 2)
 	signature, err := SignAnchor(identity, anchor)
 	if err != nil {
 		t.Fatalf("SignAnchor: %v", err)
@@ -540,6 +546,7 @@ func TestAnchorSignatureIsBoundToItsRange(t *testing.T) {
 		"to height":     func(a *SidechainAnchor) { a.ToHeight = 1 },
 		"game id":       func(a *SidechainAnchor) { a.GameID = 2 },
 		"tip hash":      func(a *SidechainAnchor) { a.TipHash[0] ^= 0xFF },
+		"header root":   func(a *SidechainAnchor) { a.HeaderRoot[0] ^= 0xFF },
 		"payload count": func(a *SidechainAnchor) { a.PayloadCount = 99 },
 	}
 
@@ -547,6 +554,7 @@ func TestAnchorSignatureIsBoundToItsRange(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			altered := anchor
 			altered.TipHash = append([]byte{}, anchor.TipHash...)
+			altered.HeaderRoot = append([]byte{}, anchor.HeaderRoot...)
 			mutate(&altered)
 
 			if err := ledger.Verify(altered, signature); err == nil {
@@ -556,39 +564,143 @@ func TestAnchorSignatureIsBoundToItsRange(t *testing.T) {
 	}
 }
 
-func TestPublisherRegistryRefusesTakeover(t *testing.T) {
+func TestPublisherRegistryAllocatesAndRefusesKeyReuse(t *testing.T) {
 	registry := NewPublisherRegistry()
 
 	owner, err := NewPeerIdentity()
 	if err != nil {
 		t.Fatalf("NewPeerIdentity: %v", err)
 	}
-	if err := registry.Register(7, owner.PublicPEM); err != nil {
-		t.Fatalf("Register: %v", err)
+
+	first, err := registry.RegisterPublisher(owner.PublicPEM, "owner", MinPublisherBondUnits, 10)
+	if err != nil {
+		t.Fatalf("RegisterPublisher: %v", err)
+	}
+	// Ids are allocated, not chosen, so the first is 1 -- and zero is never
+	// handed out, because zero is what an omitted protobuf field decodes to.
+	if first != 1 {
+		t.Fatalf("first publisher got id %d, want 1", first)
 	}
 
-	// Re-registering the same key is a harmless retry.
-	if err := registry.Register(7, owner.PublicPEM); err != nil {
-		t.Fatalf("re-registering an identical key failed: %v", err)
+	// One key must not hold two identities: compromising it would compromise
+	// both, and "which publisher signed this" would stop having one answer.
+	if _, err := registry.RegisterPublisher(owner.PublicPEM, "again", MinPublisherBondUnits, 11); !errors.Is(err, ErrKeyAlreadyRegistered) {
+		t.Fatalf("expected ErrKeyAlreadyRegistered, got %v", err)
 	}
 
-	attacker, err := NewPeerIdentity()
+	other, err := NewPeerIdentity()
 	if err != nil {
 		t.Fatalf("NewPeerIdentity: %v", err)
 	}
-	if err := registry.Register(7, attacker.PublicPEM); err == nil {
-		t.Fatal("a second key claimed an already-registered publisher id")
+	second, err := registry.RegisterPublisher(other.PublicPEM, "other", MinPublisherBondUnits, 12)
+	if err != nil {
+		t.Fatalf("RegisterPublisher: %v", err)
+	}
+	if second != 2 {
+		t.Fatalf("second publisher got id %d, want 2", second)
 	}
 
-	stored, ok := registry.PublicKey(7)
-	if !ok {
-		t.Fatal("publisher 7 is not registered")
+	// A bond below the minimum is refused: the availability rules have nothing
+	// behind them otherwise.
+	third, err := NewPeerIdentity()
+	if err != nil {
+		t.Fatalf("NewPeerIdentity: %v", err)
 	}
-	if stored != owner.PublicPEM {
-		t.Fatal("the registered key was replaced by the attacker's")
+	if _, err := registry.RegisterPublisher(third.PublicPEM, "cheap", MinPublisherBondUnits-1, 13); !errors.Is(err, ErrRegistrationInvalid) {
+		t.Fatalf("expected ErrRegistrationInvalid for an insufficient bond, got %v", err)
 	}
-	if err := registry.Register(0, owner.PublicPEM); !errors.Is(err, ErrInvalidSidechainID) {
-		t.Fatalf("expected ErrInvalidSidechainID for publisher 0, got %v", err)
+}
+
+func TestAnchoringRequiresARegisteredGame(t *testing.T) {
+	ledger := NewAnchorLedger(NewPublisherRegistry())
+	identity, id := registerPublisher(t, ledger)
+
+	// A registered publisher, but a game id they never registered. Without the
+	// game check a publisher could anchor any game id at all -- including one
+	// another publisher's SDK is already writing.
+	unregistered, err := NewSidechainID(id.PublisherID, id.GameID+1)
+	if err != nil {
+		t.Fatalf("NewSidechainID: %v", err)
+	}
+	chain := buildChain(t, unregistered, 2)
+	anchor := anchorOver(t, chain, 0, 1)
+
+	signature, err := SignAnchor(identity, anchor)
+	if err != nil {
+		t.Fatalf("SignAnchor: %v", err)
+	}
+	if err := ledger.Record(anchor, signature, 1); !errors.Is(err, ErrGameNotRegistered) {
+		t.Fatalf("expected ErrGameNotRegistered, got %v", err)
+	}
+
+	// Registering it makes the same anchor acceptable.
+	gameID, err := ledger.Registry().RegisterGame(id.PublisherID, "second game", 1)
+	if err != nil {
+		t.Fatalf("RegisterGame: %v", err)
+	}
+	if gameID != unregistered.GameID {
+		t.Fatalf("allocated game %d, expected %d", gameID, unregistered.GameID)
+	}
+	if err := ledger.Record(anchor, signature, 1); err != nil {
+		t.Fatalf("anchoring a registered game failed: %v", err)
+	}
+}
+
+func TestSidechainGoesDelinquentAfterALongGap(t *testing.T) {
+	ledger := NewAnchorLedger(NewPublisherRegistry())
+	identity, id := registerPublisher(t, ledger)
+	chain := buildChain(t, id, 2)
+
+	if _, err := AnchorSidechain(chain, identity, ledger, 100); err != nil {
+		t.Fatalf("AnchorSidechain: %v", err)
+	}
+	if ledger.IsDelinquent(id) {
+		t.Fatal("a sidechain was delinquent on its first anchor")
+	}
+
+	block, err := NewSidechainBlock(id, chain.Tip(), [][]byte{[]byte("late")}, 1)
+	if err != nil {
+		t.Fatalf("NewSidechainBlock: %v", err)
+	}
+	if err := chain.Append(block); err != nil {
+		t.Fatalf("Append: %v", err)
+	}
+
+	// The anchor still lands -- refusing it would leave a publisher who had an
+	// outage permanently unable to commit anything ever again -- but the lapse
+	// is on the record.
+	late := 100 + MaxAnchorGap + 1
+	if _, err := AnchorSidechain(chain, identity, ledger, late); err != nil {
+		t.Fatalf("a late anchor was refused: %v", err)
+	}
+	if !ledger.IsDelinquent(id) {
+		t.Fatalf("a gap of %d main-chain blocks did not mark the sidechain delinquent",
+			MaxAnchorGap+1)
+	}
+}
+
+func TestAnchorSpanIsBounded(t *testing.T) {
+	id, err := NewSidechainID(1, 1)
+	if err != nil {
+		t.Fatalf("NewSidechainID: %v", err)
+	}
+
+	// An unbounded span would let one anchor commit history that had been
+	// rewritable the whole time, which is a commitment in name only.
+	oversized := SidechainAnchor{
+		PublisherID: id.PublisherID, GameID: id.GameID,
+		FromHeight: 0, ToHeight: MaxAnchorSpan,
+		TipHash:    make([]byte, 32),
+		HeaderRoot: make([]byte, 32),
+	}
+	if err := oversized.Validate(); !errors.Is(err, ErrAnchorSpanTooLarge) {
+		t.Fatalf("expected ErrAnchorSpanTooLarge, got %v", err)
+	}
+
+	atLimit := oversized
+	atLimit.ToHeight = MaxAnchorSpan - 1
+	if err := atLimit.Validate(); err != nil {
+		t.Fatalf("an anchor exactly at the limit was refused: %v", err)
 	}
 }
 
@@ -605,11 +717,7 @@ func TestVerifyAgainstChainRejectsTheWrongSidechain(t *testing.T) {
 	chain := buildChain(t, mine, 2)
 	other := buildChain(t, theirs, 2)
 
-	anchor := SidechainAnchor{
-		PublisherID: mine.PublisherID, GameID: mine.GameID,
-		FromHeight: 0, ToHeight: 1,
-		TipHash: mustBlockHash(t, chain, 1),
-	}
+	anchor := anchorOver(t, chain, 0, 1)
 
 	if err := VerifyAgainstChain(anchor, other); !errors.Is(err, ErrSidechainMismatch) {
 		t.Fatalf("expected ErrSidechainMismatch, got %v", err)

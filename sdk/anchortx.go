@@ -62,6 +62,7 @@ func (a *AnchorTx) MarshalJSON() ([]byte, error) {
 	w.FromHeight = a.Anchor.FromHeight
 	w.ToHeight = a.Anchor.ToHeight
 	w.TipHash = hex.EncodeToString(a.Anchor.TipHash)
+	w.HeaderRoot = hex.EncodeToString(a.Anchor.HeaderRoot)
 	w.AnchorPayloads = a.Anchor.PayloadCount
 	w.AnchorSignature = hex.EncodeToString(a.AnchorSignature)
 	return json.Marshal(w)
@@ -96,6 +97,11 @@ func anchorFromWire(w txWire) (SidechainAnchor, []byte, error) {
 		return SidechainAnchor{}, nil, fmt.Errorf("%w: tip hash is not valid hex: %w",
 			ErrInvalidAnchor, err)
 	}
+	headerRoot, err := hex.DecodeString(w.HeaderRoot)
+	if err != nil {
+		return SidechainAnchor{}, nil, fmt.Errorf("%w: header root is not valid hex: %w",
+			ErrInvalidAnchor, err)
+	}
 	signature, err := hex.DecodeString(w.AnchorSignature)
 	if err != nil {
 		return SidechainAnchor{}, nil, fmt.Errorf("%w: anchor signature is not valid hex: %w",
@@ -108,6 +114,7 @@ func anchorFromWire(w txWire) (SidechainAnchor, []byte, error) {
 		FromHeight:   w.FromHeight,
 		ToHeight:     w.ToHeight,
 		TipHash:      tipHash,
+		HeaderRoot:   headerRoot,
 		PayloadCount: w.AnchorPayloads,
 	}, signature, nil
 }
@@ -136,6 +143,7 @@ func (a *AnchorTx) SigningBytes() ([]byte, error) {
 	fields["anchor_from_height"] = a.Anchor.FromHeight
 	fields["anchor_to_height"] = a.Anchor.ToHeight
 	fields["anchor_tip_hash"] = hex.EncodeToString(a.Anchor.TipHash)
+	fields["anchor_header_root"] = hex.EncodeToString(a.Anchor.HeaderRoot)
 	fields["anchor_payload_count"] = a.Anchor.PayloadCount
 	return json.Marshal(fields)
 }

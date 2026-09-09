@@ -21,21 +21,9 @@ type anchorFixture struct {
 func newAnchorFixture(t *testing.T, blocks int) *anchorFixture {
 	t.Helper()
 
-	id, err := NewSidechainID(1, 1)
-	if err != nil {
-		t.Fatalf("NewSidechainID: %v", err)
-	}
-
-	identity, err := NewPeerIdentity()
-	if err != nil {
-		t.Fatalf("NewPeerIdentity: %v", err)
-	}
-
 	wallet := newTestWallet(t, "publisher", 0)
 	set := NewUTXOSet()
-	if err := set.Anchors().Registry().Register(id.PublisherID, identity.PublicPEM); err != nil {
-		t.Fatalf("Register: %v", err)
-	}
+	identity, id := registerPublisher(t, set.Anchors())
 
 	// Fund the publisher so the anchor transaction's fee can be paid.
 	genesis := utxoBlock(t, 0, "", mintTo(t, wallet, wallet, 100))
@@ -139,11 +127,7 @@ func TestRejectedAnchorLeavesNoFeeCharged(t *testing.T) {
 	// transaction must have no effect, fee included: charging for a commitment
 	// that was not made would be a way to drain a publisher by replaying bad
 	// anchors.
-	anchor := SidechainAnchor{
-		PublisherID: f.id.PublisherID, GameID: f.id.GameID,
-		FromHeight: 1, ToHeight: 1,
-		TipHash: mustBlockHash(t, f.chain, 1),
-	}
+	anchor := anchorOver(t, f.chain, 1, 1)
 	signature, err := SignAnchor(f.identity, anchor)
 	if err != nil {
 		t.Fatalf("SignAnchor: %v", err)

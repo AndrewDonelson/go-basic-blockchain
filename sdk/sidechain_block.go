@@ -21,6 +21,10 @@ const sidechainBlockVersion uint32 = 1
 // later verify anchors.
 const maxSidechainPayloads = 65536
 
+// sidechainPayloadDomain separates the payload tree from every other tree in the
+// system, so a proof for one can never be replayed against another.
+const sidechainPayloadDomain = "gbb/sidechain/payload"
+
 var (
 	// ErrInvalidSidechainBlock is returned for a structurally invalid block.
 	ErrInvalidSidechainBlock = errors.New("invalid sidechain block")
@@ -122,38 +126,21 @@ func (b *SidechainBlock) ComputeHash() []byte {
 // Merkle tree is: without separation, an interior node can be presented as a leaf
 // and two different payload sets can produce one root.
 func sidechainPayloadRoot(payloads [][]byte) []byte {
-	if len(payloads) == 0 {
-		empty := sha256.Sum256([]byte("gbb/sidechain/empty"))
-		return empty[:]
-	}
+	return merkleRoot(sidechainPayloadDomain, payloads)
+}
 
-	level := make([][]byte, 0, len(payloads))
-	for _, payload := range payloads {
-		leaf := sha256.Sum256(append([]byte("gbb/sidechain/leaf"), payload...))
-		level = append(level, leaf[:])
-	}
+// PayloadProof returns the inclusion proof for one of a block's payloads.
+//
+// This is what makes an availability challenge answerable: a publisher can prove
+// a single payload against the committed root without producing the rest of the
+// block, and a verifier can check it without holding the block at all.
+func (b *SidechainBlock) PayloadProof(index int) ([][]byte, error) {
+	return merkleProof(sidechainPayloadDomain, b.Payloads, index)
+}
 
-	for len(level) > 1 {
-		next := make([][]byte, 0, (len(level)+1)/2)
-		for i := 0; i < len(level); i += 2 {
-			left := level[i]
-			// An odd node is paired with itself, and the domain byte keeps that
-			// from being confusable with a genuine two-child node.
-			right := left
-			if i+1 < len(level) {
-				right = level[i+1]
-			}
-			combined := make([]byte, 0, len(left)+len(right)+len("gbb/sidechain/node"))
-			combined = append(combined, []byte("gbb/sidechain/node")...)
-			combined = append(combined, left...)
-			combined = append(combined, right...)
-			parent := sha256.Sum256(combined)
-			next = append(next, parent[:])
-		}
-		level = next
-	}
-
-	return level[0]
+// VerifyPayload checks a payload against a block's committed payload root.
+func VerifyPayloadInclusion(payloadRoot, payload []byte, index, count int, path [][]byte) bool {
+	return merkleVerify(sidechainPayloadDomain, payloadRoot, payload, index, count, path)
 }
 
 // NewSidechainBlock builds the next block for a sidechain.

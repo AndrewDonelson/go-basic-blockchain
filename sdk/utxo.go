@@ -126,6 +126,25 @@ type BlockUndo struct {
 	// publisher's next anchor fails contiguity against a commitment that is no
 	// longer on the chain.
 	Anchors []anchorRestore
+	// Registrations holds the ids this block allocated, so a rollback releases
+	// them. Leaving an id allocated after its registration was rolled back would
+	// let the next registrant receive an id that a still-circulating anchor
+	// refers to.
+	Registrations []registrationRestore
+	// Availability holds each challenge's state before this block, so a rollback
+	// reopens what it closed. A challenge that stayed closed after the block
+	// answering it was dropped would let a publisher clear an obligation with a
+	// proof no longer on the chain.
+	Availability []availabilityRestore
+	// Bonds holds what this block slashed, per publisher.
+	Bonds map[uint64]int64
+}
+
+// registrationRestore identifies an allocation to release on rollback.
+type registrationRestore struct {
+	Kind        uint32
+	PublisherID uint64
+	GameID      uint64
 }
 
 // nonceRestore remembers a sender's prior nonce, distinguishing "had none" from
@@ -154,17 +173,22 @@ type UTXOSet struct {
 	// happen, and an anchor that survived a reorg would be a commitment to a
 	// history the chain no longer contains.
 	anchors *AnchorLedger
+	// availability tracks open challenges, for the same reason and in the same
+	// place.
+	availability *AvailabilityLedger
 }
 
 // NewUTXOSet creates an empty set.
 func NewUTXOSet() *UTXOSet {
-	return &UTXOSet{
+	set := &UTXOSet{
 		outputs:   map[Outpoint]*UTXO{},
 		byAddress: map[string]map[Outpoint]struct{}{},
 		undo:      map[string]*BlockUndo{},
 		nonces:    map[string]uint64{},
 		anchors:   NewAnchorLedger(NewPublisherRegistry()),
 	}
+	set.availability = NewAvailabilityLedger(set.anchors)
+	return set
 }
 
 // BalanceUnits returns an address's spendable balance in base units.
@@ -320,6 +344,7 @@ func (s *UTXOSet) ApplyBlock(block *Block, split feeSplit) (*BlockUndo, error) {
 		BlockHash:  block.Hash,
 		BlockIndex: blockIndex,
 		Nonces:     map[string]nonceRestore{},
+		Bonds:      map[uint64]int64{},
 	}
 
 	// Stage the changes so a failure part-way leaves the set untouched.
@@ -333,6 +358,13 @@ func (s *UTXOSet) ApplyBlock(block *Block, split feeSplit) (*BlockUndo, error) {
 			return nil, fmt.Errorf("block %s, transaction %s: %w",
 				block.Index.String(), tx.GetID(), err)
 		}
+	}
+
+	// Expiry is swept after the block's transactions, so a proof included in this
+	// very block still counts. A publisher who answers on the deadline block
+	// should not be slashed by an ordering accident.
+	if err := s.expireChallengesLocked(blockIndex, staged, undo); err != nil {
+		return nil, fmt.Errorf("block %s: %w", block.Index.String(), err)
 	}
 
 	staged.commit()
@@ -472,12 +504,145 @@ func (s *UTXOSet) applyTransactionLocked(tx Transaction, blockIndex int64, split
 		_ = spent
 		return nil
 
+	case *RegistrationTx:
+		// The registration is applied before the bond is taken, for the same
+		// reason the anchor is: a refused registration must leave the whole
+		// transaction without effect rather than charging for a claim that was
+		// not granted.
+		if err := concrete.VerifyRegistrationSignature(s.anchors.Registry()); err != nil {
+			return fmt.Errorf("registration %s: %w", txID, err)
+		}
+
+		registry := s.anchors.Registry()
+
+		switch concrete.Kind {
+		case RegistrationKindPublisher:
+			publisherID, err := registry.RegisterPublisher(concrete.PublicKeyPEM,
+				concrete.Name, concrete.BondUnits, blockIndex)
+			if err != nil {
+				return fmt.Errorf("registration %s: %w", txID, err)
+			}
+			if undo != nil {
+				undo.Registrations = append(undo.Registrations, registrationRestore{
+					Kind: RegistrationKindPublisher, PublisherID: publisherID,
+				})
+			}
+
+			// The bond moves to an address with no private key, so only a
+			// consensus rule can ever move it again.
+			bondAddress := DerivePublisherBondAddress(publisherID)
+			_, totalIn, err := s.spendLocked(sender, concrete.BondUnits+feeUnits, staged, undo)
+			if err != nil {
+				return fmt.Errorf("registration %s: %w", txID, err)
+			}
+
+			emit(bondAddress, concrete.BondUnits, false)
+			s.emitFees(feeUnits, split, emit)
+			if change := totalIn - concrete.BondUnits - feeUnits; change > 0 {
+				emit(sender, change, false)
+			}
+			return nil
+
+		case RegistrationKindGame:
+			gameID, err := registry.RegisterGame(concrete.PublisherID, concrete.Name, blockIndex)
+			if err != nil {
+				return fmt.Errorf("registration %s: %w", txID, err)
+			}
+			if undo != nil {
+				undo.Registrations = append(undo.Registrations, registrationRestore{
+					Kind:        RegistrationKindGame,
+					PublisherID: concrete.PublisherID,
+					GameID:      gameID,
+				})
+			}
+
+			if feeUnits == 0 {
+				return nil
+			}
+			_, totalIn, err := s.spendLocked(sender, feeUnits, staged, undo)
+			if err != nil {
+				return err
+			}
+			s.emitFees(feeUnits, split, emit)
+			if change := totalIn - feeUnits; change > 0 {
+				emit(sender, change, false)
+			}
+			return nil
+
+		default:
+			return fmt.Errorf("registration %s: %w: unknown kind %d",
+				txID, ErrRegistrationInvalid, concrete.Kind)
+		}
+
+	case *AvailabilityTx:
+		switch concrete.Kind {
+		case AvailabilityKindChallenge:
+			// The challenger's stake goes to an address with no private key and
+			// stays there until the challenge resolves, so neither side can
+			// withdraw it while the question is open.
+			restore, err := s.availability.openForUndo(concrete.Challenge, blockIndex)
+			if err != nil {
+				return fmt.Errorf("challenge %s: %w", txID, err)
+			}
+			undo.Availability = append(undo.Availability, restore)
+
+			escrow := DeriveChallengeEscrowAddress(concrete.Challenge.ID())
+			_, totalIn, err := s.spendLocked(sender,
+				AvailabilityChallengeFeeUnits+feeUnits, staged, undo)
+			if err != nil {
+				return fmt.Errorf("challenge %s: %w", txID, err)
+			}
+
+			emit(escrow, AvailabilityChallengeFeeUnits, false)
+			s.emitFees(feeUnits, split, emit)
+			if change := totalIn - AvailabilityChallengeFeeUnits - feeUnits; change > 0 {
+				emit(sender, change, false)
+			}
+			return nil
+
+		case AvailabilityKindProof:
+			restore, challenge, err := s.availability.answerForUndo(concrete.Proof)
+			if err != nil {
+				return fmt.Errorf("proof %s: %w", txID, err)
+			}
+			undo.Availability = append(undo.Availability, restore)
+
+			// The stake goes to whoever answered, which is what makes a
+			// frivolous challenge pay the person it inconvenienced.
+			escrow := DeriveChallengeEscrowAddress(challenge.ID())
+			staked, _, err := s.spendLocked(escrow, AvailabilityChallengeFeeUnits, staged, undo)
+			if err != nil {
+				return fmt.Errorf("proof %s: %w", txID, err)
+			}
+			_ = staked
+
+			if sender != "" {
+				emit(sender, AvailabilityChallengeFeeUnits, false)
+			}
+
+			if feeUnits > 0 {
+				_, totalIn, err := s.spendLocked(sender, feeUnits, staged, undo)
+				if err != nil {
+					return err
+				}
+				s.emitFees(feeUnits, split, emit)
+				if change := totalIn - feeUnits; change > 0 {
+					emit(sender, change, false)
+				}
+			}
+			return nil
+
+		default:
+			return fmt.Errorf("availability %s: %w: unknown kind %d",
+				txID, ErrChallengeInvalid, concrete.Kind)
+		}
+
 	case *AnchorTx:
 		// The anchor is the whole point of the transaction, so it is recorded
 		// before the fee is taken: if the commitment is refused -- wrong
 		// publisher, or a range that does not follow what is already anchored --
 		// nothing about this transaction should take effect.
-		restore, err := s.anchors.recordForUndo(concrete.Anchor, concrete.AnchorSignature)
+		restore, err := s.anchors.recordForUndo(concrete.Anchor, concrete.AnchorSignature, blockIndex)
 		if err != nil {
 			return fmt.Errorf("anchor %s: %w", txID, err)
 		}
@@ -588,6 +753,33 @@ func (s *UTXOSet) RevertBlock(blockHash string) error {
 	// later block could be resurrected by reverting an earlier one.
 	if len(s.applied) == 0 || s.applied[len(s.applied)-1] != blockHash {
 		return fmt.Errorf("block %s is not the most recently applied block", blockHash)
+	}
+
+	// Releasing allocated ids comes first because it is the only step that can
+	// fail. Doing it after the outputs had already been rewritten would leave the
+	// set half-reverted, describing a state no chain ever had -- the same failure
+	// mode ApplyBlock stages its changes to avoid.
+	//
+	// Reverse order, and for a stricter reason than the others: ids come from a
+	// counter, so they can only be released newest first.
+	registry := s.anchors.Registry()
+	for publisherID, units := range undo.Bonds {
+		registry.restoreBond(publisherID, units)
+	}
+	for i := len(undo.Availability) - 1; i >= 0; i-- {
+		s.availability.restore(undo.Availability[i])
+	}
+	for i := len(undo.Registrations) - 1; i >= 0; i-- {
+		entry := undo.Registrations[i]
+		var err error
+		if entry.Kind == RegistrationKindPublisher {
+			err = registry.unregisterPublisher(entry.PublisherID)
+		} else {
+			err = registry.unregisterGame(entry.PublisherID, entry.GameID)
+		}
+		if err != nil {
+			return fmt.Errorf("reverting block %s: %w", blockHash, err)
+		}
 	}
 
 	for _, outpoint := range undo.Created {
@@ -784,4 +976,100 @@ func (s *UTXOSet) Anchors() *AnchorLedger {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.anchors
+}
+
+// expireChallengesLocked closes every availability challenge whose deadline has
+// passed, slashing the publisher's bond.
+//
+// This runs on every applied block rather than waiting for someone to submit a
+// "you failed" transaction. Making a slash depend on a third party bothering to
+// claim it would mean a publisher who withheld data escaped whenever nobody was
+// watching, which is exactly the case the mechanism is for.
+func (s *UTXOSet) expireChallengesLocked(blockIndex int64, staged *stagedChanges, undo *BlockUndo) error {
+	if s.availability == nil {
+		return nil
+	}
+
+	due := s.availability.dueChallenges(blockIndex)
+	if len(due) == 0 {
+		return nil
+	}
+
+	// Deterministic order: every node must produce identical outputs from the
+	// same block, and a map's iteration order is not identical anywhere.
+	sort.Slice(due, func(i, j int) bool {
+		return due[i].ID() < due[j].ID()
+	})
+
+	registry := s.anchors.Registry()
+
+	for _, challenge := range due {
+		challengeID := challenge.ID()
+
+		restore, expired, err := s.availability.expireForUndo(challengeID)
+		if err != nil {
+			return err
+		}
+		undo.Availability = append(undo.Availability, restore)
+
+		// Synthetic outpoints: this movement belongs to the block rather than to
+		// any transaction in it, but it still has to be addressable so a revert
+		// can find it.
+		txID := "expire:" + challengeID
+		var nextIndex uint32
+		emit := func(address string, units int64) {
+			if units <= 0 || address == "" {
+				return
+			}
+			utxo := &UTXO{
+				Outpoint:   Outpoint{TxID: txID, Index: nextIndex},
+				Address:    address,
+				Units:      units,
+				BlockIndex: blockIndex,
+			}
+			nextIndex++
+			staged.add(utxo)
+			undo.Created = append(undo.Created, utxo.Outpoint)
+		}
+
+		// The stake goes back to the challenger: they asked a fair question and
+		// were not answered.
+		escrow := DeriveChallengeEscrowAddress(challengeID)
+		if _, _, err := s.spendLocked(escrow, AvailabilityChallengeFeeUnits, staged, undo); err != nil {
+			return fmt.Errorf("expiring challenge %s: %w", challengeID, err)
+		}
+		emit(expired.Challenger, AvailabilityChallengeFeeUnits)
+
+		// And the bond pays for the failure. The registry's figure is reduced
+		// first so it cannot be slashed twice for coins that are no longer there,
+		// and the coins move to match.
+		taken, err := registry.slashBond(expired.PublisherID, AvailabilitySlashUnits)
+		if err != nil {
+			return fmt.Errorf("expiring challenge %s: %w", challengeID, err)
+		}
+		if taken <= 0 {
+			continue
+		}
+		undo.Bonds[expired.PublisherID] += taken
+
+		bondAddress := DerivePublisherBondAddress(expired.PublisherID)
+		_, totalIn, err := s.spendLocked(bondAddress, taken, staged, undo)
+		if err != nil {
+			return fmt.Errorf("expiring challenge %s: %w", challengeID, err)
+		}
+
+		emit(expired.Challenger, taken)
+		if change := totalIn - taken; change > 0 {
+			emit(bondAddress, change)
+		}
+	}
+
+	return nil
+}
+
+// Availability returns the main chain's availability challenge ledger.
+func (s *UTXOSet) Availability() *AvailabilityLedger {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.availability
 }
