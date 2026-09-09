@@ -215,7 +215,7 @@ func newNode(opts *NodeOptions) (*Node, error) {
 	)
 	wallet, err := NewWallet(walletOptions)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create wallet: %v", err)
+		return nil, fmt.Errorf("failed to create wallet: %w", err)
 	}
 	n.Wallet = wallet
 

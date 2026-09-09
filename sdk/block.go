@@ -193,8 +193,16 @@ func (b *Block) String() string {
 }
 
 // Bytes returns the serialized byte representation of the block.
+//
+// A marshalling failure is logged rather than silently swallowed: the result
+// feeds Size(), and a nil slice makes a block look zero-sized to the block-size
+// accounting, which is the one place that would never notice.
 func (b *Block) Bytes() []byte {
-	data, _ := json.Marshal(b)
+	data, err := json.Marshal(b)
+	if err != nil {
+		LogInfof("Cannot serialise block %s: %v", b.Index.String(), err)
+		return nil
+	}
 	return data
 }
 
@@ -280,7 +288,7 @@ func (b *Block) Validate(previousBlock *Block) error {
 			return fmt.Errorf("block contains a failed transaction: %s", tx.GetID())
 		}
 		if err := tx.Validate(); err != nil {
-			return fmt.Errorf("invalid transaction: %v", err)
+			return fmt.Errorf("invalid transaction: %w", err)
 		}
 		// Newly minted supply is a genesis-only event.
 		//
@@ -409,11 +417,22 @@ func (b *Block) createBlockHeaderForMining() []byte {
 // hash stays the header hash: overwriting it with proof.FinalHash meant
 // Block.Validate's `Hash != CalculateHash()` check failed for every mined block.
 // The proof's own hash is checked separately by the Helios validator.
-func (b *Block) updateWithHeliosProof(proof *algorithm.HeliosProof) {
+func (b *Block) updateWithHeliosProof(proof *algorithm.HeliosProof) error {
+	// The header nonce is 32 bits and the Helios nonce is 64. Truncating would
+	// store a nonce that does not reproduce the proof, so the block would fail
+	// verification on every peer -- and on this node after a restart -- for no
+	// visible reason. Mining stops at the timeout long before this is reachable,
+	// which is exactly why it has to be an explicit refusal rather than a silent
+	// wrap that nobody would ever see happen.
+	if proof.Nonce > math.MaxUint32 {
+		return fmt.Errorf("helios nonce %d does not fit the 32-bit header field", proof.Nonce)
+	}
+
 	b.Header.Nonce = uint32(proof.Nonce)
 	b.Header.Timestamp = proof.Timestamp
 	b.HeliosProof = proof
 	b.Hash = b.CalculateHash()
+	return nil
 }
 
 // CanAddTransaction checks if adding a new transaction would exceed the maximum
@@ -465,6 +484,15 @@ func (b *Block) CreateBloomFilter() *BloomFilter {
 // wrapped it re-tried the same hashes indefinitely, so a difficulty the machine
 // could not reach hung the caller permanently.
 func (b *Block) Mine(difficulty uint) error {
+	// A hash is 64 hex characters, so a prefix longer than that can never match.
+	// Without the bound, strings.Repeat allocates one byte per unit of difficulty
+	// -- a caller passing a large value would try to allocate gigabytes before
+	// failing, rather than being told the target is unreachable.
+	if difficulty > sha256.Size*2 {
+		return fmt.Errorf("difficulty %d exceeds the %d hex characters in a hash",
+			difficulty, sha256.Size*2)
+	}
+
 	// For difficulty n, we need the hash to start with n zeros in hex
 	// This means the first n*4 bits must be zero
 	prefix := strings.Repeat("0", int(difficulty))
@@ -511,15 +539,26 @@ func (b *Block) CalculateHash() string {
 	}
 	writeInt64 := func(v int64) {
 		var tmp [8]byte
+		//nolint:gosec // bit reinterpretation for hashing, not arithmetic
 		binary.BigEndian.PutUint64(tmp[:], uint64(v))
 		buf.Write(tmp[:])
 	}
 	writeBytes := func(v []byte) {
-		writeUint32(uint32(len(v)))
+		// The length prefix is what makes the preimage unambiguous. If it
+		// truncated, two different headers could serialise identically -- the
+		// exact collision the delimiters exist to prevent. No field is anywhere
+		// near this large; the guard is here because silently wrapping would be
+		// undetectable.
+		if len(v) > math.MaxUint32 {
+			panic("block header field exceeds the 32-bit length prefix")
+		}
+		writeUint32(uint32(len(v))) //nolint:gosec // bounded by the check immediately above
 		buf.Write(v)
 	}
 
-	writeUint32(uint32(b.Header.Version))
+	// Reinterpreting the bits: this is a hash preimage, not arithmetic, and the
+	// mapping is total and deterministic in both directions.
+	writeUint32(uint32(b.Header.Version)) //nolint:gosec // bit reinterpretation for hashing
 	writeBytes([]byte(b.Header.PreviousHash))
 	writeBytes(b.Header.MerkleRoot)
 	writeInt64(b.Header.Timestamp.UTC().UnixNano())
@@ -628,6 +667,7 @@ func (bf *BloomFilter) Add(data []byte) {
 	}
 	h := sha256.Sum256(data)
 	for i := uint(0); i < bf.k && i < maxBloomHashes; i++ {
+		//nolint:gosec // a slice length in bits, never negative
 		idx := binary.BigEndian.Uint64(h[i*8:]) % uint64(len(bf.bitset)*8)
 		bf.bitset[idx/8] |= 1 << (idx % 8)
 	}
@@ -640,6 +680,7 @@ func (bf *BloomFilter) Contains(data []byte) bool {
 	}
 	h := sha256.Sum256(data)
 	for i := uint(0); i < bf.k && i < maxBloomHashes; i++ {
+		//nolint:gosec // a slice length in bits, never negative
 		idx := binary.BigEndian.Uint64(h[i*8:]) % uint64(len(bf.bitset)*8)
 		if bf.bitset[idx/8]&(1<<(idx%8)) == 0 {
 			return false

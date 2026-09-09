@@ -34,10 +34,13 @@ const (
 	authRateLimitAttempts = 10
 	authRateLimitWindow   = time.Minute
 
-	envAPIKeyHeader       = "API_KEY_HEADER"
-	envBlockchainAPIKey   = "BLOCKCHAIN_API_KEY"
+	// These are the NAMES of environment variables, not values. The credentials
+	// themselves have no defaults at all -- authentication fails closed, which is
+	// the whole point of the change that removed the built-in demo key.
+	envAPIKeyHeader       = "API_KEY_HEADER"     //nolint:gosec // G101: a variable name, not a credential
+	envBlockchainAPIKey   = "BLOCKCHAIN_API_KEY" //nolint:gosec // G101: a variable name, not a credential
 	envBlockchainAPIEmail = "BLOCKCHAIN_API_EMAIL"
-	envServerSeed         = "BLOCKCHAIN_SERVER_SEED"
+	envServerSeed         = "BLOCKCHAIN_SERVER_SEED" //nolint:gosec // G101: a variable name, not a credential
 )
 
 // ErrNoAPIKeyConfigured is returned when the node has no usable API credentials.

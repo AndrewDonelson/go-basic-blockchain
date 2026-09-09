@@ -134,7 +134,7 @@ func (c *Coinbase) SigningBytes() ([]byte, error) {
 func (c *Coinbase) Sign(privPEM []byte) (string, error) {
 	payload, err := c.SigningBytes()
 	if err != nil {
-		return "", fmt.Errorf("error marshaling transaction: %v", err)
+		return "", fmt.Errorf("error marshaling transaction: %w", err)
 	}
 	return signPayload(payload, privPEM)
 }
@@ -143,7 +143,7 @@ func (c *Coinbase) Sign(privPEM []byte) (string, error) {
 func (c *Coinbase) Verify(pubKey []byte, sign string) (bool, error) {
 	payload, err := c.SigningBytes()
 	if err != nil {
-		return false, fmt.Errorf("error marshaling transaction: %v", err)
+		return false, fmt.Errorf("error marshaling transaction: %w", err)
 	}
 	return verifyPayload(payload, pubKey, sign)
 }
@@ -174,7 +174,7 @@ func (c *Coinbase) EstimateFee(feePerByte float64) float64 {
 // Send queues the Coinbase transaction itself rather than its base transaction.
 func (c *Coinbase) Send(bc *Blockchain) error {
 	if err := c.Validate(); err != nil {
-		return fmt.Errorf("invalid transaction: %v", err)
+		return fmt.Errorf("invalid transaction: %w", err)
 	}
 	bc.AddTransaction(c)
 	return nil

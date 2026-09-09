@@ -63,6 +63,7 @@ func (bc *Blockchain) AcceptBlockWithResult(block *Block) (ReorgResult, error) {
 	bc.Metrics().Add("tx_mined", uint64(len(block.Transactions)))
 	if result.Reorganised {
 		bc.Metrics().Inc("reorgs")
+		//nolint:gosec // a count of disconnected blocks, bounded by maxReorgDepth
 		bc.Metrics().Add("reorg_blocks", uint64(result.Disconnected))
 	}
 
@@ -316,20 +317,20 @@ func (bc *Blockchain) ValidateChain() error {
 		}
 
 		if err := currentBlock.Validate(previousBlock); err != nil {
-			return fmt.Errorf("invalid block at index %d: %v", i, err)
+			return fmt.Errorf("invalid block at index %d: %w", i, err)
 		}
 
 		// Verify the proof of work. ValidateChain previously checked hash linkage
 		// and transaction validity but never that any work had been done.
 		if bc.useHeliosMining {
 			if err := bc.verifyHeliosProof(currentBlock, blockDifficulty(currentBlock, bc.cfg.Difficulty)); err != nil {
-				return fmt.Errorf("invalid proof of work at block %d: %v", i, err)
+				return fmt.Errorf("invalid proof of work at block %d: %w", i, err)
 			}
 		}
 
 		for _, tx := range currentBlock.Transactions {
 			if err := tx.Validate(); err != nil {
-				return fmt.Errorf("invalid transaction %s in block %d: %v", tx.GetID(), i, err)
+				return fmt.Errorf("invalid transaction %s in block %d: %w", tx.GetID(), i, err)
 			}
 		}
 	}

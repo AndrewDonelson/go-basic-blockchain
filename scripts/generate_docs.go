@@ -276,7 +276,9 @@ func main() {
 
 		// Write HTML documentation
 		outputPath := filepath.Join(docsDir, strings.TrimSuffix(filepath.Base(file), ".go")+".html")
-		err = os.WriteFile(outputPath, []byte(htmlDoc), 0644)
+		// 0644: this is generated public documentation meant to be served and
+		// read by anyone, not a secret.
+		err = os.WriteFile(outputPath, []byte(htmlDoc), 0644) //nolint:gosec // G306: public docs
 		if err != nil {
 			log.Printf("Error writing documentation for %s: %v", file, err)
 			continue

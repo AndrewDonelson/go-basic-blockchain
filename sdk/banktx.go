@@ -103,7 +103,7 @@ func (b *Bank) SigningBytes() ([]byte, error) {
 func (b *Bank) Sign(privPEM []byte) (string, error) {
 	payload, err := b.SigningBytes()
 	if err != nil {
-		return "", fmt.Errorf("error marshaling transaction: %v", err)
+		return "", fmt.Errorf("error marshaling transaction: %w", err)
 	}
 	return signPayload(payload, privPEM)
 }
@@ -112,7 +112,7 @@ func (b *Bank) Sign(privPEM []byte) (string, error) {
 func (b *Bank) Verify(pubKey []byte, sign string) (bool, error) {
 	payload, err := b.SigningBytes()
 	if err != nil {
-		return false, fmt.Errorf("error marshaling transaction: %v", err)
+		return false, fmt.Errorf("error marshaling transaction: %w", err)
 	}
 	return verifyPayload(payload, pubKey, sign)
 }
@@ -149,7 +149,7 @@ func (b *Bank) EstimateFee(feePerByte float64) float64 {
 // embedded base transaction and silently drop Amount.
 func (b *Bank) Send(bc *Blockchain) error {
 	if err := b.Validate(); err != nil {
-		return fmt.Errorf("invalid transaction: %v", err)
+		return fmt.Errorf("invalid transaction: %w", err)
 	}
 	bc.AddTransaction(b)
 	LogVerbosef("Bank transaction %s added to the transaction queue", b.GetID())

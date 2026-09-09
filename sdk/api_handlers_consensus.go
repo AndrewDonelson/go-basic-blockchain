@@ -9,7 +9,7 @@ import (
 	"net/http"
 )
 
-// handleConsensusP2P handles the consensus/P2P endpoint. This is used to recieve and process a Broadcast a Message to 1/3. Upon validation it is then
+// handleConsensusP2P handles the consensus/P2P endpoint. This is used to receive and process a Broadcast a Message to 1/3. Upon validation it is then
 // broadcast to 2/3 of all nodes. Finally upon validation it is Broadcast to all nodes
 // 1. get the post data and unmarshal it into a P2PTransaction
 // 2. Add the transaction to the P2P queue

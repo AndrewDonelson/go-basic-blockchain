@@ -273,6 +273,43 @@ func TestWallet_Create(t *testing.T) {
 > was actually found in this codebase and fixed; the audit is in `_design/`, and
 > `sdk/regression_test.go` pins one test per defect.
 
+### Running the analysers
+
+```bash
+golangci-lint run ./...        # 0 findings; keep it that way
+govulncheck ./...              # known vulnerabilities
+go test ./... -race            # data races
+```
+
+**`golangci-lint` reports zero findings** across the repository. A new one is a
+regression, not a nuisance — the pass that got it to zero found three real
+defects (an unchecked type assertion reachable from the network, PEM encoding
+that discarded its errors, and a difficulty ceiling that could never fire).
+
+Where a finding is correct but the behaviour is intended, the suppression states
+the reason:
+
+```go
+//nolint:gosec // difficulty is clamped to [0,255] immediately above
+```
+
+That is the standard to hold: `//nolint` without a reason is just a silenced
+warning, and the next reader has no way to tell a considered decision from an
+overlooked one.
+
+### Keep your toolchain current
+
+`govulncheck` reports standard-library vulnerabilities reachable from this code —
+23 at the time of writing, every one fixed in a later Go patch release. **No
+change to this repository can fix them**; they are in the toolchain that compiles
+it.
+
+`go.mod` therefore declares a language version (`go 1.22`) but **no `toolchain`
+directive**. The directive used to pin `go1.22.0`, which forced every build onto
+that exact vulnerable toolchain. Without it, Go uses whatever installed toolchain
+satisfies the language version, so keeping Go updated actually helps. CI runs the
+scanners on a current release for the same reason.
+
 ### Lessons from the audit
 
 **Sign every field that carries value.** `Tx.Sign` marshalled only the embedded

@@ -436,6 +436,169 @@ indistinguishable from a working one until something depends on it.
 
 ---
 
+## Case 14: Any block could mint the entire supply
+
+The UTXO set credits a coinbase's `TokenCount` to its recipient and consumes
+nothing. Nothing restricted *which block* a coinbase could appear in.
+
+```go
+case *Coinbase:
+    units := concrete.TokenCount * UnitsPerToken
+    emit(recipient, units, true)   // consumes nothing
+```
+
+So a peer could mine an ordinary block containing a coinbase for the full
+33,554,432 tokens, have every node accept it, and repeat once per block.
+
+This was proven before it was fixed, which is the part worth copying:
+
+```
+attacker balance before: 0
+AcceptBlock result={true false 0 0 1 0} err=<nil>
+attacker balance after:  3355443200000000
+```
+
+`err=<nil>`. The chain accepted it.
+
+**The fix.** A coinbase is valid only in block 0 — enforced in `Block.Validate`
+(the one path `AcceptBlock`, branch validation and `ValidateChain` all share),
+again in the UTXO set, and again at mempool admission.
+
+*Tests:* `sdk/coinbase_supply_test.go`
+
+**Lesson.** When you write code that creates value from nothing, the very next
+question is *who is allowed to call this, and how is that enforced?* "Only the
+genesis path calls it" is an observation about today's callers, not a rule. A
+rule is something the code refuses to break.
+
+---
+
+## Case 15: Fixing one thing exposed another
+
+Difficulty used to be a static config value, and fork choice weighs branches by
+the work each block **declares**:
+
+```go
+BlockWork(d) = 2^d
+```
+
+While difficulty never changed, that was harmless. The moment it varies, an
+unchecked declaration lets a miner write `Difficulty: 200` into a cheap block and
+outweigh every honest chain in existence, for free.
+
+The feature and its defence had to land together: the required difficulty is
+derived from the block's own ancestry, and a mismatch is rejected outright.
+
+There was a second trap inside the same change. `Header.Difficulty` is an
+**exponent** (work = `2^d`), while the adjuster works in **linear** difficulty.
+Passing the exponent straight in turns a requested doubling into a 16× jump:
+
+```
+adjuster wants 2x the work at exponent 4
+hands back 8  ->  2^8 / 2^4  =  16x
+```
+
+Within a few windows the chain becomes unmineable.
+
+*Tests:* `TestDifficultyExponentRoundTrip`, `TestBlockDeclaringTheWrongDifficultyIsRejected`
+
+**Lesson.** Two things. A value that is safe *because* something else never
+changes is a landmine with a date on it — write down the dependency, or enforce
+it. And when two components exchange numbers, name the units. "Difficulty" meant
+two incompatible things in one codebase and the compiler was happy with both.
+
+---
+
+## Case 16: The crash the fuzzer found in one second
+
+```go
+func (t *Tx) GetID() string {
+    return t.ID.String()      // t.ID is a *PUID
+}
+```
+
+A transaction decoded from a peer message or a block file with no `"id"` field
+leaves `t.ID` nil. `PUID.String()` dereferenced it. Any malformed transaction
+crashed the node that read it — and `GetID` is called constantly: mempool
+deduplication, block indexing, logging.
+
+`MarshalJSON` already handled the nil case. `String` did not.
+
+The first run of `FuzzDecodeTransaction` found it immediately:
+
+```
+panic: runtime error: invalid memory address or nil pointer dereference
+sdk.(*PUID).String(0x0)
+sdk.(*Tx).GetID(...)
+```
+
+*Tests:* `sdk/fuzz_test.go`
+
+**Lesson.** Every parser that reads bytes from disk or the network deserves a
+fuzz target — they are twenty lines each. Note also *where* the bug was: not in
+the parser, but in a getter three calls away. The fuzzer found it because the
+target did something with the parsed value instead of just checking the error.
+
+---
+
+## Case 17: Authentication attached to the wrong thing
+
+```go
+func (api *API) Start() error {
+    api.router.Use(apiKeyMiddleware)   // installed here
+    ...
+}
+```
+
+Authentication went on in `Start()`. So `api.router` — on its own, without
+`Start()` — was an API with **no authentication at all**.
+
+Anything serving the router directly got an open node: an embedder wiring it into
+its own `http.Server`, or a test harness doing exactly that. This project's own
+API tests were in the second category, which is why nothing noticed.
+
+**The fix.** Middleware is installed in `NewAPI`, alongside the routes it
+protects, so the router is safe to serve as it is.
+
+*Test:* `TestRouterIsAuthenticatedWithoutStart`
+
+**Lesson.** Ask what your security property is attached to. "Requests are
+authenticated" was true of the *server*, not the *router* — and the router is the
+thing people reuse. A guarantee that depends on the caller taking an extra step
+is a guarantee you do not have.
+
+---
+
+## Case 18: A random nonce is not replay protection
+
+`Nonce` was a random 64-bit value. It makes every transaction distinct, so it
+*looks* like it does the job.
+
+It does not. Randomness says nothing about **order**, so nothing stops an
+already-mined transaction being handed back to the chain — on a fresh branch
+after a reorganisation, or by any peer that kept a copy — and applied a second
+time, spending the same coins again.
+
+**The fix.** The nonce is the sender's sequence number, and the chain requires it
+to strictly increase. The nonce is covered by the signature, so an old
+transaction cannot be renumbered to look new.
+
+The interesting part is what this exposed. Nonce state has to be *rolled back*
+with a reorganisation, or a rolled-back transaction leaves its nonce recorded and
+the sender is locked out of a nonce they never actually spent. And the rollback
+record must be taken **once per sender per block**, not per transaction —
+otherwise reverting a block containing two transactions from one sender restores
+the value from *between* them.
+
+*Tests:* `sdk/nonce_test.go`
+
+**Lesson.** "It is unique" and "it prevents replay" are different claims. Write
+down the property you actually need — here, *a total order per sender that
+survives a reorganisation* — and check the mechanism against that sentence, not
+against a vague sense that random values are safe.
+
+---
+
 ## The meta-lesson
 
 Before the audit:
@@ -467,3 +630,33 @@ assert.Equal(t, 1, q.Len())
 That comment describes silent data loss, written down as intended behaviour.
 
 **Green is not the goal. Correct is.**
+
+---
+
+## Postscript: what the tooling caught, and what it did not
+
+After the defects above were fixed by hand, the static analysers were turned on
+properly. They found real things:
+
+- an unchecked `tx.(*Bank)` asserted on the strength of a protocol *string*, so a
+  transaction claiming to be a BANK without being one panicked the node reading
+  it — reachable from disk and from the network
+- PEM encoding that discarded both marshalling errors, so a wallet whose key
+  could not be encoded produced a valid-looking PEM block containing nothing, was
+  written to disk, and failed much later at signing with nothing connecting the
+  failure to its cause
+- a difficulty ceiling of `math.MaxUint32` on a value that is an *exponent* —
+  `2^4294967295` is not a hard target, it is an unreachable one
+
+And it found a great deal of noise, which is the other half of the lesson. Roughly
+half the findings were correct-but-intentional: a deliberate nil context in a test
+*about* nil contexts, a bit reinterpretation for hashing, a count from `len()`
+that cannot be negative. Those are now annotated with the reason rather than
+silenced, so the next reader learns why instead of wondering.
+
+**What tooling will not find.** Every defect in Cases 1–18 was invisible to the
+linters. No analyser knows that a signature should cover the amount, that a
+coinbase belongs only in block 0, or that difficulty is an exponent on one side
+of an interface and a scalar on the other. Static analysis finds *mechanical*
+faults. Consensus bugs are semantic, and the only tools for those are adversarial
+tests and reading the code while asking what an attacker would send.

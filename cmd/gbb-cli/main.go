@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -90,9 +91,9 @@ func NewBlockchainClient() *BlockchainClient {
 
 func (bc *BlockchainClient) Connect() error {
 	// Test connection to the API
-	resp, err := bc.httpClient.Get(bc.apiURL + "/health")
+	resp, err := bc.get("/health")
 	if err != nil {
-		return fmt.Errorf("cannot connect to blockchain API: %v. Please start the blockchain first with: ./bin/release/gbbd", err)
+		return fmt.Errorf("cannot connect to blockchain API: %w. Please start the blockchain first with: ./bin/release/gbbd", err)
 	}
 	defer resp.Body.Close()
 
@@ -103,9 +104,22 @@ func (bc *BlockchainClient) Connect() error {
 	return nil
 }
 
+// get issues a GET with a context attached.
+//
+// http.Client.Get builds a request with no context, so a hung or unreachable
+// node could not be cancelled -- only the client's own timeout would end it, and
+// the caller had no way to give up sooner.
+func (bc *BlockchainClient) get(endpoint string) (*http.Response, error) {
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, bc.apiURL+endpoint, nil)
+	if err != nil {
+		return nil, err
+	}
+	return bc.httpClient.Do(req)
+}
+
 func (bc *BlockchainClient) IsConnected() bool {
 	// Test connection
-	resp, err := bc.httpClient.Get(bc.apiURL + "/health")
+	resp, err := bc.get("/health")
 	if err != nil {
 		return false
 	}
@@ -114,7 +128,7 @@ func (bc *BlockchainClient) IsConnected() bool {
 }
 
 func (bc *BlockchainClient) makeRequest(method, endpoint string) ([]byte, error) {
-	req, err := http.NewRequest(method, bc.apiURL+endpoint, nil)
+	req, err := http.NewRequestWithContext(context.Background(), method, bc.apiURL+endpoint, nil)
 	if err != nil {
 		return nil, err
 	}

@@ -22,7 +22,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        go-version: ["1.22", "1.23"]
+        # 1.22 is the floor declared in go.mod; the newest entry is a patched
+        # release, so govulncheck below is not reporting standard-library CVEs
+        # that only a toolchain upgrade can fix.
+        go-version: ["1.22", "1.25"]
 
     steps:
       - uses: actions/checkout@v4
@@ -68,7 +71,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
-          go-version: "1.22"
+          go-version: "1.25"
           cache: true
       - name: golangci-lint
         uses: golangci/golangci-lint-action@v6
@@ -83,7 +86,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
-          go-version: "1.22"
+          go-version: "1.25"
           cache: true
       - name: govulncheck
         run: |

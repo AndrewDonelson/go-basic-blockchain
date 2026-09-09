@@ -86,6 +86,7 @@ func TestApiKeyMiddleware(t *testing.T) {
 
 		resp, err := client.Do(req)
 		assert.NoError(t, err)
+		defer resp.Body.Close()
 		assert.Equal(t, http.StatusOK, resp.StatusCode)
 	})
 
@@ -95,6 +96,7 @@ func TestApiKeyMiddleware(t *testing.T) {
 
 		resp, err := client.Do(req)
 		assert.NoError(t, err)
+		defer resp.Body.Close()
 		assert.Equal(t, http.StatusUnauthorized, resp.StatusCode)
 	})
 
@@ -103,6 +105,7 @@ func TestApiKeyMiddleware(t *testing.T) {
 
 		resp, err := client.Do(req)
 		assert.NoError(t, err)
+		defer resp.Body.Close()
 		assert.Equal(t, http.StatusUnauthorized, resp.StatusCode)
 	})
 }
@@ -145,6 +148,7 @@ func TestPublicPathAccessWithMiddleware(t *testing.T) {
 	req, _ := http.NewRequestWithContext(context.Background(), "GET", testServer.URL, nil)
 	resp, err := client.Do(req)
 	assert.NoError(t, err)
+	defer resp.Body.Close()
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
 }
 

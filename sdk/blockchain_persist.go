@@ -103,17 +103,17 @@ func (bc *Blockchain) createBlockchain() error {
 
 	devWallet, err := NewWallet(NewWalletOptions(ThisBlockchainOrganizationID, ThisBlockchainAppID, ThisBlockchainAdminUserID, ThisBlockchainDevAssetID, "Dev", devWalletPW, []string{"blockchain", "master"}))
 	if err != nil {
-		return fmt.Errorf("failed to create dev wallet: %v", err)
+		return fmt.Errorf("failed to create dev wallet: %w", err)
 	}
 
 	err = devWallet.Close(devWalletPW)
 	if err != nil {
-		return fmt.Errorf("failed to close dev wallet: %v", err)
+		return fmt.Errorf("failed to close dev wallet: %w", err)
 	}
 
 	err = devWallet.Open(devWalletPW)
 	if err != nil {
-		return fmt.Errorf("failed to open dev wallet: %v", err)
+		return fmt.Errorf("failed to open dev wallet: %w", err)
 	}
 
 	bc.cfg.DevAddress = devWallet.GetAddress()
@@ -126,15 +126,15 @@ func (bc *Blockchain) createBlockchain() error {
 
 	minerWallet, err := NewWallet(NewWalletOptions(ThisBlockchainOrganizationID, ThisBlockchainAppID, ThisBlockchainAdminUserID, ThisBlockchainMinerID, "Miner", minerWalletPW, []string{"blockchain", "node", "miner"}))
 	if err != nil {
-		return fmt.Errorf("failed to create miner wallet: %v", err)
+		return fmt.Errorf("failed to create miner wallet: %w", err)
 	}
 
 	if err = minerWallet.Close(minerWalletPW); err != nil {
-		return fmt.Errorf("failed to close miner wallet: %v", err)
+		return fmt.Errorf("failed to close miner wallet: %w", err)
 	}
 
 	if err = minerWallet.Open(minerWalletPW); err != nil {
-		return fmt.Errorf("failed to open miner wallet: %v", err)
+		return fmt.Errorf("failed to open miner wallet: %w", err)
 	}
 
 	bc.cfg.MinerAddress = minerWallet.GetAddress()
@@ -230,8 +230,10 @@ func (bc *Blockchain) LoadExistingBlocks() error {
 	blocksPath := filepath.Join(bc.cfg.DataPath, "blocks")
 
 	// Look for both .json and .jso files (in case of truncated names)
-	jsonFiles, _ := filepath.Glob(filepath.Join(blocksPath, "*.json"))
-	jsoFiles, _ := filepath.Glob(filepath.Join(blocksPath, "*.jso"))
+	// Glob only fails on a malformed pattern, and both patterns are literals, so
+	// the error cannot occur here.
+	jsonFiles, _ := filepath.Glob(filepath.Join(blocksPath, "*.json")) //nolint:errcheck // pattern is a literal
+	jsoFiles, _ := filepath.Glob(filepath.Join(blocksPath, "*.jso"))   //nolint:errcheck // pattern is a literal
 	files := append(jsonFiles, jsoFiles...)
 	if len(files) == 0 {
 		LogVerbosef("No existing blocks found in %s", blocksPath)

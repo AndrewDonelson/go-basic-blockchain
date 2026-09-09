@@ -3,6 +3,7 @@ package sdk
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
 
 	bip32 "github.com/tyler-smith/go-bip32"
 	bip39 "github.com/tyler-smith/go-bip39"
@@ -44,8 +45,14 @@ func DeriveKeyPair(mnemonic string, password string) (publicKey, privateKey []by
 		return emptyKey, emptyKey, err
 	}
 
-	publicKey, _ = masterKey.PublicKey().Serialize()
-	privateKey, _ = masterKey.Serialize()
+	publicKey, err = masterKey.PublicKey().Serialize()
+	if err != nil {
+		return emptyKey, emptyKey, fmt.Errorf("serialise public key: %w", err)
+	}
+	privateKey, err = masterKey.Serialize()
+	if err != nil {
+		return emptyKey, emptyKey, fmt.Errorf("serialise private key: %w", err)
+	}
 
 	return publicKey, privateKey, nil
 }

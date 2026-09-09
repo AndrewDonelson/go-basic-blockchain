@@ -226,28 +226,6 @@ func (c *Config) applyCommandLineFlags() {
 	}
 }
 
-// promptForValues prompts the user for configuration values.
-func (c *Config) promptForValues() {
-	c.BlockchainName = c.promptString("BLOCKCHAIN_NAME", c.BlockchainName)
-	c.BlockchainSymbol = c.promptString("BLOCKCHAIN_SYMBOL", c.BlockchainSymbol)
-	c.BlockTime = c.promptInt("BLOCK_TIME", c.BlockTime)
-	c.Difficulty = c.promptInt("DIFFICULTY", c.Difficulty)
-	c.TransactionFee = c.promptFloat("TRANSACTION_FEE", c.TransactionFee)
-	c.MinerRewardPCT = c.promptFloat("MINER_REWARD_PCT", c.MinerRewardPCT)
-	c.MinerAddress = c.promptString("MINER_ADDRESS", c.MinerAddress)
-	c.DevRewardPCT = c.promptFloat("DEV_REWARD_PCT", c.DevRewardPCT)
-	c.DevAddress = c.promptString("DEV_ADDRESS", c.DevAddress)
-	c.APIHostName = c.promptString("API_HOSTNAME", c.APIHostName)
-	c.P2PHostName = c.promptString("P2P_HOSTNAME", c.P2PHostName)
-	c.EnableAPI = c.promptBool("ENABLE_API", c.EnableAPI)
-	c.FundWalletAmount = c.promptFloat("FUND_WALLET_AMOUNT", c.FundWalletAmount)
-	c.TokenCount = c.promptInt64("TOKEN_COUNT", c.TokenCount)
-	c.TokenPrice = c.promptFloat("TOKEN_PRICE", c.TokenPrice)
-	c.AllowNewTokens = c.promptBool("ALLOW_NEW_TOKENS", c.AllowNewTokens)
-	c.MaxBlockSize = c.promptInt("MAX_BLOCK_SIZE", c.MaxBlockSize)
-	c.MinTransactionFee = c.promptFloat("MIN_TRANSACTION_FEE", c.MinTransactionFee)
-}
-
 // Validate checks if the configuration is valid.
 func (c *Config) Validate() error {
 	if c.BlockchainName == "" {
@@ -337,121 +315,7 @@ func (c *Config) Path() string {
 	return filepath.Dir(ex)
 }
 
-// save writes the current configuration to the .env file.
-func (c *Config) save() error {
-	if c.promptUpdate {
-		f, err := os.Create(cfgFile)
-		if err != nil {
-			return fmt.Errorf("error creating .env file: %s", err)
-		}
-		defer f.Close()
-
-		if err := c.writeEnvValue(f, "BLOCKCHAIN_NAME", c.BlockchainName); err != nil {
-			return err
-		}
-		if err := c.writeEnvValue(f, "BLOCKCHAIN_SYMBOL", c.BlockchainSymbol); err != nil {
-			return err
-		}
-		if err := c.writeEnvValue(f, "BLOCK_TIME", fmt.Sprintf("%d", c.BlockTime)); err != nil {
-			return err
-		}
-		if err := c.writeEnvValue(f, "DIFFICULTY", fmt.Sprintf("%d", c.Difficulty)); err != nil {
-			return err
-		}
-		if err := c.writeEnvValue(f, "TRANSACTION_FEE", fmt.Sprintf("%.2f", c.TransactionFee)); err != nil {
-			return err
-		}
-		if err := c.writeEnvValue(f, "MINER_REWARD_PCT", fmt.Sprintf("%.2f", c.MinerRewardPCT)); err != nil {
-			return err
-		}
-		if err := c.writeEnvValue(f, "MINER_ADDRESS", c.MinerAddress); err != nil {
-			return err
-		}
-		if err := c.writeEnvValue(f, "DEV_REWARD_PCT", fmt.Sprintf("%.2f", c.DevRewardPCT)); err != nil {
-			return err
-		}
-		if err := c.writeEnvValue(f, "DEV_ADDRESS", c.DevAddress); err != nil {
-			return err
-		}
-		if err := c.writeEnvValue(f, "API_HOSTNAME", c.APIHostName); err != nil {
-			return err
-		}
-		c.writeEnvValue(f, "P2P_HOSTNAME", c.P2PHostName)
-		if err := c.writeEnvValue(f, "ENABLE_API", fmt.Sprintf("%v", c.EnableAPI)); err != nil {
-			return err
-		}
-		if err := c.writeEnvValue(f, "FUND_WALLET_AMOUNT", fmt.Sprintf("%.2f", c.FundWalletAmount)); err != nil {
-			return err
-		}
-		if err := c.writeEnvValue(f, "TOKEN_COUNT", fmt.Sprintf("%d", c.TokenCount)); err != nil {
-			return err
-		}
-		if err := c.writeEnvValue(f, "TOKEN_PRICE", fmt.Sprintf("%.2f", c.TokenPrice)); err != nil {
-			return err
-		}
-		if err := c.writeEnvValue(f, "ALLOW_NEW_TOKENS", fmt.Sprintf("%v", c.AllowNewTokens)); err != nil {
-			return err
-		}
-		if err := c.writeEnvValue(f, "MAX_MEMPOOL_TXS", fmt.Sprintf("%d", c.MaxMempoolTxs)); err != nil {
-			return err
-		}
-
-		if err := c.writeEnvValue(f, "MAX_BLOCK_SIZE", fmt.Sprintf("%d", c.MaxBlockSize)); err != nil {
-			return err
-		}
-		if err := c.writeEnvValue(f, "MIN_TRANSACTION_FEE", fmt.Sprintf("%.2f", c.MinTransactionFee)); err != nil {
-			return err
-		}
-
-		log.Println("Updated values have been saved to .env file.")
-	} else {
-		log.Println("No values were modified.")
-	}
-
-	return nil
-}
-
 // Helper functions
-
-func (c *Config) promptString(key, defaultValue string) string {
-	value := c.promptValue(key, defaultValue, false, "string").(string)
-	if value != defaultValue {
-		c.promptUpdate = true
-	}
-	return value
-}
-
-func (c *Config) promptInt(key string, defaultValue int) int {
-	value := c.promptValue(key, fmt.Sprintf("%d", defaultValue), false, "int").(int)
-	if value != defaultValue {
-		c.promptUpdate = true
-	}
-	return value
-}
-
-func (c *Config) promptInt64(key string, defaultValue int64) int64 {
-	value := c.promptValue(key, fmt.Sprintf("%d", defaultValue), false, "int64").(int64)
-	if value != defaultValue {
-		c.promptUpdate = true
-	}
-	return value
-}
-
-func (c *Config) promptFloat(key string, defaultValue float64) float64 {
-	value := c.promptValue(key, fmt.Sprintf("%.2f", defaultValue), false, "float").(float64)
-	if value != defaultValue {
-		c.promptUpdate = true
-	}
-	return value
-}
-
-func (c *Config) promptBool(key string, defaultValue bool) bool {
-	value := c.promptValue(key, fmt.Sprintf("%v", defaultValue), false, "bool").(bool)
-	if value != defaultValue {
-		c.promptUpdate = true
-	}
-	return value
-}
 
 // promptValue reads a configuration value from the terminal.
 //
@@ -471,7 +335,9 @@ func (c *Config) promptValue(key, defaultValue string, required bool, returnType
 		fmt.Printf("Enter value for %s (<ENTER> default: %s): ", key, defaultValue)
 	}
 
-	_, _ = fmt.Scanln(&value)
+	// A read error (EOF on a redirected stdin) leaves the default in place, which
+	// is the behaviour a non-interactive caller wants.
+	_, _ = fmt.Scanln(&value) //nolint:errcheck // the default stands on a read error
 
 	if required && value == "" {
 		fmt.Println("This is a required value and must be set")
@@ -493,40 +359,35 @@ func parseConfigValue(value, defaultValue, returnType string) interface{} {
 		intValue, err := strconv.Atoi(value)
 		if err != nil {
 			fmt.Printf("Invalid integer %q; using %s\n", value, defaultValue)
-			intValue, _ = strconv.Atoi(defaultValue)
+			// The default comes from this package, not from the user; if it does
+			// not parse that is a bug here, and zero is the honest answer.
+			intValue, _ = strconv.Atoi(defaultValue) //nolint:errcheck // fallback to zero is intended
 		}
 		return intValue
 	case "int64":
 		int64Value, err := strconv.ParseInt(value, 10, 64)
 		if err != nil {
 			fmt.Printf("Invalid 64-bit integer %q; using %s\n", value, defaultValue)
-			int64Value, _ = strconv.ParseInt(defaultValue, 10, 64)
+			int64Value, _ = strconv.ParseInt(defaultValue, 10, 64) //nolint:errcheck // fallback to zero is intended
 		}
 		return int64Value
 	case "float":
 		floatValue, err := strconv.ParseFloat(value, 64)
 		if err != nil {
 			fmt.Printf("Invalid number %q; using %s\n", value, defaultValue)
-			floatValue, _ = strconv.ParseFloat(defaultValue, 64)
+			floatValue, _ = strconv.ParseFloat(defaultValue, 64) //nolint:errcheck // fallback to zero is intended
 		}
 		return floatValue
 	case "bool":
 		boolValue, err := strconv.ParseBool(value)
 		if err != nil {
 			fmt.Printf("Invalid boolean %q; using %s\n", value, defaultValue)
-			boolValue, _ = strconv.ParseBool(defaultValue)
+			boolValue, _ = strconv.ParseBool(defaultValue) //nolint:errcheck // fallback to false is intended
 		}
 		return boolValue
 	default:
 		return value
 	}
-}
-
-func (c *Config) writeEnvValue(f *os.File, key, value string) error {
-	if _, err := fmt.Fprintf(f, "%s=%s\n", key, value); err != nil {
-		return fmt.Errorf("error writing to .env file: %w", err)
-	}
-	return nil
 }
 
 // Helper functions for environment variable handling
@@ -601,13 +462,27 @@ func fileExists(filename string) bool {
 	return !info.IsDir()
 }
 
+// promptString reads a value from the terminal as a string.
+//
+// promptValue returns interface{}, and callers asserted `.(string)` directly. The
+// assertion panics if the value is ever anything else -- a library taking the
+// host process down because of its own internal type dispatch. The comma-ok form
+// falls back to the default instead.
+func (c *Config) promptStringValue(key, defaultValue string, required bool) string {
+	raw := c.promptValue(key, defaultValue, required, "string")
+	if value, ok := raw.(string); ok {
+		return value
+	}
+	return defaultValue
+}
+
 // PromptYesNo prompts the user with a given question and returns a bool value based on their response.
 func (c *Config) PromptYesNo(question string) bool {
 	affirmativeResponses := []string{"yes", "y", "true", "t"}
 	negativeResponses := []string{"no", "n", "false", "f"}
 
 	for {
-		response := strings.ToLower(c.promptValue(question, "", true, "string").(string))
+		response := strings.ToLower(c.promptStringValue(question, "", true))
 		for _, affirmative := range affirmativeResponses {
 			if response == affirmative {
 				return true
@@ -624,15 +499,15 @@ func (c *Config) PromptYesNo(question string) bool {
 
 // PromptWalletInfo prompts the user to enter wallet information.
 func (c *Config) PromptWalletInfo() (walletName string, walletPass string, walletTags []string) {
-	walletName = c.promptValue("Wallet Name", "", false, "string").(string)
-	walletPass = c.promptValue("Passphrase", "", true, "string").(string)
+	walletName = c.promptStringValue("Wallet Name", "", false)
+	walletPass = c.promptStringValue("Passphrase", "", true)
 	walletTags = c.promptTags()
 	return
 }
 
 // promptTags prompts the user to enter a comma-delimited list of tags for the wallet.
 func (c *Config) promptTags() []string {
-	tagsStr := c.promptValue("Tags (comma-separated)", "", false, "string").(string)
+	tagsStr := c.promptStringValue("Tags (comma-separated)", "", false)
 	tags := strings.Split(tagsStr, ",")
 	for i := 0; i < len(tags); i++ {
 		tags[i] = strings.TrimSpace(tags[i])

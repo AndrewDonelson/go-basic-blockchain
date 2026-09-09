@@ -290,6 +290,7 @@ func (bc *Blockchain) trimMempoolLocked() {
 	}
 	bc.TransactionQueue = remaining
 
+	//nolint:gosec // a count of dropped entries, never negative
 	bc.Metrics().Add("mempool_evicted", uint64(dropped))
 	LogVerbosef("Trimmed %d transaction(s) from the mempool to stay within %d", dropped, capacity)
 }

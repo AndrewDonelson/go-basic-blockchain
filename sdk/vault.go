@@ -33,11 +33,24 @@ func NewPEM(key *ecdsa.PrivateKey) *PEM {
 // The function returns the PEM-encoded private key and public key as strings.
 // The private key is encoded using the "PRIVATE KEY" PEM block type, and the
 // public key is encoded using the "PUBLIC KEY" PEM block type.
+// A marshalling failure returns empty strings rather than a PEM block wrapping
+// no key. Both errors used to be discarded, so a wallet whose key could not be
+// encoded still produced syntactically valid PEM containing nothing -- it was
+// written to disk, and only failed much later at the point of signing, with
+// nothing to connect the failure to its cause.
 func (p *PEM) Encode(privateKey *ecdsa.PrivateKey, publicKey *ecdsa.PublicKey) (string, string) {
-	x509Encoded, _ := x509.MarshalECPrivateKey(privateKey)
+	x509Encoded, err := x509.MarshalECPrivateKey(privateKey)
+	if err != nil {
+		LogInfof("Cannot PEM-encode the private key: %v", err)
+		return "", ""
+	}
 	pemEncoded := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: x509Encoded})
 
-	x509EncodedPub, _ := x509.MarshalPKIXPublicKey(publicKey)
+	x509EncodedPub, err := x509.MarshalPKIXPublicKey(publicKey)
+	if err != nil {
+		LogInfof("Cannot PEM-encode the public key: %v", err)
+		return "", ""
+	}
 	pemEncodedPub := pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: x509EncodedPub})
 
 	return string(pemEncoded), string(pemEncodedPub)
@@ -118,7 +131,7 @@ func (v *Vault) RestoreKeyFromPEM() error {
 	}
 	key, err := x509.ParseECPrivateKey(block.Bytes)
 	if err != nil {
-		return fmt.Errorf("failed to parse EC private key: %v", err)
+		return fmt.Errorf("failed to parse EC private key: %w", err)
 	}
 	v.Key = key
 	return nil

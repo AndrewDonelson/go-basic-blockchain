@@ -201,11 +201,6 @@ func (p *P2P) selfAddressSnapshot() string {
 	return p.selfAddress
 }
 
-// newLimitedReader bounds how many bytes may be read from a connection.
-func newLimitedReader(conn net.Conn, limit int64) io.Reader {
-	return io.LimitReader(conn, limit)
-}
-
 // P2PTransaction represents a transaction to be processed.
 //
 // Data is json.RawMessage rather than interface{}: after a JSON round-trip an

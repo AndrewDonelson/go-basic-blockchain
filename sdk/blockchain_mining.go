@@ -23,6 +23,7 @@ func difficultyTarget(difficulty int) *big.Int {
 	if difficulty > 255 {
 		difficulty = 255
 	}
+	//nolint:gosec // difficulty is clamped to [0,255] immediately above
 	return new(big.Int).Lsh(big.NewInt(1), uint(256-difficulty))
 }
 
@@ -78,7 +79,10 @@ func (bc *Blockchain) mineWithHelios(block *Block, difficulty int) (*Block, erro
 	}
 
 	// Update block with Helios proof
-	block.updateWithHeliosProof(proof)
+	if err := block.updateWithHeliosProof(proof); err != nil {
+		return nil, fmt.Errorf("cannot record the proof on block %s: %w",
+			block.Index.String(), err)
+	}
 
 	// Verify our own work before publishing it. bc.heliosValidator was constructed
 	// and then never called anywhere, so nothing ever checked a proof.
@@ -141,6 +145,7 @@ func (bc *Blockchain) mineWithSimplePoW(block *Block, difficulty int) (*Block, e
 	}
 
 	for i := 0; i < maxMiningNonce; i++ {
+		//nolint:gosec // i < maxMiningNonce == 1<<32, so it fits exactly
 		block.Header.Nonce = uint32(i)
 		block.Hash = block.CalculateHash()
 
@@ -243,6 +248,7 @@ func (bc *Blockchain) createNewBlock(difficulty int) {
 	// verification used cfg.Difficulty, so the field was decorative and disagreed
 	// with the work done. It is now the retargeted value derived from the chain,
 	// which is also what peers will validate this block against.
+	//nolint:gosec // expectedDifficultyForNextLocked clamps to [1, maxAcceptableDifficulty]
 	newBlock.Header.Difficulty = uint32(blockDifficulty)
 	newBlock.Header.MerkleRoot = newBlock.CalculateMerkleRoot()
 
@@ -308,6 +314,7 @@ func (bc *Blockchain) commitMinedBlock(newBlock *Block, txCount int) {
 
 	bc.Metrics().Inc("blocks_mined")
 	bc.Metrics().RecordBlock(newBlock.Header.Timestamp, int(newBlock.Header.Difficulty))
+	//nolint:gosec // a transaction count from len(), never negative
 	bc.Metrics().Add("tx_mined", uint64(txCount))
 
 	LogVerbosef("New block created: [#%s] Hash: %s with %d transactions",

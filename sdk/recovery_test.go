@@ -182,13 +182,23 @@ func TestMnemonicChecksumCatchesTypos(t *testing.T) {
 		t.Fatalf("expected a 12-word phrase, got %d words", len(words))
 	}
 
-	// Swap a word for another valid BIP-39 word; the checksum should fail.
-	words[0] = "zoo"
-	typo := strings.Join(words, " ")
-	if typo != mnemonic {
-		if err := ValidateMnemonic(typo); err == nil {
-			t.Fatal("a phrase with a substituted word passed validation")
-		}
+	// Fixed BIP-39 vectors rather than a substitution into a random phrase.
+	//
+	// Substituting one word into a generated phrase is only a 15-in-16 test: the
+	// checksum is four bits, so one time in sixteen the altered phrase is still
+	// valid and the assertion fails for no reason. These two differ only in the
+	// last word, and the checksum is what separates them.
+	const (
+		validVector   = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about"
+		invalidVector = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon"
+	)
+
+	if err := ValidateMnemonic(validVector); err != nil {
+		t.Fatalf("a known-good BIP-39 vector failed validation: %v", err)
+	}
+	if err := ValidateMnemonic(invalidVector); err == nil {
+		t.Fatal("a phrase whose only fault is its checksum passed validation; " +
+			"a mistyped word would go undetected")
 	}
 
 	for _, bad := range []string{"", "not a real mnemonic at all", strings.Repeat("zoo ", 12)} {

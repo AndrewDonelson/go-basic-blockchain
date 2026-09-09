@@ -196,8 +196,9 @@ func (ls *LocalStorage) file(t interface{}) (filePath string, err error) {
 	case *BlockchainPersistData:
 		filePath = filepath.Join(ls.dataPath, "blockchain.json")
 	case *Block:
-		// where t is a Block
-		filePath = filepath.Join(ls.dataPath, "blocks", fmt.Sprintf("%s.json", (t.(*Block).Index).String()))
+		// tt is already the *Block the switch matched; the old form re-asserted
+		// t.(*Block), which is the same value obtained in a way that panics.
+		filePath = filepath.Join(ls.dataPath, "blocks", fmt.Sprintf("%s.json", tt.Index.String()))
 	case *Wallet:
 		filePath = filepath.Join(ls.dataPath, "wallets", tt.Address+".json")
 	default:

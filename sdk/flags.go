@@ -210,7 +210,7 @@ func (a *Arguments) ParseArgs(argv []string) error {
 		// An unrecognised flag is reported here rather than by the loop below;
 		// the set refuses to parse past it.
 		if strings.Contains(err.Error(), "not defined") {
-			return fmt.Errorf("%w: %v", ErrUnknownArg, err)
+			return fmt.Errorf("%w: %w", ErrUnknownArg, err)
 		}
 		return err
 	}

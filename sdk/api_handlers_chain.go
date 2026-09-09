@@ -160,32 +160,6 @@ func (api *API) handleViewTransactionInBlock(w http.ResponseWriter, r *http.Requ
 	RespondError(w, http.StatusNotFound, "Transaction not found")
 }
 
-// handleBrowseTransactionsByProtocolInBlock handles the /blockchain/blocks/{index}/transactions/{protocol} endpoint.
-func (api *API) handleBrowseTransactionsByProtocolInBlock(w http.ResponseWriter, r *http.Request) {
-	vars := mux.Vars(r)
-	indexStr := vars["index"]
-	protocolStr := vars["protocol"]
-
-	index, err := strconv.Atoi(indexStr)
-	if err != nil {
-		RespondError(w, http.StatusBadRequest, "Invalid block index")
-		return
-	}
-
-	if index < 0 || index >= len(api.bc.Blocks) {
-		RespondError(w, http.StatusNotFound, "Block not found")
-		return
-	}
-
-	protocol, ok := normalizeProtocol(protocolStr)
-	if !ok {
-		RespondError(w, http.StatusBadRequest, "Invalid protocol")
-		return
-	}
-
-	api.respondTransactionsByProtocol(w, api.bc.Blocks[index], protocol)
-}
-
 // collectAllTransactions returns every transaction, read under the chain's lock.
 func (api *API) collectAllTransactions() []Transaction {
 	return api.bc.GetAllTransactions()
@@ -228,25 +202,4 @@ func (api *API) handleViewTransaction(w http.ResponseWriter, r *http.Request) {
 	}
 
 	RespondError(w, http.StatusNotFound, "Transaction not found")
-}
-
-// handleBrowseTransactionsByProtocol handles the /blockchain/transactions/{protocol} endpoint.
-func (api *API) handleBrowseTransactionsByProtocol(w http.ResponseWriter, r *http.Request) {
-	vars := mux.Vars(r)
-	protocolStr := vars["protocol"]
-
-	protocol, ok := normalizeProtocol(protocolStr)
-	if !ok {
-		RespondError(w, http.StatusBadRequest, "Invalid protocol")
-		return
-	}
-
-	filtered := make([]Transaction, 0)
-	for _, tx := range api.collectAllTransactions() {
-		if strings.EqualFold(tx.GetProtocol(), protocol) {
-			filtered = append(filtered, tx)
-		}
-	}
-
-	api.respondTransactionList(w, filtered)
 }

@@ -50,7 +50,7 @@ func menuCommandAction(input string) string {
 func main() {
 	// Parse command-line flags
 	err := sdk.Args.Parse()
-	if err == sdk.ErrNoArgs {
+	if errors.Is(err, sdk.ErrNoArgs) {
 		fmt.Println("No arguments provided. Using default configuration.")
 		fmt.Println("Use -h or --help for usage information.")
 	} else if err != nil {

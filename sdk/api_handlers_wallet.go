@@ -144,6 +144,7 @@ func (api *API) handleCreateWallet(w http.ResponseWriter, r *http.Request) {
 	if r.Body != nil {
 		// An empty body is tolerated so the endpoint stays usable for exploration;
 		// the passphrase check below still applies.
+		//nolint:errcheck // an unparsable body leaves the zero value; the passphrase check below rejects it
 		_ = json.NewDecoder(io.LimitReader(r.Body, apiMaxBodyBytes)).Decode(&req)
 	}
 
@@ -528,40 +529,4 @@ func (api *API) handleViewTransactionForWallet(w http.ResponseWriter, r *http.Re
 	}
 
 	RespondError(w, http.StatusNotFound, "Transaction not found")
-}
-
-// handleBrowseTransactionsByProtocolForWallet handles the /blockchain/wallets/{id}/transactions/{protocol} endpoint.
-func (api *API) handleBrowseTransactionsByProtocolForWallet(w http.ResponseWriter, r *http.Request) {
-	vars := mux.Vars(r)
-	walletID := vars["id"]
-	protocolStr := vars["protocol"]
-
-	if walletID == "" {
-		RespondError(w, http.StatusBadRequest, "Invalid wallet ID")
-		return
-	}
-
-	protocol, ok := normalizeProtocol(protocolStr)
-	if !ok {
-		RespondError(w, http.StatusBadRequest, "Invalid protocol")
-		return
-	}
-
-	history := api.bc.GetTransactionHistory(walletID)
-	api.respondTransactionsForWalletByProtocol(w, history, protocol)
-}
-
-func parseWalletTransactionPath(path string) (string, string, bool) {
-	const prefix = "/blockchain/wallets/"
-	if !strings.HasPrefix(path, prefix) {
-		return "", "", false
-	}
-
-	trimmed := strings.TrimPrefix(path, prefix)
-	parts := strings.Split(trimmed, "/")
-	if len(parts) != 3 || parts[1] != "transactions" || parts[0] == "" || parts[2] == "" {
-		return "", "", false
-	}
-
-	return parts[0], parts[2], true
 }

@@ -281,7 +281,7 @@ func (t *Tx) Process() string {
 // Send sends the filled and signed transaction to the network queue to be added to the blockchain.
 func (t *Tx) Send(bc *Blockchain) error {
 	if err := t.Validate(); err != nil {
-		return fmt.Errorf("invalid transaction: %v", err)
+		return fmt.Errorf("invalid transaction: %w", err)
 	}
 
 	bc.AddTransaction(t)
@@ -328,14 +328,14 @@ func signPayload(payload []byte, privPEM []byte) (string, error) {
 
 	pk, err := x509.ParseECPrivateKey(block.Bytes)
 	if err != nil {
-		return "", fmt.Errorf("error parsing private key: %v", err)
+		return "", fmt.Errorf("error parsing private key: %w", err)
 	}
 
 	hash := sha256.Sum256(payload)
 
 	sign, err := ecdsa.SignASN1(rand.Reader, pk, hash[:])
 	if err != nil {
-		return "", fmt.Errorf("error signing transaction: %v", err)
+		return "", fmt.Errorf("error signing transaction: %w", err)
 	}
 	return base64.StdEncoding.EncodeToString(sign), nil
 }
@@ -348,7 +348,7 @@ func verifyPayload(payload []byte, pubKey []byte, sign string) (bool, error) {
 	}
 	genericPublicKey, err := x509.ParsePKIXPublicKey(block.Bytes)
 	if err != nil {
-		return false, fmt.Errorf("error parsing public key: %v", err)
+		return false, fmt.Errorf("error parsing public key: %w", err)
 	}
 	pk, ok := genericPublicKey.(*ecdsa.PublicKey)
 	if !ok {
@@ -359,7 +359,7 @@ func verifyPayload(payload []byte, pubKey []byte, sign string) (bool, error) {
 
 	bSign, err := base64.StdEncoding.DecodeString(sign)
 	if err != nil {
-		return false, fmt.Errorf("error decoding signature: %v", err)
+		return false, fmt.Errorf("error decoding signature: %w", err)
 	}
 	return ecdsa.VerifyASN1(pk, hash[:], bSign), nil
 }
@@ -372,7 +372,7 @@ func verifyPayload(payload []byte, pubKey []byte, sign string) (bool, error) {
 func (t *Tx) Sign(privPEM []byte) (string, error) {
 	payload, err := t.SigningBytes()
 	if err != nil {
-		return "", fmt.Errorf("error marshaling transaction: %v", err)
+		return "", fmt.Errorf("error marshaling transaction: %w", err)
 	}
 	return signPayload(payload, privPEM)
 }
@@ -381,7 +381,7 @@ func (t *Tx) Sign(privPEM []byte) (string, error) {
 func (t *Tx) Verify(pubKey []byte, sign string) (bool, error) {
 	payload, err := t.SigningBytes()
 	if err != nil {
-		return false, fmt.Errorf("error marshaling transaction: %v", err)
+		return false, fmt.Errorf("error marshaling transaction: %w", err)
 	}
 	return verifyPayload(payload, pubKey, sign)
 }

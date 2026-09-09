@@ -1,5 +1,5 @@
 // Package sdk is a software development kit for building blockchain applications.
-// File sdk/persisttx.go - Persistance Transaction for all On Chain Storage related Protocol based transactions
+// File sdk/persisttx.go - Persistence Transaction for all On Chain Storage related Protocol based transactions
 package sdk
 
 import (
@@ -69,7 +69,7 @@ func (p *Persist) SigningBytes() ([]byte, error) {
 func (p *Persist) Sign(privPEM []byte) (string, error) {
 	payload, err := p.SigningBytes()
 	if err != nil {
-		return "", fmt.Errorf("error marshaling transaction: %v", err)
+		return "", fmt.Errorf("error marshaling transaction: %w", err)
 	}
 	return signPayload(payload, privPEM)
 }
@@ -78,7 +78,7 @@ func (p *Persist) Sign(privPEM []byte) (string, error) {
 func (p *Persist) Verify(pubKey []byte, sign string) (bool, error) {
 	payload, err := p.SigningBytes()
 	if err != nil {
-		return false, fmt.Errorf("error marshaling transaction: %v", err)
+		return false, fmt.Errorf("error marshaling transaction: %w", err)
 	}
 	return verifyPayload(payload, pubKey, sign)
 }
@@ -109,7 +109,7 @@ func (p *Persist) EstimateFee(feePerByte float64) float64 {
 // Send queues the Persist transaction itself rather than its base transaction.
 func (p *Persist) Send(bc *Blockchain) error {
 	if err := p.Validate(); err != nil {
-		return fmt.Errorf("invalid transaction: %v", err)
+		return fmt.Errorf("invalid transaction: %w", err)
 	}
 	bc.AddTransaction(p)
 	return nil

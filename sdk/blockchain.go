@@ -61,6 +61,23 @@ type Blockchain struct {
 	// by hash. Fork choice walks it to assemble a candidate branch, so a block
 	// arriving out of order is retained rather than discarded.
 	blockIndex map[string]*Block
+	// indexedBlocks is how many leading entries of Blocks are already in
+	// blockIndex, and indexedTipHash is the hash that was at that position.
+	// The hash is what makes the count trustworthy: a reorganisation can replace
+	// blocks below the old length, so a count alone would skip them.
+	indexedBlocks  int
+	indexedTipHash string
+	// mainChainHeight maps a hash to its position on the main chain. Unlike
+	// blockIndex it holds main-chain blocks only, so it is cleared whenever the
+	// chain is rebuilt rather than extended.
+	mainChainHeight map[string]int
+
+	// txIDIndex answers "have I seen this transaction?" without scanning every
+	// block. txIndexedBlocks and txIndexedTipHash track how much of the chain it
+	// covers, on the same basis as blockIndex above.
+	txIDIndex        map[string]struct{}
+	txIndexedBlocks  int
+	txIndexedTipHash string
 
 	// Network announcement hooks. These let the P2P layer relay blocks and
 	// transactions without the chain package depending on it.
@@ -190,7 +207,7 @@ func (bc *Blockchain) UpdateConfig(newConfig *Config) error {
 
 	// Validate the new configuration
 	if err := newConfig.Validate(); err != nil {
-		return fmt.Errorf("invalid configuration: %v", err)
+		return fmt.Errorf("invalid configuration: %w", err)
 	}
 
 	// Update the configuration

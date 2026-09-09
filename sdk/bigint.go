@@ -40,7 +40,9 @@ func NewBigIntFromBytes(b []byte) *BigInt {
 	} else {
 		copy(buf[8-len(b):], b)
 	}
-	return &BigInt{Val: int64(binary.BigEndian.Uint64(buf[:]))}
+	// Reinterpreting the bits, not converting the value: Bytes() writes the same
+	// eight bytes back, so the round trip is exact for every input.
+	return &BigInt{Val: int64(binary.BigEndian.Uint64(buf[:]))} //nolint:gosec // exact bit round trip
 }
 
 // NewBigIntFromString creates a new BigInt instance from a string representation.
@@ -69,6 +71,7 @@ func (b *BigInt) String() string {
 // Bytes returns the byte representation of the BigInt.
 func (b *BigInt) Bytes() []byte {
 	bytes := make([]byte, 8)
+	//nolint:gosec // bit reinterpretation; NewBigIntFromBytes reverses it exactly
 	binary.BigEndian.PutUint64(bytes, uint64(b.Val))
 	return bytes
 }
@@ -89,6 +92,7 @@ func (b *BigInt) Random() (*BigInt, error) {
 	if err != nil {
 		return nil, err
 	}
+	//nolint:gosec // any 64-bit pattern is a valid random value here
 	randomInt = int64(binary.BigEndian.Uint64(buf))
 
 	// Get the current time in nanoseconds

@@ -187,19 +187,19 @@ type IndexEntry struct {
 // TXLookupManager is a struct that contains the index and methods for manipulating/searching the index to find
 // blocks and transactions by either ID or Hash.
 type TXLookupManager struct {
-	index      *FIFOQueue
-	initalized bool
+	index       *FIFOQueue
+	initialized bool
 }
 
 // NewTXLookupManager returns a new TXLookupManager instance.
 func NewTXLookupManager() *TXLookupManager {
 	return &TXLookupManager{
-		index:      NewFIFOQueue(0), // reserve memory for 64k transactions
-		initalized: false,           // this will be true after the first call to Load()
+		index:       NewFIFOQueue(0), // reserve memory for 64k transactions
+		initialized: false,           // this will be true after the first call to Load()
 	}
 }
 
-// merge combines blockNumber, txID and txHash into a single string seperated by a colon for full text search
+// merge combines blockNumber, txID and txHash into a single string separated by a colon for full text search
 func (txlm *TXLookupManager) merge(blockNumber big.Int, txID string, txHash string) string {
 	return fmt.Sprintf("%s:%s:%s", blockNumber.String(), txID, txHash)
 }
@@ -238,7 +238,7 @@ func (txlm *TXLookupManager) exists(entry string) bool {
 
 // Initialized returns true if the index has been initialized and is ready for use
 func (txlm *TXLookupManager) Initialized() bool {
-	return txlm.initalized
+	return txlm.initialized
 }
 
 // Find searches the index for an entry matching exactly one populated field of
@@ -296,7 +296,7 @@ func (txlm *TXLookupManager) Set(idx *Index) error {
 		return nil // or return an error if you prefer
 	}
 	txlm.index.Set(idx)
-	txlm.initalized = true
+	txlm.initialized = true
 	return nil
 }
 

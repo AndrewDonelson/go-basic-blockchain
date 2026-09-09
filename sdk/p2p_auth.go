@@ -421,6 +421,7 @@ func (p *P2P) serverHandshake(conn net.Conn) (*secureConn, *authenticatedPeer, e
 	if err := conn.SetDeadline(time.Now().Add(p2pHandshakeTimeout)); err != nil {
 		return nil, nil, fmt.Errorf("set handshake deadline: %w", err)
 	}
+	//nolint:errcheck // clearing a deadline on a connection being closed
 	defer func() { _ = conn.SetDeadline(time.Time{}) }()
 
 	reader := bufio.NewReader(io.LimitReader(conn, maxP2PMessageSize))
@@ -566,6 +567,7 @@ func (p *P2P) clientHandshakeAuthenticated(conn net.Conn) (*secureConn, *authent
 	if err := conn.SetDeadline(time.Now().Add(p2pHandshakeTimeout)); err != nil {
 		return nil, nil, fmt.Errorf("set handshake deadline: %w", err)
 	}
+	//nolint:errcheck // clearing a deadline on a connection being closed
 	defer func() { _ = conn.SetDeadline(time.Time{}) }()
 
 	reader := bufio.NewReader(io.LimitReader(conn, maxP2PMessageSize))

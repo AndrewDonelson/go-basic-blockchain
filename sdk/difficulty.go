@@ -143,6 +143,7 @@ func (bc *Blockchain) retarget(previous int, averageBlockTime time.Duration) int
 
 	// Convert the exponent to linear work, adjust, convert back. See the package
 	// comment: the two scales are not interchangeable.
+	//nolint:gosec // clampDifficulty bounds the value to [1, maxAcceptableDifficulty]
 	currentWork := BlockWork(uint32(clampDifficulty(previous)))
 	newWork := adjuster.CalculateNewDifficulty(currentWork, &difficulty.WindowMetrics{
 		AverageBlockTime: averageBlockTime,

@@ -98,7 +98,7 @@ func SeedFromMnemonic(mnemonic, passphrase string) ([]byte, error) {
 	}
 	seed, err := bip39.NewSeedWithErrorChecking(mnemonic, passphrase)
 	if err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrInvalidMnemonic, err)
+		return nil, fmt.Errorf("%w: %w", ErrInvalidMnemonic, err)
 	}
 	return seed, nil
 }

@@ -83,7 +83,6 @@ func TestValidateMetrics(t *testing.T) {
 		{BlockTime: time.Second, EnergyUsed: 1, NetworkHashrate: 1, Difficulty: big.NewInt(0)},
 	}
 	for i, c := range cases {
-		c := c
 		if err := da.ValidateMetrics(&c); err == nil {
 			t.Fatalf("expected validation error for case %d", i)
 		}

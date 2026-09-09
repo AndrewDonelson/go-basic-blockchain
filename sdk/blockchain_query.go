@@ -34,19 +34,61 @@ func (bc *Blockchain) HasTransactionID(id string) bool {
 	bc.mux.Lock()
 	defer bc.mux.Unlock()
 
+	// The mempool is small and changes constantly, so it is scanned directly.
 	for _, tx := range bc.TransactionQueue {
-		if tx.GetID() == id {
+		if tx != nil && tx.GetID() == id {
 			return true
 		}
 	}
-	for _, block := range bc.Blocks {
+
+	bc.indexTransactionsLocked()
+	_, known := bc.txIDIndex[id]
+	return known
+}
+
+// indexTransactionsLocked brings the mined-transaction index up to date.
+//
+// This function exists because HasTransactionID is called for every transaction
+// arriving from the network -- the relay path uses it to avoid re-announcing
+// what it already has. It used to walk every transaction in every block while
+// holding the chain lock, so a peer sending transactions made each node re-scan
+// its whole history per message, blocking mining and every reader for the
+// duration. Cost is now a map lookup, with work proportional only to blocks that
+// have arrived since the last call.
+//
+// The caller must hold bc.mux.
+func (bc *Blockchain) indexTransactionsLocked() {
+	if bc.txIDIndex == nil {
+		bc.txIDIndex = map[string]struct{}{}
+		bc.txIndexedBlocks = 0
+	}
+
+	// As with blockIndex, a reorganisation can replace blocks below the recorded
+	// length. Unlike blockIndex, stale entries here would be wrong rather than
+	// merely redundant -- a transaction that was rolled back must become
+	// unknown again, or it can never be mined onto the new branch -- so the
+	// index is discarded and rebuilt rather than extended.
+	valid := bc.txIndexedBlocks <= len(bc.Blocks)
+	if valid && bc.txIndexedBlocks > 0 {
+		valid = bc.Blocks[bc.txIndexedBlocks-1].Hash == bc.txIndexedTipHash
+	}
+	if !valid {
+		bc.txIDIndex = map[string]struct{}{}
+		bc.txIndexedBlocks = 0
+	}
+
+	for _, block := range bc.Blocks[bc.txIndexedBlocks:] {
 		for _, tx := range block.Transactions {
-			if tx.GetID() == id {
-				return true
+			if tx != nil {
+				bc.txIDIndex[tx.GetID()] = struct{}{}
 			}
 		}
 	}
-	return false
+	bc.txIndexedBlocks = len(bc.Blocks)
+	bc.txIndexedTipHash = ""
+	if n := len(bc.Blocks); n > 0 {
+		bc.txIndexedTipHash = bc.Blocks[n-1].Hash
+	}
 }
 
 // GetLatestBlock returns the latest block in the blockchain.
@@ -120,7 +162,17 @@ func (bc *Blockchain) GetTransactionHistory(address string) []Transaction {
 
 	for _, block := range bc.Blocks {
 		for _, tx := range block.Transactions {
-			if tx.GetSenderWallet().GetAddress() == address || (tx.GetProtocol() == BankProtocolID && tx.(*Bank).To.GetAddress() == address) {
+			if tx == nil {
+				continue
+			}
+			// transactionParties handles a nil sender or recipient wallet. The
+			// previous form called GetSenderWallet().GetAddress() directly, which
+			// nil-dereferences on a coinbase, and asserted tx.(*Bank) on the
+			// strength of the protocol string alone -- so a transaction claiming
+			// to be a BANK without being one panicked the node reading it. Both
+			// arrive from disk and from peers.
+			sender, recipient := transactionParties(tx)
+			if sender == address || recipient == address {
 				history = append(history, tx)
 			}
 		}

@@ -85,7 +85,7 @@ func (m *Message) SigningBytes() ([]byte, error) {
 func (m *Message) Sign(privPEM []byte) (string, error) {
 	payload, err := m.SigningBytes()
 	if err != nil {
-		return "", fmt.Errorf("error marshaling transaction: %v", err)
+		return "", fmt.Errorf("error marshaling transaction: %w", err)
 	}
 	return signPayload(payload, privPEM)
 }
@@ -94,7 +94,7 @@ func (m *Message) Sign(privPEM []byte) (string, error) {
 func (m *Message) Verify(pubKey []byte, sign string) (bool, error) {
 	payload, err := m.SigningBytes()
 	if err != nil {
-		return false, fmt.Errorf("error marshaling transaction: %v", err)
+		return false, fmt.Errorf("error marshaling transaction: %w", err)
 	}
 	return verifyPayload(payload, pubKey, sign)
 }
@@ -125,7 +125,7 @@ func (m *Message) EstimateFee(feePerByte float64) float64 {
 // Send queues the Message transaction itself rather than its base transaction.
 func (m *Message) Send(bc *Blockchain) error {
 	if err := m.Validate(); err != nil {
-		return fmt.Errorf("invalid transaction: %v", err)
+		return fmt.Errorf("invalid transaction: %w", err)
 	}
 	bc.AddTransaction(m)
 	return nil

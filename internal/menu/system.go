@@ -142,6 +142,7 @@ func (ms *MenuSystem) Navigate() error {
 	ms.IsActive = true
 	defer func() {
 		if previousTermState != nil {
+			//nolint:errcheck // best-effort terminal restore during cleanup
 			_ = term.Restore(int(os.Stdin.Fd()), previousTermState)
 		}
 
@@ -277,6 +278,7 @@ func clearScreen() {
 		cmd = exec.Command("clear")
 	}
 	cmd.Stdout = os.Stdout
+	//nolint:errcheck // clearing the screen is cosmetic; a failure changes nothing
 	_ = cmd.Run()
 }
 

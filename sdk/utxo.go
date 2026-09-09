@@ -282,36 +282,6 @@ type feeSplit struct {
 	DevPercent   float64
 }
 
-// selectInputsLocked chooses which outputs to spend, deterministically.
-func (s *UTXOSet) selectInputsLocked(address string, needUnits int64) ([]*UTXO, int64, error) {
-	if needUnits <= 0 {
-		return nil, 0, nil
-	}
-
-	available := s.outputsForLocked(address)
-
-	var (
-		selected []*UTXO
-		total    int64
-	)
-	for _, utxo := range available {
-		selected = append(selected, utxo)
-		total += utxo.Units
-
-		if len(selected) > maxCoinSelectionInputs {
-			return nil, 0, fmt.Errorf("spending from %s would need more than %d inputs",
-				address, maxCoinSelectionInputs)
-		}
-		if total >= needUnits {
-			return selected, total, nil
-		}
-	}
-
-	return nil, total, fmt.Errorf("%w: %s has %s, needs %s",
-		ErrInsufficientFunds, address,
-		formatUnits(total), formatUnits(needUnits))
-}
-
 // formatUnits renders base units as a token amount for error messages.
 func formatUnits(units int64) string {
 	return fmt.Sprintf("%.8f", UnitsToAmount(units))

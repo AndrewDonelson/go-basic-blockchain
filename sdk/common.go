@@ -112,15 +112,19 @@ func getUserIPLegacy(r *http.Request) string {
 	return ip
 }
 
-// IntToBytes converts an integer to a byte slice in big-endian encoding.
-// The resulting byte slice will always be 4 bytes long, regardless of the
-// value of the input integer.
+// IntToBytes converts an integer to a 4-byte big-endian slice.
+//
+// The output is always 4 bytes, so only the low 32 bits survive: a value outside
+// [-2147483648, 4294967295] is truncated, and a negative one comes back as its
+// two's-complement pattern. That is fine for a hash preimage or an identifier,
+// and wrong for anything that has to round-trip -- use binary.BigEndian.PutUint64
+// on a fixed-width type instead.
 func IntToBytes(n int) []byte {
 	// Create a byte slice with a fixed size to hold the converted int.
 	byteSlice := make([]byte, 4) // Assuming int is 32 bits (4 bytes)
 
 	// Convert the int to bytes using big-endian encoding and store it in the byte slice.
-	binary.BigEndian.PutUint32(byteSlice, uint32(n))
+	binary.BigEndian.PutUint32(byteSlice, uint32(n)) //nolint:gosec // documented truncation
 
 	return byteSlice
 }
@@ -164,7 +168,7 @@ func ValidateAddress(address string) error {
 	// Decode the test address
 	addr, err := hex.DecodeString(address)
 	if err != nil {
-		return fmt.Errorf("failed to decode address: %v", err)
+		return fmt.Errorf("failed to decode address: %w", err)
 	}
 
 	// Verify the address length
@@ -390,14 +394,6 @@ func generateRandomToken() string {
 		return ""
 	}
 	return base64.URLEncoding.EncodeToString(b)
-}
-
-// isBase64Encoded checks if the given string is a valid base64-encoded string.
-// It does this by attempting to decode the string using the standard base64 encoding,
-// and returning true if the decoding is successful (i.e. no error is returned).
-func isBase64Encoded(s string) bool {
-	_, err := base64.StdEncoding.DecodeString(s)
-	return err == nil
 }
 
 // configVerbose gates verbose logging. It is accessed from multiple goroutines

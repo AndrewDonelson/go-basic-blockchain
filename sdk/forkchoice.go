@@ -63,6 +63,7 @@ func BlockWork(difficulty uint32) *big.Int {
 // blockWorkOf returns the work behind a block, defaulting the difficulty for
 // blocks written before the header field was populated.
 func blockWorkOf(block *Block) *big.Int {
+	//nolint:gosec // the value originates in a uint32 header field
 	return BlockWork(uint32(blockDifficulty(block, proofOfWorkDifficulty)))
 }
 
@@ -95,17 +96,72 @@ func (bc *Blockchain) rememberBlockLocked(block *Block) {
 
 // indexMainChainLocked (re)builds the index from the main chain. Called after a
 // load, so blocks read from disk are reachable as branch ancestors.
+// indexMainChainLocked brings the block index up to date with the main chain.
+//
+// It used to re-insert every block on every call, and it is called once per
+// accepted block -- so syncing n blocks did n(n+1)/2 map writes while holding the
+// chain lock, which blocks mining and every reader. Only the blocks added since
+// the last call are indexed now.
+//
+// A reorganisation can shorten the chain; when that happens the counter is no
+// longer a valid prefix length, so the index is rebuilt. Entries for blocks no
+// longer on the main chain are deliberately left in place -- blockIndex holds
+// every block seen, on the main chain or not, so a later block can still find
+// its parent on an abandoned branch.
 func (bc *Blockchain) indexMainChainLocked() {
 	if bc.blockIndex == nil {
 		bc.blockIndex = map[string]*Block{}
+		bc.indexedBlocks = 0
 	}
-	for _, b := range bc.Blocks {
+
+	// The count alone is not enough. A reorganisation can replace blocks *below*
+	// the previous length, so trusting the count would silently skip them --
+	// their parents would then be unfindable and the next block on that branch
+	// rejected. Re-index from scratch unless the block at the recorded position
+	// is still the one that was recorded there.
+	valid := bc.indexedBlocks <= len(bc.Blocks)
+	if valid && bc.indexedBlocks > 0 {
+		valid = bc.Blocks[bc.indexedBlocks-1].Hash == bc.indexedTipHash
+	}
+	if !valid {
+		bc.indexedBlocks = 0
+		// Heights shift when blocks are replaced, so this map cannot be extended
+		// across a reorganisation the way blockIndex can.
+		bc.mainChainHeight = nil
+	}
+	if bc.mainChainHeight == nil {
+		bc.mainChainHeight = make(map[string]int, len(bc.Blocks))
+	}
+
+	for i := bc.indexedBlocks; i < len(bc.Blocks); i++ {
+		b := bc.Blocks[i]
 		bc.blockIndex[b.Hash] = b
+		bc.mainChainHeight[b.Hash] = i
+	}
+	bc.indexedBlocks = len(bc.Blocks)
+	bc.indexedTipHash = ""
+	if n := len(bc.Blocks); n > 0 {
+		bc.indexedTipHash = bc.Blocks[n-1].Hash
 	}
 }
 
 // mainChainHeightOfLocked returns the position of a hash on the main chain, or -1.
+//
+// This is called once per step while walking a candidate branch back to a fork
+// point, up to maxReorgDepth times per block. It used to scan the whole chain on
+// each step, so one block from a peer whose parent is unknown cost
+// maxReorgDepth * len(chain) comparisons under the chain lock -- work an
+// attacker chooses by sending blocks that fork deeply.
 func (bc *Blockchain) mainChainHeightOfLocked(hash string) int {
+	if bc.mainChainHeight != nil {
+		if height, ok := bc.mainChainHeight[hash]; ok {
+			return height
+		}
+		// The index is authoritative once built: indexMainChainLocked runs at the
+		// top of every acceptance, so a hash absent from it is not on the chain.
+		return -1
+	}
+
 	for i, b := range bc.Blocks {
 		if b.Hash == hash {
 			return i

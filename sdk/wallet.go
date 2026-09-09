@@ -279,7 +279,7 @@ func (w *Wallet) SetData(key string, value interface{}) error {
 	if key == "balance" {
 		convertedValue, err := ConvertToFloat64(value)
 		if err != nil {
-			return fmt.Errorf("error converting balance: %v", err)
+			return fmt.Errorf("error converting balance: %w", err)
 		}
 		value = convertedValue
 	}
@@ -551,7 +551,7 @@ func (w *Wallet) SendTransaction(tx Transaction, bc *Blockchain) (*Transaction, 
 	// Send the transaction to the network.
 	err := tx.Send(bc)
 	if err != nil {
-		return nil, fmt.Errorf("failed to send transaction: %v", err)
+		return nil, fmt.Errorf("failed to send transaction: %w", err)
 	}
 
 	return &tx, nil
@@ -747,12 +747,12 @@ func (w *Wallet) Close(passphrase string) error {
 	if !w.Encrypted {
 		err := w.Lock(passphrase)
 		if err != nil {
-			return fmt.Errorf("failed to save wallet: %v", err)
+			return fmt.Errorf("failed to save wallet: %w", err)
 		}
 
 		err = localStorage.Set("wallet", w)
 		if err != nil {
-			return fmt.Errorf("failed to save wallet: %v", err)
+			return fmt.Errorf("failed to save wallet: %w", err)
 		}
 
 	}
@@ -852,7 +852,7 @@ func LocalWalletList() error {
 func LocalWalletCount() (count int, err error) {
 	files, err := filepath.Glob(filepath.Join(walletFolder, "*.json"))
 	if err != nil {
-		return 0, fmt.Errorf("failed to list wallets: %v", err)
+		return 0, fmt.Errorf("failed to list wallets: %w", err)
 	}
 
 	return len(files), nil

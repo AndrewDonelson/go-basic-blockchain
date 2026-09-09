@@ -54,7 +54,7 @@ sdk/
 
 **Performance Metrics**:
 - **Total Execution Time**: ~17 seconds; ~85 seconds under `-race`
-- **Coverage**: 72.3% (`sdk`), 85–97% across the Helios packages
+- **Coverage**: 74.1% (`sdk`), 85–97% across the Helios packages
 - **Race Detector**: the full suite runs clean
 
 **Optimization Features**:
@@ -112,7 +112,7 @@ func TestWallet_Create(t *testing.T) {
 | `internal/helios/algorithm` | 89.8% |
 | `internal/helios/sidechain` | 85.2% |
 | `internal/progress` | 77.9% |
-| `sdk` | 72.3% |
+| `sdk` | 74.1% |
 | `cmd/gbb-cli` | 33.6% |
 | `internal/menu` | 28.0% |
 | `cmd/chaind` | 12.8% |
@@ -140,7 +140,7 @@ go tool cover -func=coverage.out
 **Coverage Output**:
 ```
 PASS
-coverage: 72.3% of statements
+coverage: 74.1% of statements
 ok      github.com/yourusername/go-basic-blockchain/sdk 9.5s
 ```
 
@@ -524,7 +524,7 @@ const (
 - **Race Conditions**: 0
 
 **Coverage Quality**:
-- **Line Coverage**: 72.3% (`sdk`)
+- **Line Coverage**: 74.1% (`sdk`)
 - **Function Coverage**: 85%
 - **Branch Coverage**: 70%
 - **Statement Coverage**: 40%
@@ -680,3 +680,27 @@ chain and read it back.
 ```bash
 go test ./sdk/ -run TestEndToEnd -v
 ```
+
+## ⏱️ Benchmarks
+
+[`sdk/performance_test.go`](../sdk/performance_test.go) benchmarks the lookups on
+the path peer traffic drives, and keeps the **previous** implementations
+alongside the current ones so the comparison is reproducible rather than
+asserted:
+
+```bash
+go test ./sdk/ -run '^$' -bench . -benchtime 2000x
+```
+
+At 5,000 blocks: transaction lookup 3,223ns → 19ns, block indexing 66,360ns →
+170ns. See [performance.md](performance.md) for the numbers and the reorganisation
+hazard the indexes have to handle.
+
+## 🧹 Static analysis
+
+```bash
+golangci-lint run ./...
+```
+
+Zero findings across the repository. Suppressions carry a reason; see
+[development.md](development.md#running-the-analysers).
