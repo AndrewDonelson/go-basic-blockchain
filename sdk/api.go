@@ -23,8 +23,16 @@ import (
 )
 
 // ErrorResponse represents the structure of an error response.
+// ErrorResponse is the single shape every API error takes.
+//
+// Handlers used to mix this JSON envelope with http.Error's plain text, so a
+// client could not parse an error without first guessing which of the two it had
+// received -- and the choice varied by handler, not by error kind. Status is
+// included in the body because a client that only has the payload (a log line, a
+// queued webhook) otherwise cannot tell a 400 from a 500.
 type ErrorResponse struct {
 	Message string `json:"message"`
+	Status  int    `json:"status"`
 }
 
 // HTTP server hardening. http.ListenAndServe uses a zero-value http.Server, which
@@ -147,7 +155,34 @@ func NewAPI(bc *Blockchain) *API {
 
 	// Register the API endpoints
 	api.registerRoutes()
+
+	// Install the middleware with the routes, not with the listener.
+	//
+	// Authentication used to be attached in Start(), so api.router on its own was
+	// an unauthenticated API. Anything that serves the router directly -- an
+	// embedder, or a test harness wiring it into its own http.Server -- silently
+	// got no authentication at all. The router is now safe to serve as it is.
+	if err := api.installMiddleware(); err != nil {
+		LogInfof("Failed to install API middleware: %v", err)
+		return nil
+	}
+
 	return api
+}
+
+// installMiddleware attaches logging and API key authentication to the router.
+func (api *API) installMiddleware() error {
+	keyCfg := defaultAPIKeyConfig()
+	keyCfg.accountStore = api.accountStore
+
+	api.router.Use(loggingMiddleware)
+
+	apiKeyMiddleware, err := ApiKeyMiddleware(keyCfg, api.log)
+	if err != nil {
+		return fmt.Errorf("error initializing API key middleware: %w", err)
+	}
+	api.router.Use(apiKeyMiddleware)
+	return nil
 }
 
 // RespondError sends an error response with the given status code and message.
@@ -157,7 +192,7 @@ func RespondError(w http.ResponseWriter, statusCode int, message string) {
 	w.WriteHeader(statusCode)
 
 	// Create an ErrorResponse instance
-	errorResponse := ErrorResponse{Message: message}
+	errorResponse := ErrorResponse{Message: message, Status: statusCode}
 
 	// Encode and send the error message as JSON
 	if err := json.NewEncoder(w).Encode(errorResponse); err != nil {
@@ -290,18 +325,7 @@ func (api *API) Start() error {
 		return nil
 	}
 
-	keyCfg := defaultAPIKeyConfig()
-	keyCfg.accountStore = api.accountStore
-
-	// Create a logging middleware
-	api.router.Use(loggingMiddleware)
-
-	// API key middleware
-	apiKeyMiddleware, err := ApiKeyMiddleware(keyCfg, api.log)
-	if err != nil {
-		return fmt.Errorf("error initializing API key middleware: %w", err)
-	}
-	api.router.Use(apiKeyMiddleware)
+	// Middleware is installed by NewAPI, alongside the routes it protects.
 
 	bindAddr := apiHostname
 	if cfg := api.GetConfig(); cfg != nil && cfg.APIHostName != "" {
@@ -473,14 +497,14 @@ func (api *API) handleHome(w http.ResponseWriter, r *http.Request) {
 	// Parse the HTML template
 	tmpl, err := template.New("home").Parse(homeTemplate)
 	if err != nil {
-		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		RespondError(w, http.StatusInternalServerError, "Internal Server Error")
 		return
 	}
 
 	// Render the HTML template with the data
 	err = tmpl.Execute(w, info)
 	if err != nil {
-		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		RespondError(w, http.StatusInternalServerError, "Internal Server Error")
 		return
 	}
 }
@@ -497,14 +521,14 @@ func (api *API) handleVersion(w http.ResponseWriter, r *http.Request) {
 	// Marshal the info struct to JSON
 	data, err := json.Marshal(info)
 	if err != nil {
-		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		RespondError(w, http.StatusInternalServerError, "Internal Server Error")
 		return
 	}
 
 	// Write the JSON response
 	w.WriteHeader(http.StatusOK)
 	if _, err := w.Write(data); err != nil {
-		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		RespondError(w, http.StatusInternalServerError, "Internal server error")
 		return
 	}
 }
@@ -526,14 +550,14 @@ func (api *API) handleInfo(w http.ResponseWriter, r *http.Request) {
 	// Marshal the info struct to JSON
 	data, err := json.Marshal(info)
 	if err != nil {
-		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		RespondError(w, http.StatusInternalServerError, "Internal Server Error")
 		return
 	}
 
 	// Write the JSON response
 	w.WriteHeader(http.StatusOK)
 	if _, err := w.Write(data); err != nil {
-		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		RespondError(w, http.StatusInternalServerError, "Internal server error")
 		return
 	}
 }
@@ -555,13 +579,13 @@ func (api *API) handleHealth(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	data, err := json.Marshal(response)
 	if err != nil {
-		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		RespondError(w, http.StatusInternalServerError, "Internal Server Error")
 		return
 	}
 
 	w.WriteHeader(http.StatusOK)
 	if _, err := w.Write(data); err != nil {
-		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		RespondError(w, http.StatusInternalServerError, "Internal server error")
 		return
 	}
 }
@@ -620,19 +644,19 @@ func (api *API) handleConsensusP2P(w http.ResponseWriter, r *http.Request) {
 	// get the post data and unmarshal it into a P2PTransaction
 	data, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		RespondError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
 	var tx P2PTransaction
 	err = json.Unmarshal(data, &tx)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		RespondError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
 	if node == nil || node.P2P == nil {
-		http.Error(w, "Consensus service unavailable", http.StatusServiceUnavailable)
+		RespondError(w, http.StatusServiceUnavailable, "Consensus service unavailable")
 		return
 	}
 
@@ -762,14 +786,14 @@ func (api *API) handleBlockchain(w http.ResponseWriter, r *http.Request) {
 	// Marshal the response struct to JSON
 	data, err := json.Marshal(response)
 	if err != nil {
-		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		RespondError(w, http.StatusInternalServerError, "Internal Server Error")
 		return
 	}
 
 	// Write the JSON response
 	w.WriteHeader(http.StatusOK)
 	if _, err := w.Write(data); err != nil {
-		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		RespondError(w, http.StatusInternalServerError, "Internal server error")
 		return
 	}
 }
@@ -829,13 +853,13 @@ func (api *API) handleViewBlock(w http.ResponseWriter, r *http.Request) {
 	indexStr := vars["index"]
 	index, err := strconv.Atoi(indexStr)
 	if err != nil {
-		http.Error(w, "Invalid block index", http.StatusBadRequest)
+		RespondError(w, http.StatusBadRequest, "Invalid block index")
 		return
 	}
 
 	block := api.bc.GetBlockByIndex(int64(index))
 	if block == nil {
-		http.Error(w, "Block not found", http.StatusNotFound)
+		RespondError(w, http.StatusNotFound, "Block not found")
 		return
 	}
 
@@ -849,13 +873,13 @@ func (api *API) handleBrowseTransactionsInBlock(w http.ResponseWriter, r *http.R
 	indexStr := vars["index"]
 	index, err := strconv.Atoi(indexStr)
 	if err != nil {
-		http.Error(w, "Invalid block index", http.StatusBadRequest)
+		RespondError(w, http.StatusBadRequest, "Invalid block index")
 		return
 	}
 
 	block := api.bc.GetBlockByIndex(int64(index))
 	if block == nil {
-		http.Error(w, "Block index out of range", http.StatusBadRequest)
+		RespondError(w, http.StatusBadRequest, "Block index out of range")
 		return
 	}
 
@@ -870,13 +894,13 @@ func (api *API) handleViewTransactionInBlock(w http.ResponseWriter, r *http.Requ
 
 	index, err := strconv.Atoi(indexStr)
 	if err != nil {
-		http.Error(w, "Invalid block index", http.StatusBadRequest)
+		RespondError(w, http.StatusBadRequest, "Invalid block index")
 		return
 	}
 
 	block := api.bc.GetBlockByIndex(int64(index))
 	if block == nil {
-		http.Error(w, "Block not found", http.StatusNotFound)
+		RespondError(w, http.StatusNotFound, "Block not found")
 		return
 	}
 
@@ -892,20 +916,20 @@ func (api *API) handleViewTransactionInBlock(w http.ResponseWriter, r *http.Requ
 			w.Header().Set("Content-Type", "application/json")
 			data, err := json.Marshal(tx)
 			if err != nil {
-				http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+				RespondError(w, http.StatusInternalServerError, "Internal Server Error")
 				return
 			}
 
 			w.WriteHeader(http.StatusOK)
 			if _, err := w.Write(data); err != nil {
-				http.Error(w, "Internal server error", http.StatusInternalServerError)
+				RespondError(w, http.StatusInternalServerError, "Internal server error")
 				return
 			}
 			return
 		}
 	}
 
-	http.Error(w, "Transaction not found", http.StatusNotFound)
+	RespondError(w, http.StatusNotFound, "Transaction not found")
 }
 
 // handleBrowseTransactionsByProtocolInBlock handles the /blockchain/blocks/{index}/transactions/{protocol} endpoint.
@@ -916,18 +940,18 @@ func (api *API) handleBrowseTransactionsByProtocolInBlock(w http.ResponseWriter,
 
 	index, err := strconv.Atoi(indexStr)
 	if err != nil {
-		http.Error(w, "Invalid block index", http.StatusBadRequest)
+		RespondError(w, http.StatusBadRequest, "Invalid block index")
 		return
 	}
 
 	if index < 0 || index >= len(api.bc.Blocks) {
-		http.Error(w, "Block not found", http.StatusNotFound)
+		RespondError(w, http.StatusNotFound, "Block not found")
 		return
 	}
 
 	protocol, ok := normalizeProtocol(protocolStr)
 	if !ok {
-		http.Error(w, "Invalid protocol", http.StatusBadRequest)
+		RespondError(w, http.StatusBadRequest, "Invalid protocol")
 		return
 	}
 
@@ -954,13 +978,13 @@ func (api *API) respondTransactionsByProtocol(w http.ResponseWriter, block *Bloc
 	w.Header().Set("Content-Type", "application/json")
 	data, err := json.Marshal(filtered)
 	if err != nil {
-		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		RespondError(w, http.StatusInternalServerError, "Internal Server Error")
 		return
 	}
 
 	w.WriteHeader(http.StatusOK)
 	if _, err := w.Write(data); err != nil {
-		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		RespondError(w, http.StatusInternalServerError, "Internal server error")
 		return
 	}
 }
@@ -1035,7 +1059,7 @@ func (api *API) loadWalletByAddress(address string) (*Wallet, error) {
 func (api *API) handleBrowseWallets(w http.ResponseWriter, r *http.Request) {
 	addresses, err := api.listWalletAddresses()
 	if err != nil {
-		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		RespondError(w, http.StatusInternalServerError, "Internal Server Error")
 		return
 	}
 
@@ -1064,13 +1088,13 @@ func (api *API) handleBrowseWallets(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	data, err := json.Marshal(result)
 	if err != nil {
-		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		RespondError(w, http.StatusInternalServerError, "Internal Server Error")
 		return
 	}
 
 	w.WriteHeader(http.StatusOK)
 	if _, err := w.Write(data); err != nil {
-		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		RespondError(w, http.StatusInternalServerError, "Internal server error")
 		return
 	}
 }
@@ -1271,13 +1295,13 @@ func (api *API) handleViewWallet(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	address := vars["id"]
 	if address == "" {
-		http.Error(w, "Invalid wallet ID", http.StatusBadRequest)
+		RespondError(w, http.StatusBadRequest, "Invalid wallet ID")
 		return
 	}
 
 	wallet, err := api.loadWalletByAddress(address)
 	if err != nil {
-		http.Error(w, "Wallet not found", http.StatusNotFound)
+		RespondError(w, http.StatusNotFound, "Wallet not found")
 		return
 	}
 
@@ -1296,13 +1320,13 @@ func (api *API) handleViewWallet(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	data, err := json.Marshal(response)
 	if err != nil {
-		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		RespondError(w, http.StatusInternalServerError, "Internal Server Error")
 		return
 	}
 
 	w.WriteHeader(http.StatusOK)
 	if _, err := w.Write(data); err != nil {
-		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		RespondError(w, http.StatusInternalServerError, "Internal server error")
 		return
 	}
 }
@@ -1312,7 +1336,7 @@ func (api *API) handleUpdateWallet(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	address := vars["id"]
 	if address == "" {
-		http.Error(w, "Invalid wallet ID", http.StatusBadRequest)
+		RespondError(w, http.StatusBadRequest, "Invalid wallet ID")
 		return
 	}
 
@@ -1324,49 +1348,49 @@ func (api *API) handleUpdateWallet(w http.ResponseWriter, r *http.Request) {
 
 	var req updateWalletRequest
 	if err := json.NewDecoder(io.LimitReader(r.Body, apiMaxBodyBytes)).Decode(&req); err != nil {
-		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		RespondError(w, http.StatusBadRequest, "Invalid request body")
 		return
 	}
 
 	if req.Passphrase == "" {
-		http.Error(w, "Passphrase is required", http.StatusBadRequest)
+		RespondError(w, http.StatusBadRequest, "Passphrase is required")
 		return
 	}
 
 	hasNameUpdate := req.Name != ""
 	hasTagsUpdate := req.Tags != nil
 	if !hasNameUpdate && !hasTagsUpdate {
-		http.Error(w, "No update fields provided", http.StatusBadRequest)
+		RespondError(w, http.StatusBadRequest, "No update fields provided")
 		return
 	}
 
 	wallet, err := api.loadWalletByAddress(address)
 	if err != nil {
-		http.Error(w, "Wallet not found", http.StatusNotFound)
+		RespondError(w, http.StatusNotFound, "Wallet not found")
 		return
 	}
 
 	if err := wallet.Unlock(req.Passphrase); err != nil {
-		http.Error(w, "Invalid passphrase", http.StatusUnauthorized)
+		RespondError(w, http.StatusUnauthorized, "Invalid passphrase")
 		return
 	}
 
 	if hasNameUpdate {
 		if err := wallet.SetData("name", req.Name); err != nil {
-			http.Error(w, "Failed to update wallet name", http.StatusInternalServerError)
+			RespondError(w, http.StatusInternalServerError, "Failed to update wallet name")
 			return
 		}
 	}
 
 	if hasTagsUpdate {
 		if err := wallet.SetData("tags", req.Tags); err != nil {
-			http.Error(w, "Failed to update wallet tags", http.StatusInternalServerError)
+			RespondError(w, http.StatusInternalServerError, "Failed to update wallet tags")
 			return
 		}
 	}
 
 	if err := wallet.Close(req.Passphrase); err != nil {
-		http.Error(w, "Failed to persist wallet updates", http.StatusInternalServerError)
+		RespondError(w, http.StatusInternalServerError, "Failed to persist wallet updates")
 		return
 	}
 
@@ -1387,13 +1411,13 @@ func (api *API) handleUpdateWallet(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	data, err := json.Marshal(response)
 	if err != nil {
-		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		RespondError(w, http.StatusInternalServerError, "Internal Server Error")
 		return
 	}
 
 	w.WriteHeader(http.StatusOK)
 	if _, err := w.Write(data); err != nil {
-		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		RespondError(w, http.StatusInternalServerError, "Internal server error")
 		return
 	}
 }
@@ -1403,13 +1427,13 @@ func (api *API) handleViewWalletBalance(w http.ResponseWriter, r *http.Request) 
 	vars := mux.Vars(r)
 	address := vars["id"]
 	if address == "" {
-		http.Error(w, "Invalid wallet ID", http.StatusBadRequest)
+		RespondError(w, http.StatusBadRequest, "Invalid wallet ID")
 		return
 	}
 
 	_, err := api.loadWalletByAddress(address)
 	if err != nil {
-		http.Error(w, "Wallet not found", http.StatusNotFound)
+		RespondError(w, http.StatusNotFound, "Wallet not found")
 		return
 	}
 
@@ -1424,13 +1448,13 @@ func (api *API) handleViewWalletBalance(w http.ResponseWriter, r *http.Request) 
 	w.Header().Set("Content-Type", "application/json")
 	data, err := json.Marshal(response)
 	if err != nil {
-		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		RespondError(w, http.StatusInternalServerError, "Internal Server Error")
 		return
 	}
 
 	w.WriteHeader(http.StatusOK)
 	if _, err := w.Write(data); err != nil {
-		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		RespondError(w, http.StatusInternalServerError, "Internal server error")
 		return
 	}
 }
@@ -1440,7 +1464,7 @@ func (api *API) handleBrowseTransactionsForWallet(w http.ResponseWriter, r *http
 	vars := mux.Vars(r)
 	walletID := vars["id"]
 	if walletID == "" {
-		http.Error(w, "Invalid wallet ID", http.StatusBadRequest)
+		RespondError(w, http.StatusBadRequest, "Invalid wallet ID")
 		return
 	}
 
@@ -1457,7 +1481,7 @@ func (api *API) handleViewTransactionForWallet(w http.ResponseWriter, r *http.Re
 	idOrProtocol := vars["txid"]
 
 	if walletID == "" || idOrProtocol == "" {
-		http.Error(w, "Invalid wallet transaction path", http.StatusBadRequest)
+		RespondError(w, http.StatusBadRequest, "Invalid wallet transaction path")
 		return
 	}
 
@@ -1477,7 +1501,7 @@ func (api *API) handleViewTransactionForWallet(w http.ResponseWriter, r *http.Re
 		}
 	}
 
-	http.Error(w, "Transaction not found", http.StatusNotFound)
+	RespondError(w, http.StatusNotFound, "Transaction not found")
 }
 
 // handleBrowseTransactionsByProtocolForWallet handles the /blockchain/wallets/{id}/transactions/{protocol} endpoint.
@@ -1487,13 +1511,13 @@ func (api *API) handleBrowseTransactionsByProtocolForWallet(w http.ResponseWrite
 	protocolStr := vars["protocol"]
 
 	if walletID == "" {
-		http.Error(w, "Invalid wallet ID", http.StatusBadRequest)
+		RespondError(w, http.StatusBadRequest, "Invalid wallet ID")
 		return
 	}
 
 	protocol, ok := normalizeProtocol(protocolStr)
 	if !ok {
-		http.Error(w, "Invalid protocol", http.StatusBadRequest)
+		RespondError(w, http.StatusBadRequest, "Invalid protocol")
 		return
 	}
 
@@ -1531,13 +1555,13 @@ func (api *API) respondTransaction(w http.ResponseWriter, tx Transaction) {
 	w.Header().Set("Content-Type", "application/json")
 	data, err := json.Marshal(tx)
 	if err != nil {
-		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		RespondError(w, http.StatusInternalServerError, "Internal Server Error")
 		return
 	}
 
 	w.WriteHeader(http.StatusOK)
 	if _, err := w.Write(data); err != nil {
-		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		RespondError(w, http.StatusInternalServerError, "Internal server error")
 		return
 	}
 }
@@ -1546,13 +1570,13 @@ func (api *API) respondTransactionList(w http.ResponseWriter, txs []Transaction)
 	w.Header().Set("Content-Type", "application/json")
 	data, err := json.Marshal(txs)
 	if err != nil {
-		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		RespondError(w, http.StatusInternalServerError, "Internal Server Error")
 		return
 	}
 
 	w.WriteHeader(http.StatusOK)
 	if _, err := w.Write(data); err != nil {
-		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		RespondError(w, http.StatusInternalServerError, "Internal server error")
 		return
 	}
 }
@@ -1572,7 +1596,7 @@ func (api *API) handleViewTransaction(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	idOrProtocol := vars["id"]
 	if idOrProtocol == "" {
-		http.Error(w, "Invalid transaction identifier", http.StatusBadRequest)
+		RespondError(w, http.StatusBadRequest, "Invalid transaction identifier")
 		return
 	}
 
@@ -1598,7 +1622,7 @@ func (api *API) handleViewTransaction(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	http.Error(w, "Transaction not found", http.StatusNotFound)
+	RespondError(w, http.StatusNotFound, "Transaction not found")
 }
 
 // handleBrowseTransactionsByProtocol handles the /blockchain/transactions/{protocol} endpoint.
@@ -1608,7 +1632,7 @@ func (api *API) handleBrowseTransactionsByProtocol(w http.ResponseWriter, r *htt
 
 	protocol, ok := normalizeProtocol(protocolStr)
 	if !ok {
-		http.Error(w, "Invalid protocol", http.StatusBadRequest)
+		RespondError(w, http.StatusBadRequest, "Invalid protocol")
 		return
 	}
 

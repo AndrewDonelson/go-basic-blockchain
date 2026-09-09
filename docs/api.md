@@ -43,13 +43,25 @@ All key comparisons are constant-time, and authentication attempts are rate
 limited per source address (10 per minute; a success clears the counter).
 
 **Public paths** (no key required): `/`, `/version`, `/info`, `/health`,
-`/account/register`, `/account/login`, `/account/verify`.
+`/metrics`, `/account/register`, `/account/login`, `/account/verify`.
+
+Authentication is attached to the **router**, not to the server. It used to be
+installed in `Start()`, so `api.router` on its own was an unauthenticated API and
+anything serving it directly — an embedder, or a test harness wiring it into its
+own `http.Server` — silently got no authentication at all.
 
 ### Error shape
 
+**Every** error is this JSON envelope. Handlers previously mixed it with
+`http.Error`'s plain text, and which one you got depended on the handler rather
+than the kind of error, so a client could not parse a failure without guessing.
+
 ```json
-{ "message": "invalid api key" }
+{ "message": "invalid api key", "status": 401 }
 ```
+
+`status` is repeated in the body because a client holding only the payload — a
+log line, a queued webhook — otherwise cannot tell a 400 from a 500.
 
 | Status | Meaning |
 |---|---|
