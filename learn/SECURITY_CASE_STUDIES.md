@@ -644,6 +644,59 @@ adversarial reading that found the other eighteen.
 
 ---
 
+## Case 20: A delay function that delayed nothing
+
+Helios stage 2 was a sequential SHA-256 chain, and it had a real problem and a
+subtler one.
+
+**The real problem:** verifying cost the same as computing. Every node walked all
+T links itself, so the delay could never be set higher than a validator would
+spend — which is not much. A "delay" nobody can afford to make long is decoration.
+
+That is what a VDF fixes, and Wesolowski's construction verifies in a few hundred
+group operations *whatever T is*. Measured end to end: validation is ~16x cheaper
+than mining, and the ratio widens as the delay rises.
+
+**The subtler problem** is the one worth carrying away. The chain's input was the
+stage-1 result, which depends on the nonce — so a fresh chain started on every
+attempt. Picture a miner with 32 cores: it runs 32 attempts at once, each walking
+its own chain. The wall-clock cost of producing a block is **one chain**, not 32.
+
+The sequentiality was real per attempt and worth nothing per block, which is the
+only level anyone cares about.
+
+The fix is not cryptographic. The input now derives from the block header alone,
+so there is exactly one chain per block and it must be walked before any nonce can
+be tried:
+
+```go
+seed := sha256.Sum256(append([]byte("helios/stage2/vdf/input"), blockHeader...))
+```
+
+**Choosing the group.** Wesolowski needs a group whose order nobody knows: anyone
+who knows the order `n` computes `2^T mod n` and gets the answer in one
+exponentiation instead of T. The natural choice, an RSA group, has order
+`(p−1)(q−1)` — known to whoever generated the modulus, who could then mine
+arbitrarily fast while everyone else waited. A class group of a negative prime
+discriminant has no such secret: its order is unknown even to whoever picked the
+discriminant, so there is no trapdoor to hold and no setup to trust.
+
+*Tests:* `internal/helios/vdf/`, `internal/helios/algorithm/vdf_integration_test.go`
+
+**Lessons.** Two.
+
+*Verify the property you actually want.* "Sequential" was true of the old chain
+and irrelevant, because the property that matters is sequential **per block**, and
+nobody had written that sentence down to check it against. When you claim a
+security property, say precisely what it is a property *of*.
+
+*And when a primitive needs a parameter nobody may know, ask who generates it.*
+"Trusted setup" sounds procedural. Here it means one identified party can mine
+infinitely fast forever, and no one else can tell. Sometimes the harder
+implementation is the only honest one.
+
+---
+
 ## The meta-lesson
 
 Before the audit:

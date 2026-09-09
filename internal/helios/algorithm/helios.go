@@ -8,7 +8,10 @@ import (
 	"encoding/hex"
 	"fmt"
 	"math/big"
+	"sync"
 	"time"
+
+	"github.com/AndrewDonelson/go-basic-blockchain/internal/helios/vdf"
 )
 
 const (
@@ -28,6 +31,11 @@ type HeliosProof struct {
 	FinalHash    string    `json:"final_hash"`
 	Difficulty   *big.Int  `json:"difficulty"`
 	EnergyUsed   int64     `json:"energy_used"` // CPU cycles used
+
+	// VDFProof is the encoded Wesolowski proof for stage 2. Stage2Result is the
+	// VDF's output; this is the witness that lets a verifier accept that output
+	// without repeating the sequential work behind it.
+	VDFProof []byte `json:"vdf_proof,omitempty"`
 }
 
 // HeliosConfig holds configuration for the Helios algorithm
@@ -46,6 +54,16 @@ type HeliosConfig struct {
 	TimeLockBaseDuration time.Duration `json:"timelock_base_duration"` // 50ms
 	TimeLockScaleFactor  float64       `json:"timelock_scale_factor"`  // 1.0
 	TimeLockIterations   int           `json:"timelock_iterations"`    // 1000
+
+	// VDF parameters. Stage 2 is a Wesolowski verifiable delay function over a
+	// class group; see internal/helios/vdf.
+	//
+	// VDFDiscriminantSeed derives the group's discriminant deterministically, so
+	// every node can re-derive the same parameters and confirm nobody chose them
+	// with a trapdoor in hand. It is a public constant, not a secret.
+	VDFDiscriminantSeed []byte `json:"vdf_discriminant_seed"`
+	VDFDiscriminantBits int    `json:"vdf_discriminant_bits"`
+	VDFIterations       uint64 `json:"vdf_iterations"`
 
 	// Cryptographic parameters
 	CryptoKeySize    int `json:"crypto_key_size"`   // 32 bytes
@@ -76,6 +94,9 @@ func DefaultHeliosConfig() *HeliosConfig {
 		CryptoBlockSize:      16,
 		CryptoIterations:     100, // Reduced from 10000
 		EnableEnergyTracking: false,
+		VDFDiscriminantSeed:  []byte(defaultVDFSeed),
+		VDFDiscriminantBits:  512,
+		VDFIterations:        2000,
 	}
 }
 
@@ -95,12 +116,57 @@ func TestHeliosConfig() *HeliosConfig {
 		CryptoBlockSize:      16,
 		CryptoIterations:     10,
 		EnableEnergyTracking: false,
+		// Small but real: the VDF still runs, so tests exercise the actual
+		// evaluate-and-verify path rather than a stub.
+		VDFDiscriminantSeed: []byte(defaultVDFSeed),
+		VDFDiscriminantBits: 256,
+		VDFIterations:       64,
 	}
+}
+
+// defaultVDFSeed derives the class group's discriminant.
+//
+// It is a published constant with no secret behind it -- that is the whole point.
+// An RSA-based VDF would need a modulus whose factors somebody knows, and that
+// somebody could compute the group order and skip the delay entirely. Here anyone
+// can re-derive the discriminant from this string and satisfy themselves that no
+// trapdoor was available to plant.
+const defaultVDFSeed = "gbb/helios/vdf/discriminant/v1"
+
+// vdfParameters resolves the group and delay length, filling in defaults.
+func (h *HeliosAlgorithm) vdfParameters() (*big.Int, uint64, error) {
+	seed := h.config.VDFDiscriminantSeed
+	if len(seed) == 0 {
+		seed = []byte(defaultVDFSeed)
+	}
+	bits := h.config.VDFDiscriminantBits
+	if bits <= 0 {
+		bits = 512
+	}
+	iterations := h.config.VDFIterations
+	if iterations == 0 {
+		iterations = 2000
+	}
+
+	h.vdfOnce.Do(func() {
+		h.vdfDiscriminant, h.vdfErr = vdf.NewDiscriminant(seed, bits)
+	})
+	if h.vdfErr != nil {
+		return nil, 0, fmt.Errorf("derive VDF discriminant: %w", h.vdfErr)
+	}
+	return h.vdfDiscriminant, iterations, nil
 }
 
 // HeliosAlgorithm implements the three-stage Helios proof of work algorithm
 type HeliosAlgorithm struct {
 	config *HeliosConfig
+
+	// The discriminant is derived by searching for a prime, which is far too
+	// expensive to redo per block. It depends only on the seed and size, so it is
+	// computed once and shared.
+	vdfOnce         sync.Once
+	vdfDiscriminant *big.Int
+	vdfErr          error
 }
 
 // NewHeliosAlgorithm creates a new Helios algorithm instance
@@ -122,13 +188,40 @@ func (h *HeliosAlgorithm) Mine(blockHeader []byte, targetDifficulty *big.Int) (*
 			h.config.MemoryWeight+h.config.TimeLockWeight+h.config.CryptoWeight)
 	}
 
+	// Stage 2 runs ONCE, before the search, because its input is the block header
+	// and nothing else.
+	//
+	// Putting a delay function inside the nonce loop would be self-defeating: each
+	// attempt would begin its own independent chain, so a miner with n cores runs
+	// n chains concurrently and the block still costs one chain of wall-clock
+	// time. Hoisting it out is what makes the delay a property of the block
+	// rather than of an attempt -- and it also stops the search paying for T
+	// sequential squarings per candidate.
+	stage2Start := time.Now()
+	stage2Result, vdfProof, err := h.executeTimeLockPhase(blockHeader)
+	if err != nil {
+		return nil, fmt.Errorf("time-lock phase failed: %w", err)
+	}
+	energyUsed += time.Since(stage2Start).Nanoseconds()
+
+	// Stage 3 depends only on stage 2, so it is fixed for the block too.
+	stage3Start := time.Now()
+	stage3Result, err := h.executeCryptographicPhase(stage2Result)
+	if err != nil {
+		return nil, fmt.Errorf("cryptographic phase failed: %w", err)
+	}
+	energyUsed += time.Since(stage3Start).Nanoseconds()
+
 	nonce := uint64(0)
 	for {
 		// Create proof attempt
 		proof := &HeliosProof{
-			Nonce:      nonce,
-			Timestamp:  time.Now(),
-			Difficulty: targetDifficulty,
+			Nonce:        nonce,
+			Timestamp:    time.Now(),
+			Difficulty:   targetDifficulty,
+			Stage2Result: stage2Result,
+			Stage3Result: stage3Result,
+			VDFProof:     vdfProof,
 		}
 
 		// Stage 1: Memory Phase (40% weight)
@@ -139,24 +232,6 @@ func (h *HeliosAlgorithm) Mine(blockHeader []byte, targetDifficulty *big.Int) (*
 		}
 		proof.Stage1Result = stage1Result
 		energyUsed += time.Since(stage1Start).Nanoseconds()
-
-		// Stage 2: Time-Lock Phase (30% weight)
-		stage2Start := time.Now()
-		stage2Result, err := h.executeTimeLockPhase(stage1Result)
-		if err != nil {
-			return nil, fmt.Errorf("time-lock phase failed: %w", err)
-		}
-		proof.Stage2Result = stage2Result
-		energyUsed += time.Since(stage2Start).Nanoseconds()
-
-		// Stage 3: Cryptographic Phase (30% weight)
-		stage3Start := time.Now()
-		stage3Result, err := h.executeCryptographicPhase(stage2Result)
-		if err != nil {
-			return nil, fmt.Errorf("cryptographic phase failed: %w", err)
-		}
-		proof.Stage3Result = stage3Result
-		energyUsed += time.Since(stage3Start).Nanoseconds()
 
 		// Combine all stage results for the final hash, in a fresh buffer so we do
 		// not append into the caller's blockHeader backing array.
@@ -239,23 +314,83 @@ func (h *HeliosAlgorithm) executeMemoryPhase(blockHeader []byte, nonce uint64) (
 	return result[:], nil
 }
 
-// executeTimeLockPhase implements Stage 2: Time-Lock Phase (30% weight)
-// Uses VDF-inspired sequential computation
-func (h *HeliosAlgorithm) executeTimeLockPhase(stage1Result []byte) ([]byte, error) {
-	// Sequential hash chain: each iteration depends on the previous one, so the
-	// work cannot be parallelised across cores.
-	//
-	// This used to time.Sleep on every iteration *of every nonce attempt*.
-	// Sleeping is not computation: it consumes no resources, is free to skip if
-	// the output is fabricated, and a miner running N goroutines pays the same
-	// wall-clock cost as one. The chain length is the work.
-	result := stage1Result
-	for i := 0; i < h.config.TimeLockIterations; i++ {
-		hash := sha256.Sum256(result)
-		result = hash[:]
+// executeTimeLockPhase implements Stage 2: a Wesolowski verifiable delay
+// function over a class group.
+//
+// TWO THINGS CHANGED HERE, AND THE SECOND MATTERS MORE.
+//
+// First, verifiability. Stage 2 was a sequential SHA-256 chain. Sequential it
+// was, but checking it cost exactly as much as producing it -- every node had to
+// walk all T links -- so the delay could never be set high enough to mean
+// anything without making validation just as expensive. A Wesolowski proof is
+// checked in a few hundred group operations whatever T is, so the delay can be
+// raised to whatever the chain actually wants.
+//
+// Second, and less obvious: the input is derived from the block header ALONE,
+// never from the nonce. A delay function inside a nonce search provides no delay
+// at all. Each attempt would start its own independent chain, so a miner with n
+// cores runs n of them at once and the wall-clock time for the block is one
+// chain, not n -- the sequentiality is real per attempt and worthless per block.
+// With the input fixed by the header there is exactly one chain per block, and
+// it has to be walked end to end before any nonce can be tried.
+func (h *HeliosAlgorithm) executeTimeLockPhase(blockHeader []byte) ([]byte, []byte, error) {
+	discriminant, iterations, err := h.vdfParameters()
+	if err != nil {
+		return nil, nil, err
 	}
 
-	return result, nil
+	// The VDF input is a group element derived from the header. Hashing into the
+	// group rather than using a fixed generator matters: an element whose
+	// discrete logarithm to some published base were known would let a prover
+	// shortcut the delay.
+	seed := sha256.Sum256(append([]byte("helios/stage2/vdf/input"), blockHeader...))
+	input, err := vdf.HashToForm(seed[:], discriminant)
+	if err != nil {
+		return nil, nil, fmt.Errorf("map the header into the group: %w", err)
+	}
+
+	proof, err := vdf.Evaluate(input, iterations, discriminant)
+	if err != nil {
+		return nil, nil, fmt.Errorf("evaluate the delay function: %w", err)
+	}
+
+	return proof.Output.Bytes(), proof.Bytes(), nil
+}
+
+// verifyTimeLockPhase checks a stage-2 result against its proof.
+//
+// This is the asymmetry the whole change exists for: the miner spent T
+// sequential squarings, and this confirms it without repeating one of them.
+func (h *HeliosAlgorithm) verifyTimeLockPhase(blockHeader, stage2Result, encodedProof []byte) error {
+	discriminant, _, err := h.vdfParameters()
+	if err != nil {
+		return err
+	}
+
+	seed := sha256.Sum256(append([]byte("helios/stage2/vdf/input"), blockHeader...))
+	input, err := vdf.HashToForm(seed[:], discriminant)
+	if err != nil {
+		return fmt.Errorf("map the header into the group: %w", err)
+	}
+
+	proof, err := vdf.ProofFromBytes(encodedProof, discriminant)
+	if err != nil {
+		return fmt.Errorf("decode the delay proof: %w", err)
+	}
+
+	// The stage-2 bytes the rest of the proof is built on must be the output the
+	// witness attests to; otherwise a miner could prove one delay and commit to
+	// something else.
+	if !bytes.Equal(proof.Output.Bytes(), stage2Result) {
+		return fmt.Errorf("stage 2 result does not match the proven delay output")
+	}
+
+	if _, expected, err := h.vdfParameters(); err == nil && proof.Iterations != expected {
+		return fmt.Errorf("delay proof claims %d iterations, the chain requires %d",
+			proof.Iterations, expected)
+	}
+
+	return vdf.Verify(input, proof, discriminant)
 }
 
 // executeCryptographicPhase implements Stage 3: Cryptographic Phase (30% weight)
@@ -346,12 +481,15 @@ func (h *HeliosAlgorithm) ValidateProof(proof *HeliosProof, blockHeader []byte, 
 		return fmt.Errorf("stage 1 result does not match the recomputed value")
 	}
 
-	stage2, err := h.executeTimeLockPhase(stage1)
-	if err != nil {
-		return fmt.Errorf("failed to recompute time-lock phase: %w", err)
-	}
-	if !bytes.Equal(stage2, proof.Stage2Result) {
-		return fmt.Errorf("stage 2 result does not match the recomputed value")
+	// Stage 2 is CHECKED, not recomputed.
+	//
+	// This is the whole point of the change. Recomputing meant every verifier
+	// redid the entire sequential delay, so the delay could never exceed what a
+	// validator was willing to spend. The Wesolowski witness is confirmed in a
+	// few hundred group operations no matter how long the delay was.
+	stage2 := proof.Stage2Result
+	if err := h.verifyTimeLockPhase(blockHeader, stage2, proof.VDFProof); err != nil {
+		return fmt.Errorf("time-lock proof is invalid: %w", err)
 	}
 
 	stage3, err := h.executeCryptographicPhase(stage2)

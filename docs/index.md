@@ -15,6 +15,7 @@ Welcome to the comprehensive documentation for the Go Basic Blockchain project. 
 - **[Chain Synchronisation](sync.md)** - How nodes exchange blocks
 - **[Fork Choice & Reorganisation](forkchoice.md)** - How competing histories are resolved
 - **[Dynamic Difficulty](difficulty.md)** - How the chain retargets itself
+- **[Verifiable Delay Function](vdf.md)** - Wesolowski VDF over a class group
 - **[UTXO Set](utxo.md)** - The authoritative record of who owns what
 - **[Mempool Policy](mempool.md)** - Fee ordering, replace-by-fee, eviction, block size
 - **[Nonces & Replay Protection](nonces.md)** - Per-sender sequencing
@@ -73,6 +74,7 @@ correctly, but does not yet form a network.
 | Area | Status |
 |---|---|
 | Block production & persistence | ✅ Working |
+| Verifiable delay (stage 2) | ✅ Working — Wesolowski VDF, class group, no trusted setup ([vdf.md](vdf.md)) |
 | Proof of work (Helios) | ✅ Working — deterministic and verified on every block |
 | Transaction signing | ✅ Working — covers all protocol fields |
 | REST API | ✅ Working — authenticated, rate limited, paginated |

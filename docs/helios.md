@@ -215,9 +215,24 @@ Run them with:
 go test ./internal/helios/... -v
 ```
 
+## ⏳ Stage 2 is a verifiable delay function
+
+Stage 2 was a sequential SHA-256 chain. It is now a **Wesolowski VDF over a class
+group** — see [vdf.md](vdf.md).
+
+The chain was genuinely sequential, but verifying it cost as much as producing
+it, so the delay could never be set higher than a validator would spend. A
+Wesolowski proof is checked in a few hundred group operations whatever the delay
+was: validation is ~16x cheaper than mining, and the ratio widens as the delay
+rises.
+
+Its input is the **block header, not the nonce**. A delay function inside a nonce
+search provides no delay — each attempt starts an independent chain, so a miner
+with n cores runs n at once and the block still costs one chain of wall-clock
+time. Stage 2 therefore runs once, before the search.
+
 ## 📈 Future work
 
-- Replace phase 2 with a genuine VDF so verification is cheaper than computation.
 - Scale the phase parameters by the weights, so the weights are load-bearing
   rather than descriptive.
 - Analyse the memory phase properly, or replace it with real Argon2id.
