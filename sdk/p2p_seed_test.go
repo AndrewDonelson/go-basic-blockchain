@@ -1,6 +1,7 @@
 package sdk
 
 import (
+	"context"
 	"strings"
 	"testing"
 )
@@ -27,7 +28,7 @@ func TestConnectToSeedNodeOverLoopback(t *testing.T) {
 	client := newTestP2P(t, freePort(t))
 	client.SetChain(forkTestChain(t, 0, uint32(genesisDifficulty)))
 
-	if err := client.ConnectToSeedNode(seedAddress); err != nil {
+	if err := client.ConnectToSeedNode(context.Background(), seedAddress); err != nil {
 		t.Fatalf("connect to seed: %v", err)
 	}
 
@@ -62,7 +63,7 @@ func TestConnectToSeedNodeRejectsAnUnreachableAddress(t *testing.T) {
 	// A port nothing is listening on.
 	dead := freePort(t)
 
-	err := client.ConnectToSeedNode(dead)
+	err := client.ConnectToSeedNode(context.Background(), dead)
 	if err == nil {
 		t.Fatal("connecting to an address with no seed on it reported success")
 	}
@@ -88,7 +89,7 @@ func TestConnectToSeedNodeSkipsItself(t *testing.T) {
 		t.Fatalf("register client with the seed: %v", err)
 	}
 
-	if err := client.ConnectToSeedNode(seedAddress); err != nil {
+	if err := client.ConnectToSeedNode(context.Background(), seedAddress); err != nil {
 		t.Fatalf("connect to seed: %v", err)
 	}
 

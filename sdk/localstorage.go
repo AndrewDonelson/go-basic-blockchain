@@ -5,9 +5,11 @@ package sdk
 import (
 	//"encoding/json"
 
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 
 	jsoniter "github.com/json-iterator/go"
@@ -39,6 +41,11 @@ type LocalStorage struct {
 //
 // The previous direct os.WriteFile truncated the target first: an interrupted
 // write left a truncated wallet or block on disk with no way to recover it.
+// The path reaching here has already been validated by LocalStorage.file, which
+// rejects any identifier containing a separator and verifies the result sits
+// inside the data directory. Taint analysis cannot see across that boundary.
+//
+//nolint:gosec // G703: path validated by LocalStorage.file
 func writeFileAtomic(path string, data []byte, perm os.FileMode) error {
 	dir := filepath.Dir(path)
 	tmp, err := os.CreateTemp(dir, "."+filepath.Base(path)+".tmp-*")
@@ -75,6 +82,11 @@ func writeFileAtomic(path string, data []byte, perm os.FileMode) error {
 	}
 	return nil
 }
+
+// maxStorageNameLength bounds an identifier used as a filename. A wallet address
+// is 64 hex characters; this leaves room without allowing a name long enough to
+// trip filesystem limits.
+const maxStorageNameLength = 128
 
 // localStorage is a global variable that holds an instance of the LocalStorage struct.
 // It provides access to the data persist manager using the Go standard library's file system.
@@ -198,14 +210,81 @@ func (ls *LocalStorage) file(t interface{}) (filePath string, err error) {
 	case *Block:
 		// tt is already the *Block the switch matched; the old form re-asserted
 		// t.(*Block), which is the same value obtained in a way that panics.
-		filePath = filepath.Join(ls.dataPath, "blocks", fmt.Sprintf("%s.json", tt.Index.String()))
+		name, nameErr := storageFileName(tt.Index.String())
+		if nameErr != nil {
+			return "", fmt.Errorf("block index: %w", nameErr)
+		}
+		filePath = filepath.Join(ls.dataPath, "blocks", name)
 	case *Wallet:
-		filePath = filepath.Join(ls.dataPath, "wallets", tt.Address+".json")
+		// A wallet address reaches here straight from a URL path variable
+		// (/blockchain/wallets/{id}), so it is attacker-controlled. Joining it
+		// unchecked let "../node" resolve to <dataPath>/node.json -- an
+		// authenticated caller could read, and through the update handler write,
+		// any .json file relative to the data directory.
+		name, nameErr := storageFileName(tt.Address)
+		if nameErr != nil {
+			return "", fmt.Errorf("wallet address: %w", nameErr)
+		}
+		filePath = filepath.Join(ls.dataPath, "wallets", name)
 	default:
-		err = fmt.Errorf("unsupported type [%T]", tt)
+		return "", fmt.Errorf("unsupported type [%T]", tt)
 	}
 
-	return filePath, err
+	// Defence in depth: whatever the rules above produced must still sit inside
+	// the data directory. A future caller that builds a name some other way
+	// cannot escape without this failing.
+	if err := ls.containedInDataPath(filePath); err != nil {
+		return "", err
+	}
+
+	return filePath, nil
+}
+
+// storageFileName turns an identifier into a single safe filename component.
+//
+// Only characters that appear in the identifiers this project actually uses are
+// allowed -- addresses are hex, block indices decimal. Anything else is refused
+// rather than escaped, because there is no legitimate identifier that needs a
+// separator and every attempt to include one is an attack.
+func storageFileName(id string) (string, error) {
+	if id == "" {
+		return "", errors.New("identifier is empty")
+	}
+	if len(id) > maxStorageNameLength {
+		return "", fmt.Errorf("identifier is longer than %d characters", maxStorageNameLength)
+	}
+
+	for _, r := range id {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
+		case r == '-' || r == '_':
+		default:
+			return "", fmt.Errorf("identifier %q contains an unusable character %q", id, r)
+		}
+	}
+
+	return id + ".json", nil
+}
+
+// containedInDataPath verifies a resolved path lies within the data directory.
+func (ls *LocalStorage) containedInDataPath(path string) error {
+	root, err := filepath.Abs(ls.dataPath)
+	if err != nil {
+		return fmt.Errorf("resolve data path: %w", err)
+	}
+	target, err := filepath.Abs(path)
+	if err != nil {
+		return fmt.Errorf("resolve target path: %w", err)
+	}
+
+	rel, err := filepath.Rel(root, target)
+	if err != nil {
+		return fmt.Errorf("compare paths: %w", err)
+	}
+	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return fmt.Errorf("path %q escapes the data directory", path)
+	}
+	return nil
 }
 
 // Get retrieves the value associated with the given key from the LocalStorage.

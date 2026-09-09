@@ -2,6 +2,7 @@ package sdk
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -536,7 +537,10 @@ func (p *P2P) runNodeDiscovery() {
 func (p *P2P) listenForConnections() {
 	var err error
 	bindAddr := p.getBindAddress()
-	p.listener, err = net.Listen("tcp", bindAddr)
+	// ListenConfig rather than net.Listen: the context bounds the bind itself,
+	// which can block on a busy or misconfigured interface.
+	var lc net.ListenConfig
+	p.listener, err = lc.Listen(context.Background(), "tcp", bindAddr)
 	if err != nil {
 		LogInfof("Error starting P2P listener: %v", err)
 		return
@@ -912,12 +916,12 @@ func (p *P2P) SetAsSeedNode() {
 }
 
 // ConnectToSeedNode dials a seed node, authenticates, and pulls its peer list.
-func (p *P2P) ConnectToSeedNode(address string) error {
+func (p *P2P) ConnectToSeedNode(ctx context.Context, address string) error {
 	LogInfof("Connecting to seed node at %s", address)
 
 	// dialPeer performs the authenticated handshake and returns an encrypted
 	// session, so the seed connection is held to the same standard as any other.
-	pc, err := p.dialPeer(address)
+	pc, err := p.dialPeerContext(ctx, address)
 	if err != nil {
 		return fmt.Errorf("failed to connect to seed node: %w", err)
 	}

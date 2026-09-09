@@ -5,7 +5,7 @@ Get up and running with Go Basic Blockchain in minutes! This guide will help you
 ## 🚀 Prerequisites
 
 ### Required Software
-- **Go 1.19+**: [Download Go](https://golang.org/dl/)
+- **Go 1.27+**: [Download Go](https://golang.org/dl/)
 - **Git**: [Download Git](https://git-scm.com/)
 - **Make**: Usually pre-installed on Linux/macOS, [Windows instructions](https://chocolatey.org/packages/make)
 
@@ -260,7 +260,7 @@ go test ./sdk -timeout 60s
 ### Getting Help
 
 1. **Check the logs**: Look for error messages in console output
-2. **Verify prerequisites**: Ensure Go 1.19+ is installed
+2. **Verify prerequisites**: Ensure Go 1.27+ is installed
 3. **Check network**: Ensure port 8200 is available
 4. **Review documentation**: See Troubleshooting (guide not yet written) for more details
 

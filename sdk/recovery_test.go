@@ -1,6 +1,8 @@
 package sdk
 
 import (
+	"bytes"
+	"crypto/ecdsa"
 	"crypto/elliptic"
 	"encoding/json"
 	"errors"
@@ -42,7 +44,18 @@ func TestDerivationIsDeterministic(t *testing.T) {
 		if err != nil {
 			t.Fatalf("derive again: %v", err)
 		}
-		if first.D.Cmp(again.D) != 0 {
+		// Compare the encoded key rather than the raw scalar: PrivateKey.D was
+		// deprecated in Go 1.26 because reading and writing it bypasses the
+		// invariants the implementation maintains.
+		firstBytes, err := first.Bytes()
+		if err != nil {
+			t.Fatalf("encode first key: %v", err)
+		}
+		againBytes, err := again.Bytes()
+		if err != nil {
+			t.Fatalf("encode second key: %v", err)
+		}
+		if !bytes.Equal(firstBytes, againBytes) {
 			t.Fatal("the same seed produced two different keys")
 		}
 	}
@@ -53,7 +66,6 @@ func TestDerivationIsDeterministic(t *testing.T) {
 // of the range.
 func TestDerivedKeyIsOnTheCurveAndInRange(t *testing.T) {
 	curve := elliptic.P256()
-	n := curve.Params().N
 
 	for i := 0; i < 25; i++ {
 		mnemonic, err := GenerateMnemonic()
@@ -69,10 +81,21 @@ func TestDerivedKeyIsOnTheCurveAndInRange(t *testing.T) {
 			t.Fatalf("derive: %v", err)
 		}
 
-		if key.D.Sign() <= 0 || key.D.Cmp(n) >= 0 {
-			t.Fatalf("derived scalar is outside [1, n-1]")
+		// ecdsa.ParseRawPrivateKey already rejects a scalar outside [1, n-1] and
+		// a point off the curve, so a key that came back at all has passed both.
+		// What is worth asserting here is that it is usable: encode it and read
+		// it back.
+		encoded, err := key.Bytes()
+		if err != nil {
+			t.Fatalf("the derived key does not encode: %v", err)
 		}
-		if !curve.IsOnCurve(key.PublicKey.X, key.PublicKey.Y) {
+		if len(encoded) == 0 {
+			t.Fatal("the derived key encoded to nothing")
+		}
+		if _, err := ecdsa.ParseRawPrivateKey(curve, encoded); err != nil {
+			t.Fatalf("the derived key does not round-trip: %v", err)
+		}
+		if key.PublicKey.Curve != curve {
 			t.Fatal("derived public key is not on P-256")
 		}
 	}
@@ -115,7 +138,11 @@ func TestDifferentPhrasesGiveDifferentKeys(t *testing.T) {
 		if err != nil {
 			t.Fatalf("derive: %v", err)
 		}
-		d := key.D.String()
+		encoded, err := key.Bytes()
+		if err != nil {
+			t.Fatalf("encode: %v", err)
+		}
+		d := string(encoded)
 		if seen[d] {
 			t.Fatal("two different phrases derived the same key")
 		}
@@ -148,7 +175,15 @@ func TestSeedPassphraseChangesTheWallet(t *testing.T) {
 	if err != nil {
 		t.Fatalf("derive: %v", err)
 	}
-	if a.D.Cmp(b.D) == 0 {
+	aBytes, err := a.Bytes()
+	if err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+	bBytes, err := b.Bytes()
+	if err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+	if bytes.Equal(aBytes, bBytes) {
 		t.Fatal("the seed passphrase had no effect on the derived key")
 	}
 }

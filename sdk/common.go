@@ -59,7 +59,7 @@ func PrettyPrint(v interface{}) string {
 // it returns the type name prefixed with "*".
 func GetType(i interface{}) string {
 	t := reflect.TypeOf(i)
-	if t.Kind() == reflect.Ptr {
+	if t.Kind() == reflect.Pointer {
 		return "*" + t.Elem().Name()
 	}
 
@@ -401,16 +401,40 @@ func generateRandomToken() string {
 // bool read and written without synchronisation.
 var configVerbose atomic.Bool
 
+// sanitiseLogMessage strips control characters from a rendered log line.
+//
+// Almost everything logged here comes from outside: peer addresses, transaction
+// IDs, wallet addresses, error strings built from network data. A value
+// containing a newline splits one log entry into two, and the second is entirely
+// attacker-written -- so an attacker can forge log lines that look exactly like
+// the node's own. Tabs and newlines become spaces; other control characters are
+// dropped.
+func sanitiseLogMessage(message string) string {
+	var b strings.Builder
+	b.Grow(len(message))
+	for _, r := range message {
+		switch {
+		case r == '\n' || r == '\r' || r == '\t':
+			b.WriteRune(' ')
+		case r < 0x20 || r == 0x7f:
+			// Other control characters, including terminal escape sequences.
+		default:
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
+}
+
 // LogVerbosef logs only when verbose logging is enabled.
 func LogVerbosef(format string, args ...interface{}) {
 	if configVerbose.Load() {
-		log.Printf("[VERBOSE] "+format, args...)
+		log.Print(sanitiseLogMessage("[VERBOSE] " + fmt.Sprintf(format, args...)))
 	}
 }
 
 // LogInfof logs unconditionally.
 func LogInfof(format string, args ...interface{}) {
-	log.Printf(format, args...)
+	log.Print(sanitiseLogMessage(fmt.Sprintf(format, args...)))
 }
 
 // ConfigSetVerbose enables or disables verbose logging.

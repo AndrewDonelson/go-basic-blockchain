@@ -12,8 +12,8 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-// TestApiKeyMiddleware tests the API key middleware
-func TestApiKeyMiddleware(t *testing.T) {
+// TestAPIKeyMiddleware tests the API key middleware
+func TestAPIKeyMiddleware(t *testing.T) {
 	logger := logging.MustGetLogger("testLogger")
 
 	// Create a custom middleware factory for testing that doesn't check public paths

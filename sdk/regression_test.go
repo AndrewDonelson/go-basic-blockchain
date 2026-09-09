@@ -967,7 +967,7 @@ func TestAPIKeyAuthenticationFailsClosed(t *testing.T) {
 		t.Fatalf("expected no API keys when none is configured, got %d", len(cfg.APIKeys))
 	}
 
-	if _, err := ApiKeyMiddleware(cfg, nil); err == nil {
+	if _, err := APIKeyMiddleware(cfg, nil); err == nil {
 		t.Fatal("expected middleware construction to fail with no credentials configured")
 	}
 }

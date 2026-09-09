@@ -309,6 +309,7 @@ func newSecureConn(conn net.Conn, key []byte) (*secureConn, error) {
 func recordNonce(aead cipher.AEAD, seq uint64) []byte {
 	nonce := make([]byte, aead.NonceSize())
 	for i := 0; i < 8 && i < len(nonce); i++ {
+		//nolint:gosec // extracting one byte of a big-endian counter; truncation is the point
 		nonce[len(nonce)-1-i] = byte(seq >> (8 * i))
 	}
 	return nonce
@@ -328,11 +329,13 @@ func (c *secureConn) Write(p []byte) (int, error) {
 
 	sealed := c.aead.Seal(nil, nonce, p, nil)
 
+	// Big-endian length prefix. Each byte() is a deliberate extraction, and the
+	// length is bounded by the p2pMaxRecordSize check above.
 	var header [4]byte
-	header[0] = byte(len(sealed) >> 24)
-	header[1] = byte(len(sealed) >> 16)
-	header[2] = byte(len(sealed) >> 8)
-	header[3] = byte(len(sealed))
+	header[0] = byte(len(sealed) >> 24) //nolint:gosec // byte extraction
+	header[1] = byte(len(sealed) >> 16) //nolint:gosec // byte extraction
+	header[2] = byte(len(sealed) >> 8)  //nolint:gosec // byte extraction
+	header[3] = byte(len(sealed))       //nolint:gosec // byte extraction
 
 	if _, err := c.Conn.Write(header[:]); err != nil {
 		return 0, err

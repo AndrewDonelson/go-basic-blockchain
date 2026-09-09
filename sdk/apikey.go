@@ -82,12 +82,12 @@ func configuredServerSeed() (string, error) {
 	return seed, nil
 }
 
-// ApiKeyMiddleware returns middleware that authenticates requests by API key.
+// APIKeyMiddleware returns middleware that authenticates requests by API key.
 //
 // Public paths bypass the check. Every other path requires a bearer token that
 // matches either a configured key or a key issued to a verified account. All
 // comparisons are constant-time.
-func ApiKeyMiddleware(cfg APIKeyConfig, logger *logging.Logger) (func(handler http.Handler) http.Handler, error) {
+func APIKeyMiddleware(cfg APIKeyConfig, logger *logging.Logger) (func(handler http.Handler) http.Handler, error) {
 	apiKeyHeader := cfg.APIKeyHeader
 	if apiKeyHeader == "" {
 		apiKeyHeader = "Authorization"

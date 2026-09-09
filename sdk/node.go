@@ -372,13 +372,16 @@ func (n *Node) RunContext(ctx context.Context) {
 	// Connect to the configured seed node, then start pulling from peers.
 	if n.Config.SeedAddress != "" && n.P2P != nil {
 		go func() {
-			if err := n.P2P.ConnectToSeedNode(n.Config.SeedAddress); err != nil {
+			// The node's context, so a shutdown during the initial seed dial is
+			// not held open for the full dial timeout.
+			if err := n.P2P.ConnectToSeedNode(ctx, n.Config.SeedAddress); err != nil {
 				LogInfof("Could not connect to seed node %s: %v", n.Config.SeedAddress, err)
 			}
 		}()
 	}
 
 	if n.Syncer != nil {
+		//nolint:gosec // G118: ctx is the node's own context and is passed through
 		go n.Syncer.Run(ctx, defaultSyncInterval)
 		LogInfof("Chain sync started (every %s)", defaultSyncInterval)
 	}

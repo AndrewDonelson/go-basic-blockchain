@@ -259,7 +259,7 @@ func testSecuredRouteAuthEnforcement(t *testing.T) {
 		t.Fatal("test node API is not initialized")
 	}
 
-	apiKeyMiddleware, err := ApiKeyMiddleware(defaultAPIKeyConfig(), testNode.API.log)
+	apiKeyMiddleware, err := APIKeyMiddleware(defaultAPIKeyConfig(), testNode.API.log)
 	if err != nil {
 		t.Fatalf("Failed to initialize API key middleware for auth enforcement test: %v", err)
 	}

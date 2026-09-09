@@ -69,15 +69,27 @@ func deriveP256Key(seed []byte) (*ecdsa.PrivateKey, error) {
 			return nil, fmt.Errorf("derive key material: %w", err)
 		}
 
+		// Range check before handing the bytes to the standard library. A scalar
+		// outside [1, n-1] is not a key, and resampling here is what keeps the
+		// result uniform -- reducing modulo n instead would bias the low end of
+		// the range, and biased ECDSA scalars are a well-worn route to leaking a
+		// private key.
 		d := new(big.Int).SetBytes(material)
 		if d.Sign() <= 0 || d.Cmp(n) >= 0 {
 			continue
 		}
 
-		key := &ecdsa.PrivateKey{D: d}
-		key.PublicKey.Curve = curve
-		key.PublicKey.X, key.PublicKey.Y = curve.ScalarBaseMult(d.Bytes())
-		if key.PublicKey.X == nil {
+		// ecdsa.ParseRawPrivateKey rather than assembling the struct by hand.
+		//
+		// Setting PrivateKey.D and PublicKey.X/Y directly was deprecated in Go
+		// 1.26: it can produce a key that is internally inconsistent, and it
+		// bypasses the precomputation the implementation relies on. Parsing does
+		// the scalar-to-point work and validates the result.
+		key, err := ecdsa.ParseRawPrivateKey(curve, material)
+		if err != nil {
+			// The bytes passed the range check, so a rejection here means the
+			// standard library found something the check does not model. Try the
+			// next counter rather than returning a key it considers invalid.
 			continue
 		}
 		return key, nil

@@ -178,6 +178,7 @@ func (s *FileAccountStore) GetVerifiedByAPIKeyHash(hash string) (VerifiedAccount
 }
 
 func (s *FileAccountStore) loadStateLocked() (accountStoreState, error) {
+	//nolint:gosec // G703: statePath is operator-configured, not request-derived
 	if err := os.MkdirAll(filepath.Dir(s.statePath), 0700); err != nil {
 		return accountStoreState{}, fmt.Errorf("create account store directory: %w", err)
 	}
@@ -188,7 +189,9 @@ func (s *FileAccountStore) loadStateLocked() (accountStoreState, error) {
 		Verified:      map[string]VerifiedAccountRecord{},
 	}
 
-	bytes, err := os.ReadFile(s.statePath)
+	// s.statePath is built from the configured data directory at construction; no
+	// part of it comes from a request.
+	bytes, err := os.ReadFile(s.statePath) //nolint:gosec // G703: operator-configured path
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return state, nil

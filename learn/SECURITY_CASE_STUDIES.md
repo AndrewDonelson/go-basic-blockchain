@@ -599,6 +599,51 @@ against a vague sense that random values are safe.
 
 ---
 
+## Case 19: The wallet address that read other files
+
+`/blockchain/wallets/{id}` takes an address from the URL and hands it to storage,
+which built a path from it:
+
+```go
+filePath = filepath.Join(ls.dataPath, "wallets", tt.Address+".json")
+```
+
+Nothing checked the address. `filepath.Join` *cleans* the result, which is
+precisely what makes this work: `wallets/../node` collapses to `node`.
+
+Proven before fixing:
+
+```
+address "../node" resolved to path: /tmp/.../001/node.json
+relative to wallets dir: ../node.json
+TRAVERSAL: path escapes the wallets directory
+```
+
+An authenticated caller could read any `.json` file relative to the data
+directory — and the update handler writes through the same resolver.
+
+**The fix, in two layers.** Identifiers are validated to a strict character set
+(addresses are hex, block indices decimal), so a separator is **refused rather
+than escaped**. And the resolved path is checked to be inside the data directory,
+so a future caller that builds a name some other way still cannot escape.
+
+*Tests:* `sdk/pathsafety_test.go`
+
+**Lesson.** `filepath.Join` is not a security boundary — it is a string
+operation that happens to normalise `..` for you. Any time user input becomes
+part of a path, validate the *component* against what a legitimate one looks
+like, then verify the *result* is where you meant it to be. And prefer refusing
+odd input to sanitising it: escaping invites the next encoding bug, refusing does
+not.
+
+This one was found by a linter, which is worth noting after eighteen cases that
+were not. Newer gosec added taint analysis, and it followed the address from the
+HTTP handler to the file path — a data-flow question, which is exactly the kind
+of mechanical fault tools are good at. It is still not a substitute for the
+adversarial reading that found the other eighteen.
+
+---
+
 ## The meta-lesson
 
 Before the audit:

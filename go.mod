@@ -1,12 +1,16 @@
 module github.com/AndrewDonelson/go-basic-blockchain
 
-// The language version stays at 1.22 so the module keeps working for anyone on
-// that release. The toolchain directive that used to pin go1.22.0 has been
-// removed: it forced builds onto a toolchain with known standard-library
-// vulnerabilities (govulncheck reports 23 reachable from this code, all fixed in
-// later patch releases). Without the pin, Go uses whatever installed toolchain
-// satisfies the line above -- so keeping your Go up to date actually helps.
-go 1.22
+go 1.27
+
+// The toolchain line is a FLOOR, not a pin: Go uses this version only when the
+// installed one is older, and keeps a newer one as-is.
+//
+// It previously read go1.22.0, which is the opposite -- it forced every build
+// onto one specific toolchain carrying 23 standard-library vulnerabilities
+// reachable from this code, and no change in this repository could fix them.
+// govulncheck reports zero on the version below. Raise this line when a later
+// release fixes something; never lower it.
+toolchain go1.27.1
 
 require (
 	github.com/FactomProject/basen v0.0.0-20150613233007-fe3947df716e // indirect

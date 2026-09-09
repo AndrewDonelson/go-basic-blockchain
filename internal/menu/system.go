@@ -2,11 +2,13 @@ package menu
 
 import (
 	"bufio"
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
 	"runtime"
 	"strings"
+	"time"
 
 	"golang.org/x/term"
 )
@@ -271,11 +273,16 @@ func (ms *MenuSystem) readKey() string {
 
 // clearScreen clears the terminal screen
 func clearScreen() {
+	// A bounded context: clearing the screen is cosmetic, and a subprocess that
+	// hangs must not hang the menu with it.
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
 	var cmd *exec.Cmd
 	if runtime.GOOS == "windows" {
-		cmd = exec.Command("cmd", "/c", "cls")
+		cmd = exec.CommandContext(ctx, "cmd", "/c", "cls")
 	} else {
-		cmd = exec.Command("clear")
+		cmd = exec.CommandContext(ctx, "clear")
 	}
 	cmd.Stdout = os.Stdout
 	//nolint:errcheck // clearing the screen is cosmetic; a failure changes nothing

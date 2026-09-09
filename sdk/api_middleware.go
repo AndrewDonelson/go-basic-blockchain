@@ -28,7 +28,7 @@ func (api *API) installMiddleware() error {
 
 	api.router.Use(loggingMiddleware)
 
-	apiKeyMiddleware, err := ApiKeyMiddleware(keyCfg, api.log)
+	apiKeyMiddleware, err := APIKeyMiddleware(keyCfg, api.log)
 	if err != nil {
 		return fmt.Errorf("error initializing API key middleware: %w", err)
 	}

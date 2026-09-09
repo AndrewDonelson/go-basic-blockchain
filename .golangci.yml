@@ -1,44 +1,86 @@
-# golangci-lint configuration.
+# golangci-lint configuration (v2 format).
 #
 # This file previously enabled nothing beyond the defaults, so the many
 # `if err != nil { _ = err }` suppressions and unchecked type assertions in the
-# codebase went unreported. The `go` version also disagreed with go.mod.
+# codebase went unreported.
+#
+# Migrated from the v1 format because golangci-lint v2 refuses the old schema and
+# CI installs "latest". All fourteen linters the v1 file named are still active;
+# five of them (errcheck, govet, ineffassign, staticcheck, unused) are in v2's
+# default set and so no longer need naming here. Verify with:
+#
+#     golangci-lint linters
+#
+# The repository is expected to report ZERO findings. A new one is a regression.
+# Where a finding is correct but the behaviour is intended, annotate the line with
+# a reason -- `//nolint:gosec // difficulty is clamped above` -- rather than
+# widening the exclusions below. A bare //nolint is just a silenced warning.
+version: "2"
 run:
-  timeout: 5m
-  go: "1.22"
-
+  go: "1.27"
 linters:
   enable:
-    - errcheck      # unchecked errors -- the single highest-value linter here
-    - govet
-    - ineffassign
-    - staticcheck
-    - unused
-    - gosec         # hardcoded credentials, weak crypto, unsafe permissions
-    - bodyclose     # leaked HTTP response bodies
-    - rowserrcheck
-    - noctx
-    - errorlint
+    - bodyclose
     - copyloopvar
+    - errorlint
+    - gosec
     - misspell
-    - unconvert
     - nilerr
-
-linters-settings:
-  errcheck:
-    check-type-assertions: true
-    check-blank: true
-  gosec:
-    excludes:
-      # G104 overlaps with errcheck.
-      - G104
-
+    - noctx
+    - rowserrcheck
+    - unconvert
+  settings:
+    errcheck:
+      check-type-assertions: true
+      check-blank: true
+    staticcheck:
+      checks:
+        - all
+        # QF1008: "could remove embedded field from selector".
+        #
+        # Declined deliberately. Writing b.Tx.Protocol rather than b.Protocol is
+        # the explicit form, and this codebase has already been bitten once by
+        # method promotion on an embedded struct: P2PTransaction embedded Tx,
+        # inherited its MarshalJSON, and serialised without a single one of its
+        # own fields -- Action, Target and Data silently vanished on the wire.
+        # Naming the embedded field is a reminder that it is there.
+        - -QF1008
+    gosec:
+      excludes:
+        # G104 overlaps with errcheck, which reports the same thing with better
+        # positions.
+        - G104
+  exclusions:
+    generated: lax
+    presets:
+      - comments
+      - common-false-positives
+      - legacy
+      - std-error-handling
+    rules:
+      # Test setup helpers may ignore errors; production code may not.
+      - linters:
+          - errcheck
+          - gosec
+        path: _test\.go
+      # noctx wants a context on every request and subprocess. That matters in
+      # the node, where an uncancellable call holds shutdown open; in a test the
+      # process is about to exit either way, and threading contexts through
+      # fixtures buys nothing but noise.
+      - linters:
+          - noctx
+        path: _test\.go
+    paths:
+      - third_party$
+      - builtin$
+      - examples$
 issues:
-  exclude-rules:
-    # Test files may ignore errors on setup helpers.
-    - path: _test\.go
-      linters:
-        - errcheck
-        - gosec
   max-issues-per-linter: 0
   max-same-issues: 0
+formatters:
+  exclusions:
+    generated: lax
+    paths:
+      - third_party$
+      - builtin$
+      - examples$

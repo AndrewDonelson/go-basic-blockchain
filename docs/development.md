@@ -7,7 +7,7 @@ Complete guide for contributing to the Go Basic Blockchain project, including de
 ### Prerequisites
 
 **Required Software**:
-- Go 1.19+ ([Download](https://golang.org/dl/))
+- Go 1.27+ ([Download](https://golang.org/dl/)) — older releases carry standard-library vulnerabilities this repository cannot fix
 - Git ([Download](https://git-scm.com/))
 - Make (usually pre-installed)
 - Your favorite IDE (VS Code recommended)
@@ -297,18 +297,32 @@ That is the standard to hold: `//nolint` without a reason is just a silenced
 warning, and the next reader has no way to tell a considered decision from an
 overlooked one.
 
-### Keep your toolchain current
+### Go version
 
-`govulncheck` reports standard-library vulnerabilities reachable from this code —
-23 at the time of writing, every one fixed in a later Go patch release. **No
-change to this repository can fix them**; they are in the toolchain that compiles
-it.
+```
+go 1.27
+toolchain go1.27.1
+```
 
-`go.mod` therefore declares a language version (`go 1.22`) but **no `toolchain`
-directive**. The directive used to pin `go1.22.0`, which forced every build onto
-that exact vulnerable toolchain. Without it, Go uses whatever installed toolchain
-satisfies the language version, so keeping Go updated actually helps. CI runs the
-scanners on a current release for the same reason.
+`govulncheck` reports **zero** vulnerabilities on this toolchain. It previously
+reported 23 standard-library vulnerabilities reachable from this code — and **no
+change to this repository could fix them**, because they were in the toolchain
+that compiles it. `go.mod` used to read `toolchain go1.22.0`, pinning every build
+to one specific vulnerable release.
+
+The `toolchain` line is now a **floor**, not a pin: Go uses it only when the
+installed toolchain is older, and keeps a newer one as-is. Raise it when a later
+release fixes something; never lower it.
+
+If you upgrade the toolchain, **rebuild your analysers too**. `govulncheck` and
+`golangci-lint` embed the Go version they were built with, and an older binary
+cannot parse a newer standard library — it fails with confusing type errors that
+look like faults in your code:
+
+```bash
+go install golang.org/x/vuln/cmd/govulncheck@latest
+go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest
+```
 
 ### Lessons from the audit
 

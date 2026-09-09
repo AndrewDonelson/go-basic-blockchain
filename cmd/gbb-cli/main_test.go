@@ -95,27 +95,27 @@ func TestResolveAPIURLAndKeyFromEnv(t *testing.T) {
 
 func TestBlockchainClientConnectAndRequestMethods(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch {
-		case r.URL.Path == "/health":
+		switch r.URL.Path {
+		case "/health":
 			w.WriteHeader(http.StatusOK)
 			_, _ = w.Write([]byte("ok"))
-		case r.URL.Path == "/blockchain":
+		case "/blockchain":
 			if r.Header.Get("Authorization") != "Bearer test-key" {
 				w.WriteHeader(http.StatusUnauthorized)
 				return
 			}
 			_, _ = w.Write([]byte(`{"block_count":3}`))
-		case r.URL.Path == "/blockchain/blocks":
+		case "/blockchain/blocks":
 			_, _ = w.Write([]byte(`[{"index":1,"hash":"h1"}]`))
-		case r.URL.Path == "/blockchain/blocks/1":
+		case "/blockchain/blocks/1":
 			_, _ = w.Write([]byte(`{"index":1,"hash":"h1"}`))
-		case r.URL.Path == "/blockchain/wallets":
+		case "/blockchain/wallets":
 			_, _ = w.Write([]byte(`{"wallets":[{"id":"w1"}]}`))
-		case r.URL.Path == "/blockchain/wallets/w1":
+		case "/blockchain/wallets/w1":
 			_, _ = w.Write([]byte(`{"id":"w1"}`))
-		case r.URL.Path == "/blockchain/transactions":
+		case "/blockchain/transactions":
 			_, _ = w.Write([]byte(`{"transactions":[{"id":"t1"}]}`))
-		case r.URL.Path == "/blockchain/transactions/t1":
+		case "/blockchain/transactions/t1":
 			_, _ = w.Write([]byte(`{"id":"t1"}`))
 		default:
 			w.WriteHeader(http.StatusNotFound)

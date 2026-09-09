@@ -1,9 +1,11 @@
 # CI for go-basic-blockchain.
 #
-# The previous workflow pinned Go 1.19 while go.mod requires 1.22, and ran only
+# The original workflow pinned Go 1.19 while go.mod required 1.22, and ran only
 # `go build` and `go test` -- no race detector, no vet, no lint, no vulnerability
 # scan, and no coverage. Three different Go versions were declared across
-# go.mod (1.22), this file (1.19) and .golangci.yml (1.25).
+# go.mod, this file and .golangci.yml.
+#
+# One version now, in one place: go.mod declares it, and everything here follows.
 name: Go
 
 on:
@@ -22,10 +24,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # 1.22 is the floor declared in go.mod; the newest entry is a patched
-        # release, so govulncheck below is not reporting standard-library CVEs
-        # that only a toolchain upgrade can fix.
-        go-version: ["1.22", "1.25"]
+        # go.mod declares go 1.27 and a toolchain floor of go1.27.1. Older
+        # releases carry standard-library vulnerabilities that no change in this
+        # repository can fix, so there is nothing to gain from testing on them.
+        go-version: ["1.27"]
 
     steps:
       - uses: actions/checkout@v4
@@ -58,7 +60,7 @@ jobs:
         run: go tool cover -func=coverage.out | tail -1
 
       - name: Upload coverage
-        if: matrix.go-version == '1.22'
+        if: matrix.go-version == '1.27'
         uses: actions/upload-artifact@v4
         with:
           name: coverage
@@ -71,10 +73,14 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
-          go-version: "1.25"
+          go-version: "1.27"
           cache: true
+      # golangci-lint v2 requires action v8 and the v2 config schema, which
+      # .golangci.yml now uses. Pinning the action major version keeps the two in
+      # step; "latest" for the linter itself is deliberate, so a new check shows
+      # up here rather than in a surprise months later.
       - name: golangci-lint
-        uses: golangci/golangci-lint-action@v6
+        uses: golangci/golangci-lint-action@v8
         with:
           version: latest
           args: --timeout=5m
@@ -86,7 +92,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
-          go-version: "1.25"
+          go-version: "1.27"
           cache: true
       - name: govulncheck
         run: |

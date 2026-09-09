@@ -14,6 +14,7 @@ package sdk
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -158,11 +159,24 @@ func firstWord(s string) string {
 // could never have worked. And the handshake it did perform proved nothing: a
 // node simply asserted an ID and the peer believed it.
 func (p *P2P) dialPeer(address string) (*peerConn, error) {
+	return p.dialPeerContext(context.Background(), address)
+}
+
+// dialPeerContext is dialPeer with a caller-supplied context, so a dial can be
+// abandoned when the node is shutting down rather than running to its timeout.
+func (p *P2P) dialPeerContext(parent context.Context, address string) (*peerConn, error) {
 	if address == "" {
 		return nil, errors.New("peer address is empty")
 	}
+	if parent == nil {
+		parent = context.Background()
+	}
 
-	conn, err := net.DialTimeout("tcp", address, p2pDialTimeout)
+	ctx, cancel := context.WithTimeout(parent, p2pDialTimeout)
+	defer cancel()
+
+	dialer := net.Dialer{Timeout: p2pDialTimeout}
+	conn, err := dialer.DialContext(ctx, "tcp", address)
 	if err != nil {
 		return nil, fmt.Errorf("dial %s: %w", address, err)
 	}

@@ -34,8 +34,8 @@ func TestDeriveKeyPair(t *testing.T) {
 	// Display mnemonic and keys
 	fmt.Println("Mnemonic: ", mnemonic)
 	fmt.Println("Password: ", testPassPhrase)
-	fmt.Println("Master private key: ", privateKey)
-	fmt.Println("Master public key: ", publicKey)
+	fmt.Println("Master private key: ", string(privateKey))
+	fmt.Println("Master public key: ", string(publicKey))
 }
 
 // TestGenerateWalletAddress tests the GenerateWalletAddress function by generating a mnemonic,
