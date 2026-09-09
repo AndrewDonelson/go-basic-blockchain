@@ -47,11 +47,11 @@ func TestStagesAreDeterministic(t *testing.T) {
 
 	// Stage 2 takes the block header, not the stage-1 result: the delay is a
 	// property of the block, not of a nonce attempt.
-	stage2a, proofA, err := h.executeTimeLockPhase(header)
+	stage2a, proofA, err := h.executeTimeLockPhase(header, nil)
 	if err != nil {
 		t.Fatalf("time-lock phase: %v", err)
 	}
-	stage2b, proofB, err := h.executeTimeLockPhase(header)
+	stage2b, proofB, err := h.executeTimeLockPhase(header, nil)
 	if err != nil {
 		t.Fatalf("time-lock phase: %v", err)
 	}
@@ -305,7 +305,7 @@ func TestTimeLockPhaseDoesNotSleep(t *testing.T) {
 	h := NewHeliosAlgorithm(cfg)
 
 	start := time.Now()
-	if _, _, err := h.executeTimeLockPhase([]byte("stage1")); err != nil {
+	if _, _, err := h.executeTimeLockPhase([]byte("stage1"), nil); err != nil {
 		t.Fatalf("time-lock phase: %v", err)
 	}
 	elapsed := time.Since(start)

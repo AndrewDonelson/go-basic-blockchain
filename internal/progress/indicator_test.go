@@ -234,3 +234,43 @@ func BenchmarkProgressIndicator(b *testing.B) {
 		pi.UpdateStatus(status)
 	}
 }
+
+// TestStopDoesNotDeadlockAgainstTheRenderLoop pins a lock-order inversion.
+//
+// renderStatus used to advance the spinner while holding outputMu, so it took
+// outputMu and then mutex; Stop takes mutex and then outputMu. Stop would hold
+// mutex waiting for outputMu while the render loop held outputMu waiting for
+// mutex, and neither could proceed.
+//
+// The window is narrow -- it only appeared when the machine was loaded enough for
+// a shutdown to land between the two acquisitions -- so this hammers Start/Stop
+// against a running render loop to force it.
+func TestStopDoesNotDeadlockAgainstTheRenderLoop(t *testing.T) {
+	done := make(chan struct{})
+
+	go func() {
+		defer close(done)
+		for i := 0; i < 200; i++ {
+			pi := NewProgressIndicator()
+			pi.Start()
+
+			// Give the render loop something to do, so it is likely to be inside
+			// renderStatus when Stop arrives.
+			pi.UpdateStatus(BlockchainStatus{
+				Action:     "Mining",
+				BlockCount: i,
+				IsMining:   true,
+			})
+			pi.ShowMiningProgress(i, 4, "hash")
+
+			pi.Stop()
+		}
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(60 * time.Second):
+		t.Fatal("Start/Stop deadlocked against the render loop; Stop holds mutex " +
+			"waiting for outputMu while renderStatus holds outputMu waiting for mutex")
+	}
+}

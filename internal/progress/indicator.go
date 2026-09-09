@@ -452,13 +452,28 @@ func (pi *ProgressIndicator) statusUpdateLoop() {
 
 // renderStatus renders the current blockchain status without clearing the line.
 func (pi *ProgressIndicator) renderStatus(advanceSpinner bool) {
-	pi.mutex.RLock()
+	// The spinner is advanced HERE, in the same critical section that reads it,
+	// rather than after the output lock has been taken.
+	//
+	// It used to be advanced at the end of this function, while outputMu was
+	// held -- so renderStatus acquired outputMu and then mutex, while Stop
+	// acquires mutex and then outputMu. That is a lock-order inversion and it
+	// deadlocks: Stop holds mutex waiting for outputMu, the render loop holds
+	// outputMu waiting for mutex, and neither ever proceeds.
+	//
+	// The window is narrow, which is why it only showed up under load -- a
+	// shutdown landing between the two acquisitions. It would have hung node
+	// shutdown in production for the same reason.
+	pi.mutex.Lock()
 	isRunning := pi.isRunning
 	isPaused := pi.isPaused
 	status := pi.normalizedStatusLocked(time.Now())
 	statusReady := pi.statusReady
 	frameIndex := pi.frameIndex
-	pi.mutex.RUnlock()
+	if advanceSpinner {
+		pi.frameIndex = (frameIndex + 1) % len(statusSpinnerFrames)
+	}
+	pi.mutex.Unlock()
 
 	if !isRunning || isPaused || !statusReady {
 		return
@@ -481,12 +496,6 @@ func (pi *ProgressIndicator) renderStatus(advanceSpinner bool) {
 	fmt.Printf("\r%s%s", line, strings.Repeat(" ", padWidth))
 	pi.lastLine = line
 	pi.lastWidth = len(line)
-
-	if advanceSpinner {
-		pi.mutex.Lock()
-		pi.frameIndex = (frameIndex + 1) % len(statusSpinnerFrames)
-		pi.mutex.Unlock()
-	}
 }
 
 func (pi *ProgressIndicator) printExternalMessage(printFn func()) {

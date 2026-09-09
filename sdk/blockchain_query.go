@@ -101,6 +101,28 @@ func (bc *Blockchain) GetLatestBlock() *Block {
 	return bc.Blocks[len(bc.Blocks)-1]
 }
 
+// blockByHash resolves a block by hash, main chain or not.
+//
+// It takes the lock only for the lookup itself. That distinction is the whole
+// point of the split: verifying a block's proof needs the PARENT'S DATA, not the
+// chain lock, and a parent is immutable once it exists -- its hash determines its
+// contents -- so it can be read here and used afterwards without holding
+// anything. Verification then runs lock-free even though it is parent-dependent.
+func (bc *Blockchain) blockByHash(hash string) *Block {
+	if hash == "" {
+		return nil
+	}
+
+	bc.mux.Lock()
+	defer bc.mux.Unlock()
+
+	bc.indexMainChainLocked()
+	if block, ok := bc.blockIndex[hash]; ok {
+		return block
+	}
+	return nil
+}
+
 // GetBlockByHash returns a block with the given hash.
 func (bc *Blockchain) GetBlockByHash(hash string) *Block {
 	bc.mux.Lock()

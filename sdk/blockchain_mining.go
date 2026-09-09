@@ -59,8 +59,12 @@ func (bc *Blockchain) mineWithHelios(block *Block, difficulty int) (*Block, erro
 		bc.progressIndicator.ShowMiningProgress(int(block.Index.Int64()), difficulty, block.Hash)
 	}
 
+	// The parent is the block this one names, so the delay chains onto its
+	// predecessor's rather than starting fresh.
+	parent := bc.blockByHash(block.Header.PreviousHash)
+
 	// Mine using Helios algorithm
-	proof, err := bc.heliosAlgorithm.Mine(blockHeader, targetDifficulty)
+	proof, err := bc.heliosAlgorithm.MineOnParent(blockHeader, parentDelayOutput(parent), targetDifficulty)
 	if err != nil {
 		// A mining failure (including the timeout) must abandon the block. The old
 		// code logged the error and returned the *unmined* block, which the caller
@@ -86,7 +90,7 @@ func (bc *Blockchain) mineWithHelios(block *Block, difficulty int) (*Block, erro
 
 	// Verify our own work before publishing it. bc.heliosValidator was constructed
 	// and then never called anywhere, so nothing ever checked a proof.
-	if err := bc.verifyHeliosProof(block, difficulty); err != nil {
+	if err := bc.verifyHeliosProof(block, parent, difficulty); err != nil {
 		return nil, fmt.Errorf("self-verification of freshly mined block failed: %w", err)
 	}
 
@@ -103,9 +107,21 @@ func blockDifficulty(block *Block, fallback int) int {
 	return fallback
 }
 
+// parentDelayOutput returns the delay output a block's child must chain onto.
+//
+// Genesis, and any block mined without Helios, contributes nothing -- an empty
+// output is a well-defined starting point for the chain rather than a special
+// case scattered through the callers.
+func parentDelayOutput(parent *Block) []byte {
+	if parent == nil || parent.HeliosProof == nil {
+		return nil
+	}
+	return parent.HeliosProof.Stage2Result
+}
+
 // verifyHeliosProof checks a block's stored Helios proof against its header and
 // the target difficulty.
-func (bc *Blockchain) verifyHeliosProof(block *Block, difficulty int) error {
+func (bc *Blockchain) verifyHeliosProof(block, parent *Block, difficulty int) error {
 	if block.HeliosProof == nil {
 		return errors.New("block carries no Helios proof")
 	}
@@ -116,8 +132,16 @@ func (bc *Blockchain) verifyHeliosProof(block *Block, difficulty int) error {
 	target := difficultyTarget(difficulty)
 
 	// Recompute the proof hash from the block header: this is what makes the
-	// proof binding rather than self-asserted.
-	if err := bc.heliosAlgorithm.ValidateProof(block.HeliosProof, block.createBlockHeaderForMining(), target); err != nil {
+	// proof binding rather than self-asserted. The parent's delay output goes in
+	// too, which is what ties this block's delay to its predecessor's -- a
+	// verifier that used the wrong parent would derive a different VDF input and
+	// the proof would not check out.
+	if err := bc.heliosAlgorithm.ValidateProofOnParent(
+		block.HeliosProof,
+		block.createBlockHeaderForMining(),
+		parentDelayOutput(parent),
+		target,
+	); err != nil {
 		return err
 	}
 

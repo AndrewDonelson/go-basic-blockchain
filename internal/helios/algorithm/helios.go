@@ -5,6 +5,7 @@ import (
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/sha256"
+	"encoding/binary"
 	"encoding/hex"
 	"fmt"
 	"math/big"
@@ -181,6 +182,13 @@ func NewHeliosAlgorithm(config *HeliosConfig) *HeliosAlgorithm {
 
 // Mine attempts to find a valid proof of work using the Helios algorithm
 func (h *HeliosAlgorithm) Mine(blockHeader []byte, targetDifficulty *big.Int) (*HeliosProof, error) {
+	return h.MineOnParent(blockHeader, nil, targetDifficulty)
+}
+
+// MineOnParent is Mine with the parent block's delay output, which chains this
+// block's delay onto it. A nil parentOutput is the genesis case: there is nothing
+// to chain onto.
+func (h *HeliosAlgorithm) MineOnParent(blockHeader, parentOutput []byte, targetDifficulty *big.Int) (*HeliosProof, error) {
 	startTime := time.Now()
 	var energyUsed int64
 
@@ -200,7 +208,7 @@ func (h *HeliosAlgorithm) Mine(blockHeader []byte, targetDifficulty *big.Int) (*
 	// rather than of an attempt -- and it also stops the search paying for T
 	// sequential squarings per candidate.
 	stage2Start := time.Now()
-	stage2Result, vdfProof, err := h.executeTimeLockPhase(blockHeader)
+	stage2Result, vdfProof, err := h.executeTimeLockPhase(blockHeader, parentOutput)
 	if err != nil {
 		return nil, fmt.Errorf("time-lock phase failed: %w", err)
 	}
@@ -335,18 +343,18 @@ func (h *HeliosAlgorithm) executeMemoryPhase(blockHeader []byte, nonce uint64) (
 // chain, not n -- the sequentiality is real per attempt and worthless per block.
 // With the input fixed by the header there is exactly one chain per block, and
 // it has to be walked end to end before any nonce can be tried.
-func (h *HeliosAlgorithm) executeTimeLockPhase(blockHeader []byte) ([]byte, []byte, error) {
+func (h *HeliosAlgorithm) executeTimeLockPhase(blockHeader, parentOutput []byte) ([]byte, []byte, error) {
 	discriminant, iterations, err := h.vdfParameters()
 	if err != nil {
 		return nil, nil, err
 	}
 
-	// The VDF input is a group element derived from the header. Hashing into the
-	// group rather than using a fixed generator matters: an element whose
-	// discrete logarithm to some published base were known would let a prover
-	// shortcut the delay.
-	seed := sha256.Sum256(append([]byte("helios/stage2/vdf/input"), blockHeader...))
-	input, err := vdf.HashToForm(seed[:], discriminant)
+	// The VDF input is a group element derived from the parent's delay output and
+	// this block's header. Hashing into the group rather than using a fixed
+	// generator matters: an element whose discrete logarithm to some published
+	// base were known would let a prover shortcut the delay.
+	seed := stage2Seed(blockHeader, parentOutput)
+	input, err := vdf.HashToForm(seed, discriminant)
 	if err != nil {
 		return nil, nil, fmt.Errorf("map the header into the group: %w", err)
 	}
@@ -359,18 +367,56 @@ func (h *HeliosAlgorithm) executeTimeLockPhase(blockHeader []byte) ([]byte, []by
 	return proof.Output.Bytes(), proof.Bytes(), nil
 }
 
+// stage2Seed derives the VDF input from the parent's delay output and this
+// block's header.
+//
+// THE PARENT'S OUTPUT IS WHAT CHAINS THE DELAY.
+//
+// A per-block delay guarantees little on its own: if every block's delay could be
+// computed independently, a miner with enough cores would compute a hundred of
+// them at once and the chain would gain no elapsed-time property at all. Feeding
+// block N-1's output into block N's input makes the delays one continuous
+// sequential computation -- block N's cannot begin until block N-1's has
+// finished, so a chain of k blocks costs at least k delays of wall-clock time no
+// matter how much hardware is aimed at it.
+//
+// The header alone would very nearly do this, since it commits to PreviousHash.
+// But that is a property of what happens to be in the header rather than of this
+// function, and it would vanish silently if the header changed. The dependency is
+// explicit here so it cannot be removed by accident.
+//
+// The length prefix is not decoration: without it a parent output ending in some
+// bytes and a header beginning with them would be indistinguishable from a
+// different split of the same concatenation, and two distinct blocks could share
+// a delay input.
+func stage2Seed(blockHeader, parentOutput []byte) []byte {
+	h := sha256.New()
+	h.Write([]byte("helios/stage2/vdf/input/v2"))
+
+	var length [8]byte
+	binary.BigEndian.PutUint64(length[:], uint64(len(parentOutput)))
+	h.Write(length[:])
+	h.Write(parentOutput)
+
+	binary.BigEndian.PutUint64(length[:], uint64(len(blockHeader)))
+	h.Write(length[:])
+	h.Write(blockHeader)
+
+	return h.Sum(nil)
+}
+
 // verifyTimeLockPhase checks a stage-2 result against its proof.
 //
 // This is the asymmetry the whole change exists for: the miner spent T
 // sequential squarings, and this confirms it without repeating one of them.
-func (h *HeliosAlgorithm) verifyTimeLockPhase(blockHeader, stage2Result, encodedProof []byte) error {
+func (h *HeliosAlgorithm) verifyTimeLockPhase(blockHeader, parentOutput, stage2Result, encodedProof []byte) error {
 	discriminant, _, err := h.vdfParameters()
 	if err != nil {
 		return err
 	}
 
-	seed := sha256.Sum256(append([]byte("helios/stage2/vdf/input"), blockHeader...))
-	input, err := vdf.HashToForm(seed[:], discriminant)
+	seed := stage2Seed(blockHeader, parentOutput)
+	input, err := vdf.HashToForm(seed, discriminant)
 	if err != nil {
 		return fmt.Errorf("map the header into the group: %w", err)
 	}
@@ -468,6 +514,15 @@ func heliosFinalPreimage(blockHeader []byte, nonce uint64, stage1, stage2, stage
 // three stages constrained nothing: a miner could supply any bytes and grind only
 // the final SHA-256. Recomputation is what makes the work binding.
 func (h *HeliosAlgorithm) ValidateProof(proof *HeliosProof, blockHeader []byte, targetDifficulty *big.Int) error {
+	return h.ValidateProofOnParent(proof, blockHeader, nil, targetDifficulty)
+}
+
+// ValidateProofOnParent is ValidateProof with the parent block's delay output.
+//
+// The verifier must supply the same parent output the miner used, or the derived
+// VDF input differs and the proof fails -- which is exactly the binding that
+// makes the delay sequential across blocks rather than merely within one.
+func (h *HeliosAlgorithm) ValidateProofOnParent(proof *HeliosProof, blockHeader, parentOutput []byte, targetDifficulty *big.Int) error {
 	if proof == nil {
 		return fmt.Errorf("proof cannot be nil")
 	}
@@ -490,7 +545,7 @@ func (h *HeliosAlgorithm) ValidateProof(proof *HeliosProof, blockHeader []byte, 
 	// validator was willing to spend. The Wesolowski witness is confirmed in a
 	// few hundred group operations no matter how long the delay was.
 	stage2 := proof.Stage2Result
-	if err := h.verifyTimeLockPhase(blockHeader, stage2, proof.VDFProof); err != nil {
+	if err := h.verifyTimeLockPhase(blockHeader, parentOutput, stage2, proof.VDFProof); err != nil {
 		return fmt.Errorf("time-lock proof is invalid: %w", err)
 	}
 

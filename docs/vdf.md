@@ -108,26 +108,57 @@ A per-block delay is not much use on its own: if every block's delay could be
 computed independently, a miner with enough cores would compute a hundred of them
 at once and the chain would gain no elapsed-time guarantee at all.
 
-It cannot, because stage 2's input is the mining header and **the header contains
-`PreviousHash`**. Block N's delay input is unknown until block N−1 is final, so
-the delays form a single chain:
+It cannot, because **block N−1's delay output is fed into block N's delay
+input**:
 
+```go
+seed = H( "helios/stage2/vdf/input/v2"
+        , len(parentOutput), parentOutput
+        , len(blockHeader),  blockHeader )
 ```
-block N-1 mined ──> its hash ──> block N's header ──> block N's VDF input
-```
 
-That is a property of what goes into the header rather than of the VDF, and
-nothing in the VDF would notice if it disappeared — so it is pinned by
-`TestVDFInputDependsOnTheParentBlock` and `TestChainOfBlocksSerialisesTheDelay`,
-which fail if the mining header ever stops committing to the parent.
+Block N's VDF cannot begin until block N−1's has finished, so a chain of k blocks
+costs at least k delays of wall-clock time no matter how much hardware is aimed
+at it. `TestProofDoesNotVerifyAgainstTheWrongParent` confirms the binding is real:
+a proof computed on one parent does not verify against another, nor against none.
 
-**Why not feed the parent's VDF output in directly?** It would give the same
-guarantee, and it was considered. Stage 2 is verified in `validateStandalone`,
-which runs *outside the chain lock* precisely so an expensive proof check does not
-stall mining and every reader — a deliberate earlier fix. Making verification
-depend on the parent block would force it back inside the lock, holding it across
-~85 ms of verification, in exchange for no additional security. The header
-dependency already serialises the delays.
+The length prefixes are not decoration. Without them, a parent output ending in
+some bytes and a header beginning with them would be indistinguishable from a
+different split of the same concatenation, and two distinct blocks could share a
+delay input.
+
+The mining header also commits to `PreviousHash`, so this dependency existed
+implicitly before. The explicit version does not rely on that: it is a property of
+this function rather than of what happens to be in the header, so it cannot
+disappear if the header changes.
+
+### The validation ordering this required
+
+Verification now needs the parent, but it must **not** hold the chain lock — it
+re-runs the memory-hard phase and checks a delay proof, around a hundred
+milliseconds, and holding the lock across that would stall mining and every reader
+behind each arriving block. That is exactly what an attacker sending junk blocks
+would exploit.
+
+The resolution is that verification needs the parent's *data*, not the lock:
+
+| Step | Lock |
+|---|---|
+| `validateStandalone` — structure, hashes, transactions | none |
+| Resolve the parent by hash (`blockByHash`) | briefly, for a map lookup |
+| `verifyProofOfWorkAgainstParent` — memory phase + delay proof | **none** |
+| `acceptBlockLocked` — mutate the chain | held |
+
+A parent is immutable: the child names it by hash, so which block it is cannot
+change underneath the verifier, and reading it early is safe.
+
+A block whose parent has not arrived is an **orphan** — there is nothing to chain
+its delay onto, so its proof is left unchecked at acceptance and verified in
+`validateBranchLocked`, against its real ancestry, before it can join the chain.
+It cannot be connected unverified.
+
+`TestExpensiveVerificationNeedsNoChainLock` holds the chain lock and requires a
+full verification to complete anyway.
 
 ## 🧱 The input is the block header, never the nonce
 

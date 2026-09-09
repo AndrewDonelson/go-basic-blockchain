@@ -697,6 +697,62 @@ implementation is the only honest one.
 
 ---
 
+## Case 21: Two bugs that only appear when the machine is busy
+
+Chaining the VDF across blocks turned up two defects that had nothing to do with
+VDFs, and both were invisible on an idle machine.
+
+**The block that invalidated itself.** Recording a mined proof overwrote the
+block's timestamp with the proof's:
+
+```go
+b.Header.Nonce = uint32(proof.Nonce)
+b.Header.Timestamp = proof.Timestamp   // <-- part of what was mined
+```
+
+The timestamp is in the header the miner mined against. Replacing it afterwards
+left the stored proof describing a header the block no longer had, so every peer
+recomputing stage 1 got a different answer and rejected the block.
+
+It survived because the mining header records the timestamp **to the second**, and
+test mining finishes inside one. At production difficulty, where mining takes many
+seconds, the timestamp would move nearly every time — so nearly every mined block
+would have been refused by the network, and only ever at real difficulty.
+
+**The deadlock that needed a busy CPU.** The full test suite began hanging, but
+only when run as `./...` and never when the package was run alone. Two goroutines,
+both blocked on a mutex:
+
+```
+Stop()          mutex.Lock  ->  outputMu.Lock
+renderStatus()  outputMu.Lock  ->  mutex.Lock
+```
+
+A textbook lock-order inversion. Stop holds `mutex` waiting for `outputMu`; the
+render loop holds `outputMu` waiting for `mutex`. The window is a few instructions
+wide, so it needed a shutdown to land exactly between the render loop's two
+acquisitions — which is why adding CPU-heavy tests elsewhere in the repo was what
+finally exposed it. It would have hung node shutdown in production for the same
+reason.
+
+The fix is to advance the spinner in the same critical section that reads it,
+before the output lock is taken, so every path acquires the two locks in the same
+order.
+
+**Lessons.**
+
+*A test that passes in isolation and fails in a suite is telling you something
+about timing, not about the suite.* The instinct is to re-run it or mark it flaky.
+Both of these were real, and both would have appeared in production — one on every
+block at real difficulty, one at shutdown.
+
+*Two locks are an ordering, whether or not anyone wrote it down.* The moment a
+second mutex appears, every function that takes both is making a claim about the
+order, and the claim has to be checked. Grepping for "which functions acquire B
+while holding A" takes a minute and is the whole audit.
+
+---
+
 ## The meta-lesson
 
 Before the audit:

@@ -429,7 +429,22 @@ func (b *Block) updateWithHeliosProof(proof *algorithm.HeliosProof) error {
 	}
 
 	b.Header.Nonce = uint32(proof.Nonce)
-	b.Header.Timestamp = proof.Timestamp
+
+	// The block's timestamp is NOT overwritten with the proof's.
+	//
+	// It used to be, and that quietly invalidated the block: the timestamp is
+	// part of the header the miner mined against, so replacing it afterwards
+	// means the stored proof no longer matches the stored header, and every peer
+	// recomputing stage 1 gets a different answer and rejects the block.
+	//
+	// The mining header records the timestamp to the second, which is the only
+	// reason this was survivable -- a block mined inside the same second as its
+	// creation came out unchanged. At real difficulty mining takes many seconds,
+	// so the timestamp would move nearly every time and nearly every mined block
+	// would be refused by the network.
+	//
+	// proof.Timestamp remains on the proof, which is where "when was this proof
+	// produced" belongs.
 	b.HeliosProof = proof
 	b.Hash = b.CalculateHash()
 	return nil

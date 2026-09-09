@@ -125,7 +125,7 @@ func TestHeliosStages(t *testing.T) {
 		// Then execute the time-lock phase. It takes the block header, not the
 		// stage-1 result: the delay belongs to the block, not to a nonce attempt.
 		_ = memoryResult
-		result, vdfProof, err := helios.executeTimeLockPhase(blockHeader)
+		result, vdfProof, err := helios.executeTimeLockPhase(blockHeader, nil)
 		if err != nil {
 			t.Fatalf("Time-lock phase failed: %v", err)
 		}
@@ -149,7 +149,7 @@ func TestHeliosStages(t *testing.T) {
 
 		// Then get time-lock phase result
 		_ = memoryResult
-		timelockResult, _, err := helios.executeTimeLockPhase(blockHeader)
+		timelockResult, _, err := helios.executeTimeLockPhase(blockHeader, nil)
 		if err != nil {
 			t.Fatalf("Time-lock phase failed: %v", err)
 		}

@@ -248,6 +248,18 @@ func (bc *Blockchain) validateBranchLocked(b branch) error {
 			return fmt.Errorf("block %s breaks the index sequence (expected %d)",
 				block.Index.String(), want)
 		}
+		// The proof of work is verified here, against this branch's own ancestry.
+		// A block whose parent had not arrived was left unchecked at acceptance
+		// -- there was nothing to chain its delay onto -- so this is where an
+		// orphan's work is finally confirmed, before it can join the chain.
+		if bc.useHeliosMining {
+			if err := bc.verifyHeliosProof(block, previous,
+				blockDifficulty(block, bc.cfg.Difficulty)); err != nil {
+				return fmt.Errorf("block %s in branch has an invalid proof of work: %w",
+					block.Index.String(), err)
+			}
+		}
+
 		if want := bc.ExpectedDifficulty(ancestry); int(block.Header.Difficulty) != want {
 			return fmt.Errorf("block %s in branch declares difficulty %d but its history requires %d",
 				block.Index.String(), block.Header.Difficulty, want)

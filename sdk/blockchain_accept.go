@@ -32,6 +32,44 @@ func (bc *Blockchain) AcceptBlock(block *Block) error {
 	return err
 }
 
+// verifyProofOfWorkAgainstParent checks a block's proof using its parent's delay
+// output.
+//
+// Split out from validateStandalone because the two need different things.
+// Standalone validation is parent-independent and runs for every block including
+// orphans; this needs the parent, because the delay is chained onto it.
+//
+// It still runs OUTSIDE the chain lock. Resolving the parent takes the lock for a
+// map lookup and releases it; the expensive part -- the memory-hard phase and the
+// VDF proof, together around a hundred milliseconds -- then runs holding nothing.
+// That is possible because a parent is immutable: the child names it by hash, so
+// which block it is cannot change underneath us, and reading it early is safe.
+//
+// A block whose parent is unknown is left unverified here and checked when its
+// branch is connected, where the ancestry is known. It cannot join the chain
+// before that happens.
+func (bc *Blockchain) verifyProofOfWorkAgainstParent(block *Block) error {
+	if !bc.useHeliosMining {
+		return nil
+	}
+	if block.Index.Sign() == 0 {
+		return nil // genesis has no parent and no proof to chain
+	}
+
+	parent := bc.blockByHash(block.Header.PreviousHash)
+	if parent == nil {
+		// An orphan. validateBranchLocked verifies it against its real ancestry
+		// before it can be connected.
+		return nil
+	}
+
+	declared := blockDifficulty(block, bc.cfg.Difficulty)
+	if err := bc.verifyHeliosProof(block, parent, declared); err != nil {
+		return fmt.Errorf("proof-of-work validation failed: %w", err)
+	}
+	return nil
+}
+
 // AcceptBlockWithResult is AcceptBlock, reporting what it did.
 func (bc *Blockchain) AcceptBlockWithResult(block *Block) (ReorgResult, error) {
 	var result ReorgResult
@@ -40,10 +78,13 @@ func (bc *Blockchain) AcceptBlockWithResult(block *Block) (ReorgResult, error) {
 		return result, errors.New("block is nil")
 	}
 
-	// Standalone validation happens outside the lock: verifying the proof of work
-	// re-runs the memory-hard phase, and holding the chain lock for that would
-	// stall mining and every reader.
+	// Both of these run outside the lock. Verifying a block re-runs the
+	// memory-hard phase and checks a delay proof; holding the chain lock across
+	// that would stall mining and every reader.
 	if err := bc.validateStandalone(block); err != nil {
+		return result, err
+	}
+	if err := bc.verifyProofOfWorkAgainstParent(block); err != nil {
 		return result, err
 	}
 
@@ -267,11 +308,12 @@ func (bc *Blockchain) validateStandalone(block *Block) error {
 		}
 	}
 
-	if bc.useHeliosMining {
-		if err := bc.verifyHeliosProof(block, declared); err != nil {
-			return fmt.Errorf("proof-of-work validation failed: %w", err)
-		}
-	}
+	// The proof of work is NOT checked here.
+	//
+	// It depends on the parent's delay output, which this function does not have
+	// -- by design, since it is also called for blocks whose parent has not
+	// arrived. verifyProofOfWorkAgainstParent does that part, and the caller runs
+	// it once the parent is resolved.
 
 	return nil
 }
@@ -323,7 +365,10 @@ func (bc *Blockchain) ValidateChain() error {
 		// Verify the proof of work. ValidateChain previously checked hash linkage
 		// and transaction validity but never that any work had been done.
 		if bc.useHeliosMining {
-			if err := bc.verifyHeliosProof(currentBlock, blockDifficulty(currentBlock, bc.cfg.Difficulty)); err != nil {
+			// previousBlock is this block's parent, so the chained delay is
+			// checked against the same output the miner built on.
+			if err := bc.verifyHeliosProof(currentBlock, previousBlock,
+				blockDifficulty(currentBlock, bc.cfg.Difficulty)); err != nil {
 				return fmt.Errorf("invalid proof of work at block %d: %w", i, err)
 			}
 		}

@@ -96,11 +96,11 @@ func TestDelayIsBoundToTheBlockNotTheNonce(t *testing.T) {
 	h := vdfTestAlgorithm()
 	header := []byte("nonce independence")
 
-	first, _, err := h.executeTimeLockPhase(header)
+	first, _, err := h.executeTimeLockPhase(header, nil)
 	if err != nil {
 		t.Fatalf("time-lock: %v", err)
 	}
-	second, _, err := h.executeTimeLockPhase(header)
+	second, _, err := h.executeTimeLockPhase(header, nil)
 	if err != nil {
 		t.Fatalf("time-lock: %v", err)
 	}
@@ -109,7 +109,7 @@ func TestDelayIsBoundToTheBlockNotTheNonce(t *testing.T) {
 		t.Fatal("the same header produced two different delay outputs")
 	}
 
-	other, _, err := h.executeTimeLockPhase([]byte("a different header"))
+	other, _, err := h.executeTimeLockPhase([]byte("a different header"), nil)
 	if err != nil {
 		t.Fatalf("time-lock: %v", err)
 	}
@@ -206,5 +206,86 @@ func TestProofRejectsTheWrongIterationCount(t *testing.T) {
 
 	if err := validator.ValidateProof(proof, header, easyTarget()); err == nil {
 		t.Fatal("a 16-iteration delay was accepted where 256 were required")
+	}
+}
+
+// TestDelayChainsOntoTheParent is the explicit chaining contract.
+//
+// A per-block delay guarantees little on its own: if each block's delay were
+// independent, a miner with enough cores would compute a hundred at once and the
+// chain would gain no elapsed-time property. Feeding block N-1's output into
+// block N's input makes the delays one continuous sequential computation.
+func TestDelayChainsOntoTheParent(t *testing.T) {
+	h := vdfTestAlgorithm()
+	header := []byte("child header")
+
+	parentA := []byte("parent output A")
+	parentB := []byte("parent output B")
+
+	outA, _, err := h.executeTimeLockPhase(header, parentA)
+	if err != nil {
+		t.Fatalf("time-lock: %v", err)
+	}
+	outB, _, err := h.executeTimeLockPhase(header, parentB)
+	if err != nil {
+		t.Fatalf("time-lock: %v", err)
+	}
+
+	if bytes.Equal(outA, outB) {
+		t.Fatal("the same header on two different parents produced the same delay " +
+			"output; the delay is not chained and every block's could be computed " +
+			"in parallel before its parent existed")
+	}
+
+	// Deterministic for a given parent, or nodes could not agree.
+	again, _, err := h.executeTimeLockPhase(header, parentA)
+	if err != nil {
+		t.Fatalf("time-lock: %v", err)
+	}
+	if !bytes.Equal(outA, again) {
+		t.Fatal("the delay output is not reproducible for the same parent")
+	}
+}
+
+// TestProofDoesNotVerifyAgainstTheWrongParent. If it did, the chaining would be
+// decorative: a miner could compute the delay against any parent it liked.
+func TestProofDoesNotVerifyAgainstTheWrongParent(t *testing.T) {
+	h := vdfTestAlgorithm()
+	header := []byte("binding header")
+	parent := []byte("the real parent output")
+
+	proof, err := h.MineOnParent(header, parent, easyTarget())
+	if err != nil {
+		t.Fatalf("mine: %v", err)
+	}
+
+	if err := h.ValidateProofOnParent(proof, header, parent, easyTarget()); err != nil {
+		t.Fatalf("a proof did not verify against its own parent: %v", err)
+	}
+
+	for _, wrong := range [][]byte{
+		[]byte("a different parent output"),
+		nil,
+		{},
+		append([]byte{}, append(parent, 0)...),
+	} {
+		if err := h.ValidateProofOnParent(proof, header, wrong, easyTarget()); err == nil {
+			t.Fatalf("a proof verified against the wrong parent output (%q)", wrong)
+		}
+	}
+}
+
+// TestSeedIsUnambiguous: without length prefixes, a parent output ending in some
+// bytes and a header starting with them would be indistinguishable from a
+// different split of the same concatenation, and two distinct blocks could share
+// a delay input.
+func TestSeedIsUnambiguous(t *testing.T) {
+	// ("ab", "cd") and ("a", "bcd") concatenate identically.
+	first := stage2Seed([]byte("cd"), []byte("ab"))
+	second := stage2Seed([]byte("bcd"), []byte("a"))
+
+	if bytes.Equal(first, second) {
+		t.Fatal("two different (parent, header) pairs produced the same seed; the " +
+			"concatenation is ambiguous")
 	}
 }
