@@ -187,6 +187,11 @@ func (t *Tx) GetRecipientWallet() *Wallet {
 
 // GetID returns the ID of the transaction.
 func (t *Tx) GetID() string {
+	// Belt and braces alongside the nil check in PUID.String: an ID-less
+	// transaction is refused elsewhere by its empty ID, not by a panic here.
+	if t == nil {
+		return ""
+	}
 	return t.ID.String()
 }
 

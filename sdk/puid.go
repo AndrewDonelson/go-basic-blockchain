@@ -138,6 +138,15 @@ func (p *PUID) Bytes() []byte {
 // userID:organizationID:appID:assetID, so String -> NewPUIDFromString silently
 // scrambled three of the four fields.
 func (p *PUID) String() string {
+	// A nil PUID renders as empty rather than panicking.
+	//
+	// A transaction decoded from a peer message or a block file with no "id"
+	// field leaves Tx.ID nil, and Tx.GetID() calls straight through to here --
+	// so any malformed transaction crashed the node that read it. MarshalJSON
+	// already handled nil; String did not.
+	if p == nil {
+		return ""
+	}
 	return p.OrganizationID.String() + ":" + p.AppID.String() + ":" + p.UserID.String() + ":" + p.AssetID.String()
 }
 

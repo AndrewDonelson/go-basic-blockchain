@@ -54,7 +54,7 @@ sdk/
 
 **Performance Metrics**:
 - **Total Execution Time**: ~17 seconds; ~85 seconds under `-race`
-- **Coverage**: 69.7% (`sdk`), 85–97% across the Helios packages
+- **Coverage**: 71.1% (`sdk`), 85–97% across the Helios packages
 - **Race Detector**: the full suite runs clean
 
 **Optimization Features**:
@@ -112,7 +112,7 @@ func TestWallet_Create(t *testing.T) {
 | `internal/helios/algorithm` | 89.8% |
 | `internal/helios/sidechain` | 85.2% |
 | `internal/progress` | 77.9% |
-| `sdk` | 69.7% |
+| `sdk` | 71.1% |
 | `cmd/gbb-cli` | 33.6% |
 | `internal/menu` | 28.0% |
 | `cmd/chaind` | 12.8% |
@@ -140,7 +140,7 @@ go tool cover -func=coverage.out
 **Coverage Output**:
 ```
 PASS
-coverage: 69.7% of statements
+coverage: 71.1% of statements
 ok      github.com/yourusername/go-basic-blockchain/sdk 9.5s
 ```
 
@@ -524,7 +524,7 @@ const (
 - **Race Conditions**: 0
 
 **Coverage Quality**:
-- **Line Coverage**: 69.7% (`sdk`)
+- **Line Coverage**: 71.1% (`sdk`)
 - **Function Coverage**: 85%
 - **Branch Coverage**: 70%
 - **Statement Coverage**: 40%
@@ -648,4 +648,35 @@ go test ./sdk -run TestSpecificFunction
 
 ---
 
-**For more information about development practices, see the [Development Guide](development.md) and [Architecture](architecture.md) documentation.** 
+**For more information about development practices, see the [Development Guide](development.md) and [Architecture](architecture.md) documentation.**
+
+## 🎲 Fuzzing
+
+[`sdk/fuzz_test.go`](../sdk/fuzz_test.go) fuzzes every parser that consumes bytes
+from disk or the network — block JSON, the transaction wire format, PUIDs,
+BigInt strings, Merkle tree shapes, P2P messages and unit conversions. These are
+the functions an attacker or a corrupt file reaches first, and a panic in any of
+them takes the node down.
+
+```bash
+go test ./sdk/ -run '^$' -fuzz FuzzDecodeTransaction -fuzztime 30s
+```
+
+The first run found a live crash: a transaction decoded without an `id` left
+`Tx.ID` nil and `GetID()` dereferenced it, so any malformed transaction from a
+peer panicked the node reading it.
+
+## 🔁 Integration tests
+
+[`sdk/integration_test.go`](../sdk/integration_test.go) exercises the whole node:
+submit a transaction, mine it, restart the process, reload from disk and
+re-validate — plus double spends across blocks, supply conservation, difficulty
+retargeting while mining, and node startup/shutdown.
+
+This is the file whose absence let every P0 through. Blocks carrying
+transactions could not be reloaded from disk at all, and no test ever restarted a
+chain and read it back.
+
+```bash
+go test ./sdk/ -run TestEndToEnd -v
+```
