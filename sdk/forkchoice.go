@@ -293,6 +293,8 @@ func (bc *Blockchain) restoreDisconnectedTransactions(disconnected, connected []
 		bc.TransactionQueue = append(bc.TransactionQueue, tx)
 		added++
 	}
+	// Restored transactions bypass admission control, so re-apply the bound.
+	bc.trimMempoolLocked()
 	return added
 }
 

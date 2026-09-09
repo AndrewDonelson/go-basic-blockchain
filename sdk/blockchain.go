@@ -597,7 +597,13 @@ func (bc *Blockchain) AddTransactionLocal(transaction Transaction) bool {
 			return false
 		}
 	}
-	bc.TransactionQueue = append(bc.TransactionQueue, transaction)
+	// The mempool is bounded and admission is fee-competitive. It used to be an
+	// unbounded slice, so anyone could grow it until the node ran out of memory.
+	if err := bc.admitToMempoolLocked(transaction); err != nil {
+		bc.mux.Unlock()
+		LogVerbosef("Rejecting transaction %s: %v", id, err)
+		return false
+	}
 	bc.mux.Unlock()
 
 	if bc.progressIndicator != nil {
@@ -861,8 +867,10 @@ func (bc *Blockchain) createNewBlock(difficulty int) {
 		previousHash = bc.Blocks[len(bc.Blocks)-1].Hash
 	}
 
-	queuedTransactions := append([]Transaction(nil), bc.TransactionQueue...)
-	bc.TransactionQueue = []Transaction{}
+	// Take the highest-paying transactions that fit within MaxBlockSize, rather
+	// than draining the whole mempool into an unbounded block. Anything that does
+	// not fit stays queued for the next one.
+	queuedTransactions := bc.selectBlockTransactionsLocked()
 	nextBlockIndex := bc.NextBlockIndex
 	// Difficulty is derived from the chain's own history, so every node agrees on
 	// what this block was required to meet.
@@ -960,6 +968,7 @@ func (bc *Blockchain) requeueTransactions(txs []Transaction) {
 	bc.mux.Lock()
 	defer bc.mux.Unlock()
 	bc.TransactionQueue = append(txs, bc.TransactionQueue...)
+	bc.trimMempoolLocked()
 }
 
 // HasTransactionID reports whether a transaction ID is already known, in the

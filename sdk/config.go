@@ -46,6 +46,7 @@ type Config struct {
 	Verbose           bool     // Enable verbose logging
 	AllowedPeers      []string // If non-empty, only these node IDs may connect
 	DifficultyWindow  int      // Blocks between difficulty retargets
+	MaxMempoolTxs     int      // Maximum transactions held in the mempool
 	promptUpdate      bool
 	testing           bool
 }
@@ -115,6 +116,7 @@ func (c *Config) setDefaultValues() {
 	c.MaxBlockSize = MaxBlockSize
 	c.MinTransactionFee = minTransactionFee
 	c.DifficultyWindow = defaultDifficultyWindow
+	c.MaxMempoolTxs = defaultMaxMempoolTxs
 }
 
 // loadFromEnv loads configuration values from environment variables.
@@ -185,6 +187,7 @@ func (c *Config) loadFromEnv() {
 		c.Verbose = getEnvAsBool("VERBOSE", c.Verbose)
 		c.AllowedPeers = getEnvAsList("P2P_ALLOWED_PEERS", c.AllowedPeers)
 		c.DifficultyWindow = getEnvAsInt("DIFFICULTY_WINDOW", c.DifficultyWindow)
+		c.MaxMempoolTxs = getEnvAsInt("MAX_MEMPOOL_TXS", c.MaxMempoolTxs)
 	}
 }
 
@@ -261,6 +264,10 @@ func (c *Config) Validate() error {
 	if c.Difficulty < 1 || c.Difficulty > 255 {
 		return errors.New("difficulty must be between 1 and 255")
 	}
+	if c.MaxMempoolTxs < 0 {
+		return errors.New("max mempool transactions cannot be negative")
+	}
+
 	if c.DifficultyWindow < 0 {
 		return errors.New("difficulty window cannot be negative")
 	}
@@ -312,6 +319,7 @@ func (c *Config) Show() {
 	log.Printf("- Allow New Tokens: %v\n", c.AllowNewTokens)
 	log.Printf("- Data Path: %s\n", c.DataPath)
 	log.Printf("- Max Block Size: %d bytes\n", c.MaxBlockSize)
+	log.Printf("- Max Mempool Txs: %d\n", c.MaxMempoolTxs)
 	log.Printf("- Min Transaction Fee: %.2f\n", c.MinTransactionFee)
 	log.Printf("- Is Seed Node: %v\n", c.IsSeed)
 	log.Printf("- Seed Address: %s\n", c.SeedAddress)
@@ -384,6 +392,10 @@ func (c *Config) save() error {
 		if err := c.writeEnvValue(f, "ALLOW_NEW_TOKENS", fmt.Sprintf("%v", c.AllowNewTokens)); err != nil {
 			return err
 		}
+		if err := c.writeEnvValue(f, "MAX_MEMPOOL_TXS", fmt.Sprintf("%d", c.MaxMempoolTxs)); err != nil {
+			return err
+		}
+
 		if err := c.writeEnvValue(f, "MAX_BLOCK_SIZE", fmt.Sprintf("%d", c.MaxBlockSize)); err != nil {
 			return err
 		}

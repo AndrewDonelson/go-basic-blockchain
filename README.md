@@ -76,6 +76,7 @@ specific about which is which.
 | Peer authentication | ✅ Working — mutual auth, forward-secret encrypted sessions ([docs](docs/p2p-security.md)) |
 | Fork choice / reorganisation | ✅ Working — heaviest-chain by cumulative work ([docs](docs/forkchoice.md)) |
 | Dynamic difficulty | ✅ Working — retargets from chain history, validated per branch ([docs](docs/difficulty.md)) |
+| Mempool policy & block size | ✅ Working — fee-rate ordering, bounded mempool, capped blocks ([docs](docs/mempool.md)) |
 | UTXO state model | ✅ Working — authoritative balances, double-spend prevention ([docs](docs/utxo.md)) |
 
 - **Test Coverage:** 66.5% (`sdk`); 89.8% / 94.4% / 85.2% / 96.8% across the Helios packages

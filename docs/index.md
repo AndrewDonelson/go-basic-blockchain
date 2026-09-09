@@ -16,6 +16,7 @@ Welcome to the comprehensive documentation for the Go Basic Blockchain project. 
 - **[Fork Choice & Reorganisation](forkchoice.md)** - How competing histories are resolved
 - **[Dynamic Difficulty](difficulty.md)** - How the chain retargets itself
 - **[UTXO Set](utxo.md)** - The authoritative record of who owns what
+- **[Mempool Policy](mempool.md)** - Fee ordering, eviction, and block size limits
 - **[P2P Security](p2p-security.md)** - Peer authentication, forward secrecy, session encryption
 
 ### User Guides
@@ -74,6 +75,7 @@ correctly, but does not yet form a network.
 | Peer authentication | ✅ Working — mutual auth + forward-secret sessions ([p2p-security.md](p2p-security.md)) |
 | Fork choice / reorg | ✅ Working — heaviest-chain, see [forkchoice.md](forkchoice.md) |
 | Dynamic difficulty | ✅ Working — retargets from chain history, validated per branch ([difficulty.md](difficulty.md)) |
+| Mempool policy | ✅ Working — fee-rate ordering, bounded, size-capped blocks ([mempool.md](mempool.md)) |
 | UTXO state model | ✅ Working — authoritative balances, double-spend prevention ([utxo.md](utxo.md)) |
 
 - **Test Coverage**: 66.5% (`sdk`), 85–97% across the Helios packages
