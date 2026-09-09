@@ -16,7 +16,8 @@ Welcome to the comprehensive documentation for the Go Basic Blockchain project. 
 - **[Fork Choice & Reorganisation](forkchoice.md)** - How competing histories are resolved
 - **[Dynamic Difficulty](difficulty.md)** - How the chain retargets itself
 - **[UTXO Set](utxo.md)** - The authoritative record of who owns what
-- **[Mempool Policy](mempool.md)** - Fee ordering, eviction, and block size limits
+- **[Mempool Policy](mempool.md)** - Fee ordering, replace-by-fee, eviction, block size
+- **[Nonces & Replay Protection](nonces.md)** - Per-sender sequencing
 - **[Supply & Incentives](supply.md)** - Fixed supply, genesis-only minting, fee rewards
 - **[Wallet Recovery](recovery.md)** - BIP-39 phrases and deterministic key derivation
 - **[Observability](metrics.md)** - The /metrics endpoint, counters and hash rate
@@ -78,7 +79,8 @@ correctly, but does not yet form a network.
 | Peer authentication | ✅ Working — mutual auth + forward-secret sessions ([p2p-security.md](p2p-security.md)) |
 | Fork choice / reorg | ✅ Working — heaviest-chain, see [forkchoice.md](forkchoice.md) |
 | Dynamic difficulty | ✅ Working — retargets from chain history, validated per branch ([difficulty.md](difficulty.md)) |
-| Mempool policy | ✅ Working — fee-rate ordering, bounded, size-capped blocks ([mempool.md](mempool.md)) |
+| Mempool policy | ✅ Working — fee-rate ordering, replace-by-fee, bounded, size-capped ([mempool.md](mempool.md)) |
+| Replay protection | ✅ Working — per-sender nonce sequencing ([nonces.md](nonces.md)) |
 | Supply & miner rewards | ✅ Working — fixed supply, genesis-only minting, fees split to miner/dev ([supply.md](supply.md)) |
 | Wallet recovery | ✅ Working — every wallet derives from a BIP-39 phrase ([recovery.md](recovery.md)) |
 | Observability | ✅ Working — Prometheus /metrics, real hash rate ([metrics.md](metrics.md)) |

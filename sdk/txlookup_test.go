@@ -9,6 +9,7 @@ type mockTransaction struct {
 	id       string
 	hash     string
 	protocol string
+	nonce    uint64
 }
 
 func (m *mockTransaction) Process() string                    { return "" }
@@ -51,6 +52,8 @@ func (m *mockTransaction) EstimateFee(feePerByte float64) float64 {
 }
 func (m *mockTransaction) SetPriority(priority int) {}
 func (m *mockTransaction) GetPriority() int         { return 0 }
+func (m *mockTransaction) GetNonce() uint64         { return m.nonce }
+func (m *mockTransaction) SetNonce(nonce uint64)    { m.nonce = nonce }
 
 func TestFIFOQueueOperations(t *testing.T) {
 	q := NewFIFOQueue(2)

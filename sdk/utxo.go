@@ -57,6 +57,10 @@ var (
 	// cover the amount plus the fee.
 	ErrInsufficientFunds = errors.New("insufficient unspent outputs")
 
+	// ErrNonceNotIncreasing is returned when a transaction reuses or goes back
+	// below a nonce its sender has already had confirmed.
+	ErrNonceNotIncreasing = errors.New("transaction nonce does not increase")
+
 	// ErrOutputAlreadySpent is returned when a block tries to consume an output
 	// that is not in the set -- a double spend.
 	ErrOutputAlreadySpent = errors.New("output is already spent or does not exist")
@@ -112,6 +116,18 @@ type BlockUndo struct {
 	Spent []*UTXO
 	// Created are the outputs added by this block, removed on revert.
 	Created []Outpoint
+	// Nonces holds each sender's highest confirmed nonce as it was *before* this
+	// block, so a reorg restores it. Without this a rolled-back transaction
+	// would leave its nonce recorded and the sender could never resubmit it on
+	// the new branch.
+	Nonces map[string]nonceRestore
+}
+
+// nonceRestore remembers a sender's prior nonce, distinguishing "had none" from
+// "had zero" -- a sender's first transaction may legitimately use nonce 0.
+type nonceRestore struct {
+	Nonce   uint64
+	Existed bool
 }
 
 // UTXOSet is the set of unspent outputs, and the authoritative record of balances.
@@ -121,6 +137,10 @@ type UTXOSet struct {
 	outputs   map[Outpoint]*UTXO
 	byAddress map[string]map[Outpoint]struct{}
 	undo      map[string]*BlockUndo
+	// nonces is each sender's highest confirmed transaction nonce. A sender's
+	// next transaction must exceed it, which is what stops an old transaction
+	// being replayed onto the chain a second time.
+	nonces map[string]uint64
 	// applied tracks block hashes in application order, so double-application is
 	// detectable and reverts can be checked against the tip.
 	applied []string
@@ -132,6 +152,7 @@ func NewUTXOSet() *UTXOSet {
 		outputs:   map[Outpoint]*UTXO{},
 		byAddress: map[string]map[Outpoint]struct{}{},
 		undo:      map[string]*BlockUndo{},
+		nonces:    map[string]uint64{},
 	}
 }
 
@@ -314,7 +335,11 @@ func (s *UTXOSet) ApplyBlock(block *Block, split feeSplit) (*BlockUndo, error) {
 	}
 
 	blockIndex := block.Index.Int64()
-	undo := &BlockUndo{BlockHash: block.Hash, BlockIndex: blockIndex}
+	undo := &BlockUndo{
+		BlockHash:  block.Hash,
+		BlockIndex: blockIndex,
+		Nonces:     map[string]nonceRestore{},
+	}
 
 	// Stage the changes so a failure part-way leaves the set untouched.
 	staged := newStagedChanges(s)
@@ -364,6 +389,33 @@ func (s *UTXOSet) applyTransactionLocked(tx Transaction, blockIndex int64, split
 		nextIndex++
 		staged.add(utxo)
 		undo.Created = append(undo.Created, utxo.Outpoint)
+	}
+
+	// A sender's nonce must strictly increase.
+	//
+	// This is what makes a transaction unrepeatable. Without it a transaction
+	// already mined could be handed back to the chain -- on a fresh branch after
+	// a reorg, or by any peer that kept a copy -- and applied a second time,
+	// spending the sender's coins again. The nonce is covered by the signature,
+	// so it cannot be edited to make an old transaction look new.
+	//
+	// A coinbase is exempt: it has no sender and mints rather than spends.
+	if _, isCoinbase := tx.(*Coinbase); !isCoinbase && sender != "" {
+		nonce := tx.GetNonce()
+		if last, seen := s.nonces[sender]; seen && nonce <= last {
+			return fmt.Errorf("%w: %s already used nonce %d, this transaction uses %d",
+				ErrNonceNotIncreasing, sender, last, nonce)
+		}
+		if undo != nil {
+			// Record the prior value once per sender per block, so reverting a
+			// block with several transactions from one sender restores the value
+			// from before the block rather than from mid-block.
+			if _, already := undo.Nonces[sender]; !already {
+				prior, existed := s.nonces[sender]
+				undo.Nonces[sender] = nonceRestore{Nonce: prior, Existed: existed}
+			}
+		}
+		s.nonces[sender] = nonce
 	}
 
 	switch concrete := tx.(type) {
@@ -505,10 +557,36 @@ func (s *UTXOSet) RevertBlock(blockHash string) error {
 	for _, utxo := range undo.Spent {
 		s.addLocked(utxo)
 	}
+	for address, prior := range undo.Nonces {
+		if prior.Existed {
+			s.nonces[address] = prior.Nonce
+		} else {
+			delete(s.nonces, address)
+		}
+	}
 
 	delete(s.undo, blockHash)
 	s.applied = s.applied[:len(s.applied)-1]
 	return nil
+}
+
+// LastNonce returns the highest confirmed nonce for an address, and whether the
+// address has ever sent a transaction.
+func (s *UTXOSet) LastNonce(address string) (uint64, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	nonce, ok := s.nonces[address]
+	return nonce, ok
+}
+
+// NextNonce returns the lowest nonce an address may use next.
+func (s *UTXOSet) NextNonce(address string) uint64 {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if nonce, ok := s.nonces[address]; ok {
+		return nonce + 1
+	}
+	return 0
 }
 
 // Clone returns a deep copy, used to test a candidate branch without touching
@@ -528,7 +606,16 @@ func (s *UTXOSet) Clone() *UTXOSet {
 	}
 	for hash, undo := range s.undo {
 		copied := *undo
+		// The nonce map must be copied, not shared: a candidate branch tested
+		// against a clone would otherwise write through into the live set.
+		copied.Nonces = map[string]nonceRestore{}
+		for address, prior := range undo.Nonces {
+			copied.Nonces[address] = prior
+		}
 		clone.undo[hash] = &copied
+	}
+	for address, nonce := range s.nonces {
+		clone.nonces[address] = nonce
 	}
 	clone.applied = append([]string{}, s.applied...)
 	return clone

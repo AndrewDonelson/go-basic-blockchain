@@ -20,9 +20,18 @@ type fakeTx struct {
 func (f *fakeTx) GetID() string { return f.id }
 func (f *fakeTx) Size() int     { return f.size }
 
+// fakeTxNonce hands out a distinct nonce per fake transaction.
+//
+// Without it every fake shares (sender, nonce) and replace-by-fee treats each
+// new one as a revision of the last, so a test that queues twenty ends up with
+// one. That is correct behaviour; these fixtures just need to look like twenty
+// separate payments.
+var fakeTxNonce uint64
+
 func newFakeTx(id string, fee float64, size int) *fakeTx {
+	fakeTxNonce++
 	return &fakeTx{
-		Tx:   &Tx{ID: NewPUIDEmpty(), Fee: fee},
+		Tx:   &Tx{ID: NewPUIDEmpty(), Fee: fee, Nonce: fakeTxNonce},
 		id:   id,
 		size: size,
 	}

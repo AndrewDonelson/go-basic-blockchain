@@ -105,13 +105,40 @@ the **lowest**-ranked entries back down to capacity.
 
 ---
 
+## 🔁 Replace-by-fee
+
+A sender's `(address, nonce)` pair identifies **one intended transaction**, so a
+second one carrying the same pair is a revision of it rather than an additional
+payment — only one of them can ever be mined. Without replacement a transaction
+that priced its fee too low is stuck until eviction, and the sender cannot raise
+the fee because doing so needs the same nonce.
+
+A replacement must beat the resident's **fee rate** by a margin
+(`replacementFeeBump`, 10%). Equality is not enough: if any equal-paying
+transaction could replace another, two peers could bounce replacements off each
+other indefinitely and every node would relay each one.
+
+Replacement is keyed on fee *rate*, not raw fee, for the same reason ordering is
+— a much larger transaction paying slightly more is a worse deal per byte of
+block space.
+
+## 🔢 Nonce ordering in blocks
+
+Fee ranking can put a sender's nonce 1 ahead of its nonce 0, and a block whose
+nonces run backwards for a sender **cannot be applied** — the UTXO set processes
+transactions in block order and refuses a nonce that does not increase.
+
+`orderSenderNoncesInPlace` rewrites each sender's transactions into their own
+slots in ascending nonce order. The fee ranking between senders is untouched;
+only the order within a single sender changes, which is the only part that has to
+hold.
+
 ## 🚧 Still missing
 
-- **Replace-by-fee.** A sender cannot bump a stuck transaction's fee.
-- **Per-sender nonce sequencing.** `Nonce` is `SecureRandomInt(8)` — a random
-  value in 0..7 — so it is not a replay guard.
 - **Time-based expiry.** A transaction that never gets mined is only removed by
   eviction pressure, not by age.
+- **Nonce gaps.** A sender may skip nonces; the chain only requires that they
+  increase, not that they are contiguous.
 
 ---
 

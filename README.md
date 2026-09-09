@@ -76,7 +76,8 @@ specific about which is which.
 | Peer authentication | ✅ Working — mutual auth, forward-secret encrypted sessions ([docs](docs/p2p-security.md)) |
 | Fork choice / reorganisation | ✅ Working — heaviest-chain by cumulative work ([docs](docs/forkchoice.md)) |
 | Dynamic difficulty | ✅ Working — retargets from chain history, validated per branch ([docs](docs/difficulty.md)) |
-| Mempool policy & block size | ✅ Working — fee-rate ordering, bounded mempool, capped blocks ([docs](docs/mempool.md)) |
+| Mempool policy & block size | ✅ Working — fee-rate ordering, replace-by-fee, bounded mempool, capped blocks ([docs](docs/mempool.md)) |
+| Replay protection | ✅ Working — per-sender nonce sequencing, reorg-safe ([docs](docs/nonces.md)) |
 | Supply & miner rewards | ✅ Working — fixed supply, coinbase only in genesis, fees split to miner/dev ([docs](docs/supply.md)) |
 | Wallet recovery | ✅ Working — every wallet derives from a BIP-39 recovery phrase ([docs](docs/recovery.md)) |
 | Observability | ✅ Working — Prometheus `/metrics`, real hash rate ([docs](docs/metrics.md)) |

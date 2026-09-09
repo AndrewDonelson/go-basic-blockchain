@@ -4,6 +4,7 @@ package sdk
 
 import (
 	"errors"
+	"fmt"
 	"sort"
 )
 
@@ -17,9 +18,24 @@ const (
 	defaultMaxMempoolTxs = 5000
 )
 
-// ErrMempoolFull is returned when a transaction cannot be admitted because the
-// mempool is at capacity and the transaction does not outbid anything in it.
-var ErrMempoolFull = errors.New("mempool is full and the transaction does not outbid its contents")
+// replacementFeeBump is how much more a replacement must pay, as a multiplier on
+// the fee rate of the transaction it replaces.
+//
+// A replacement has to be strictly better by a margin, not merely equal. If any
+// equal-paying transaction could replace another, two peers could bounce
+// replacements off each other indefinitely and every node would relay each one.
+const replacementFeeBump = 1.10
+
+var (
+	// ErrMempoolFull is returned when a transaction cannot be admitted because
+	// the mempool is at capacity and the transaction does not outbid anything in
+	// it.
+	ErrMempoolFull = errors.New("mempool is full and the transaction does not outbid its contents")
+
+	// ErrDuplicateNonce is returned when a transaction reuses a nonce already
+	// queued by the same sender without paying enough to replace it.
+	ErrDuplicateNonce = errors.New("a queued transaction from this sender already uses that nonce")
+)
 
 // txFeeRate returns a transaction's fee per byte.
 //
@@ -73,6 +89,31 @@ func (bc *Blockchain) admitToMempoolLocked(tx Transaction) error {
 		return errors.New("cannot admit a nil transaction")
 	}
 
+	// Replace-by-fee.
+	//
+	// A sender's (address, nonce) pair identifies one intended transaction, so a
+	// second one carrying the same pair is a revision of it rather than an
+	// additional payment -- and only one of them can ever be mined. Without this
+	// a transaction that priced its fee too low is stuck until it is evicted:
+	// the sender cannot raise the fee, because doing so needs the same nonce.
+	if sender, _ := transactionParties(tx); sender != "" {
+		if index, found := bc.findQueuedNonceLocked(sender, tx.GetNonce()); found {
+			existing := bc.TransactionQueue[index]
+			if txFeeRate(tx) < txFeeRate(existing)*replacementFeeBump {
+				return fmt.Errorf("%w: nonce %d needs a fee rate above %.8f to replace, offered %.8f",
+					ErrDuplicateNonce, tx.GetNonce(),
+					txFeeRate(existing)*replacementFeeBump, txFeeRate(tx))
+			}
+
+			bc.TransactionQueue[index] = tx
+			bc.Metrics().Inc("tx_replaced")
+			LogVerbosef("Replaced transaction %s with %s: nonce %d, fee rate %.8f -> %.8f",
+				existing.GetID(), tx.GetID(), tx.GetNonce(),
+				txFeeRate(existing), txFeeRate(tx))
+			return nil
+		}
+	}
+
 	capacity := bc.mempoolCapacity()
 	if len(bc.TransactionQueue) < capacity {
 		bc.TransactionQueue = append(bc.TransactionQueue, tx)
@@ -107,6 +148,23 @@ func (bc *Blockchain) admitToMempoolLocked(tx Transaction) error {
 			evicted.GetID(), txFeeRate(evicted), tx.GetID(), txFeeRate(tx))
 	}
 	return nil
+}
+
+// findQueuedNonceLocked locates a queued transaction from a sender using a given
+// nonce. The caller must hold bc.mux.
+func (bc *Blockchain) findQueuedNonceLocked(sender string, nonce uint64) (int, bool) {
+	for i, queued := range bc.TransactionQueue {
+		if queued == nil {
+			continue
+		}
+		if queued.GetNonce() != nonce {
+			continue
+		}
+		if queuedSender, _ := transactionParties(queued); queuedSender == sender {
+			return i, true
+		}
+	}
+	return 0, false
 }
 
 // selectBlockTransactionsLocked chooses the transactions for the next block and
@@ -159,6 +217,15 @@ func (bc *Blockchain) selectBlockTransactionsLocked() []Transaction {
 		selected = append(selected, tx)
 		chosen[idx] = struct{}{}
 	}
+
+	// Fee ranking can put a sender's nonce 1 ahead of its nonce 0, and a block
+	// whose nonces run backwards for a sender is invalid -- the UTXO set applies
+	// transactions in block order and refuses a nonce that does not increase.
+	//
+	// Each sender's transactions are reordered into their existing slots by
+	// ascending nonce. The fee ranking between senders is untouched; only the
+	// order within one sender changes, which is the only part that has to hold.
+	orderSenderNoncesInPlace(selected)
 
 	remaining := bc.TransactionQueue[:0]
 	for i, tx := range bc.TransactionQueue {
@@ -225,6 +292,39 @@ func (bc *Blockchain) trimMempoolLocked() {
 
 	bc.Metrics().Add("mempool_evicted", uint64(dropped))
 	LogVerbosef("Trimmed %d transaction(s) from the mempool to stay within %d", dropped, capacity)
+}
+
+// orderSenderNoncesInPlace rewrites each sender's transactions into their own
+// slots in ascending nonce order, leaving every other position untouched.
+func orderSenderNoncesInPlace(txs []Transaction) {
+	positions := map[string][]int{}
+	for i, tx := range txs {
+		if tx == nil {
+			continue
+		}
+		sender, _ := transactionParties(tx)
+		if sender == "" {
+			continue
+		}
+		positions[sender] = append(positions[sender], i)
+	}
+
+	for _, slots := range positions {
+		if len(slots) < 2 {
+			continue
+		}
+
+		group := make([]Transaction, 0, len(slots))
+		for _, slot := range slots {
+			group = append(group, txs[slot])
+		}
+		sort.SliceStable(group, func(i, j int) bool {
+			return group[i].GetNonce() < group[j].GetNonce()
+		})
+		for i, slot := range slots {
+			txs[slot] = group[i]
+		}
+	}
 }
 
 // MempoolFeeRates returns the fee rate of every queued transaction, highest

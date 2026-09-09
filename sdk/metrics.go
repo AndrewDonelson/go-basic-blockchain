@@ -41,6 +41,7 @@ type Metrics struct {
 	txRejected      uint64
 	txMined         uint64
 	mempoolEvicted  uint64
+	txReplaced      uint64
 	peersConnected  uint64
 	peerAuthFailed  uint64
 	syncPasses      uint64
@@ -86,6 +87,8 @@ func (m *Metrics) counter(name string, delta uint64) {
 		m.txMined += delta
 	case "mempool_evicted":
 		m.mempoolEvicted += delta
+	case "tx_replaced":
+		m.txReplaced += delta
 	case "peers_connected":
 		m.peersConnected += delta
 	case "peer_auth_failed":
@@ -242,6 +245,7 @@ func (m *Metrics) Snapshot() map[string]float64 {
 		"tx_rejected":        float64(m.txRejected),
 		"tx_mined":           float64(m.txMined),
 		"mempool_evicted":    float64(m.mempoolEvicted),
+		"tx_replaced":        float64(m.txReplaced),
 		"peers_connected":    float64(m.peersConnected),
 		"peer_auth_failed":   float64(m.peerAuthFailed),
 		"sync_passes":        float64(m.syncPasses),
@@ -267,6 +271,7 @@ var metricHelp = map[string]string{
 	"tx_rejected":                "Transactions refused admission",
 	"tx_mined":                   "Transactions included in mined blocks",
 	"mempool_evicted":            "Transactions evicted or trimmed from the mempool",
+	"tx_replaced":                "Transactions replaced by a higher-paying revision (replace-by-fee)",
 	"peers_connected":            "Peer connections established",
 	"peer_auth_failed":           "Peer handshakes that failed authentication",
 	"sync_passes":                "Synchronisation passes run",
@@ -283,6 +288,7 @@ var counterMetrics = map[string]bool{
 	"blocks_mined": true, "blocks_accepted": true, "blocks_rejected": true,
 	"reorgs": true, "reorg_blocks": true, "tx_submitted": true,
 	"tx_rejected": true, "tx_mined": true, "mempool_evicted": true,
+	"tx_replaced":     true,
 	"peers_connected": true, "peer_auth_failed": true,
 	"sync_passes": true, "sync_blocks_pulled": true,
 }

@@ -58,6 +58,11 @@ type Transaction interface {
 	EstimateFee(feePerByte float64) float64
 	SetPriority(priority int)
 	GetPriority() int
+	// GetNonce returns the sender's sequence number for this transaction. It is
+	// covered by the signature, so it cannot be edited to make an already-mined
+	// transaction look new.
+	GetNonce() uint64
+	SetNonce(nonce uint64)
 }
 
 // Tx is a generic transaction that represents a transfer of value between two wallets.
@@ -117,8 +122,14 @@ func NewTransaction(protocol string, from *Wallet, to *Wallet) (*Tx, error) {
 		To:       to,
 		Fee:      transactionFee,
 		Status:   StatusPending,
-		// SecureRandomInt(8) produced a value in 0..7 -- three bits of nonce.
-		Nonce: SecureRandomUint64(),
+		// The nonce is the sender's sequence number, not a random value.
+		//
+		// A random nonce makes each transaction distinct but says nothing about
+		// order, so it cannot stop an already-mined transaction being applied a
+		// second time on another branch, and there is no stable key on which to
+		// replace a stuck transaction with a better-paying one. Both need a
+		// per-sender sequence.
+		Nonce: from.ReserveNonce(),
 	}
 
 	return tx, nil
@@ -415,4 +426,23 @@ func (t *Tx) SetPriority(priority int) {
 // GetPriority returns the priority of the transaction.
 func (t *Tx) GetPriority() int {
 	return t.priority
+}
+
+// GetNonce returns the sender's sequence number for this transaction.
+func (t *Tx) GetNonce() uint64 {
+	if t == nil {
+		return 0
+	}
+	return t.Nonce
+}
+
+// SetNonce sets the sender's sequence number.
+//
+// It must be called before signing: the nonce is part of the signing payload,
+// so changing it afterwards invalidates the signature.
+func (t *Tx) SetNonce(nonce uint64) {
+	if t == nil {
+		return
+	}
+	t.Nonce = nonce
 }

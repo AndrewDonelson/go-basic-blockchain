@@ -89,8 +89,17 @@ type Wallet struct {
 	// this process. It is never serialised: a recovery phrase stored beside the
 	// wallet it recovers protects nothing.
 	mnemonic string
-	//nolint:unused
-	mutex sync.Mutex // Currently unused but kept for potential future use
+	// nextNonce is the sequence number the wallet's next transaction will use.
+	//
+	// It is held in memory rather than in the vault because the vault cannot be
+	// written while the wallet is encrypted, and a transaction may be built from
+	// a wallet that is only being read. A wallet loaded from disk therefore
+	// starts at zero and must be resynchronised from the chain -- see
+	// Blockchain.SyncWalletNonce -- or its transactions will be refused as
+	// replays of nonces it already used.
+	nextNonce uint64
+	// mutex guards nextNonce. It was previously declared and unused.
+	mutex sync.Mutex
 }
 
 // EncryptionParams holds the encryption parameters for the private key.
@@ -219,6 +228,44 @@ func NewWallet(options *WalletOptions) (*Wallet, error) {
 	}
 
 	return wallet, nil
+}
+
+// ReserveNonce returns the nonce for the wallet's next transaction and advances
+// the counter.
+//
+// The nonce is part of the signing payload, so it has to be settled before the
+// transaction is signed -- which is why it is assigned at construction rather
+// than at submission.
+func (w *Wallet) ReserveNonce() uint64 {
+	if w == nil {
+		return 0
+	}
+	w.mutex.Lock()
+	defer w.mutex.Unlock()
+
+	nonce := w.nextNonce
+	w.nextNonce++
+	return nonce
+}
+
+// NextNonce reports the nonce the wallet's next transaction will use.
+func (w *Wallet) NextNonce() uint64 {
+	if w == nil {
+		return 0
+	}
+	w.mutex.Lock()
+	defer w.mutex.Unlock()
+	return w.nextNonce
+}
+
+// SetNextNonce resets the counter, normally from chain state.
+func (w *Wallet) SetNextNonce(nonce uint64) {
+	if w == nil {
+		return
+	}
+	w.mutex.Lock()
+	defer w.mutex.Unlock()
+	w.nextNonce = nonce
 }
 
 // SetData sets the data (keypairs) associated with the wallet.

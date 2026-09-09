@@ -600,6 +600,19 @@ func (bc *Blockchain) AddTransactionLocal(transaction Transaction) bool {
 		return false
 	}
 
+	// Fail fast on a nonce the chain has already confirmed. The UTXO set refuses
+	// it again at block-application time; catching it here keeps a replay out of
+	// the mempool rather than letting it sit there and poison every block that
+	// tries to include it.
+	if sender, _ := transactionParties(transaction); sender != "" {
+		if last, seen := bc.UTXOSet().LastNonce(sender); seen && transaction.GetNonce() <= last {
+			bc.Metrics().Inc("tx_rejected")
+			LogVerbosef("Rejecting transaction %s: %v (sender %s is at nonce %d)",
+				transaction.GetID(), ErrNonceNotIncreasing, sender, last)
+			return false
+		}
+	}
+
 	id := transaction.GetID()
 
 	bc.mux.Lock()
@@ -988,6 +1001,47 @@ func (bc *Blockchain) requeueTransactions(txs []Transaction) {
 	defer bc.mux.Unlock()
 	bc.TransactionQueue = append(txs, bc.TransactionQueue...)
 	bc.trimMempoolLocked()
+}
+
+// SyncWalletNonce resets a wallet's nonce counter from chain state.
+//
+// A wallet holds its counter in memory, so one loaded from disk starts at zero
+// and would produce transactions the chain refuses as replays. Callers that load
+// a wallet and then spend from it must call this first.
+//
+// Transactions already queued count too: two transactions built back to back
+// must not both claim the same nonce.
+func (bc *Blockchain) SyncWalletNonce(w *Wallet) {
+	if w == nil {
+		return
+	}
+	w.SetNextNonce(bc.NextNonceFor(w.GetAddress()))
+}
+
+// NextNonceFor returns the nonce an address should use for its next
+// transaction, accounting for what is already in the mempool.
+func (bc *Blockchain) NextNonceFor(address string) uint64 {
+	if address == "" {
+		return 0
+	}
+
+	next := bc.UTXOSet().NextNonce(address)
+
+	bc.mux.Lock()
+	defer bc.mux.Unlock()
+	for _, tx := range bc.TransactionQueue {
+		if tx == nil {
+			continue
+		}
+		sender, _ := transactionParties(tx)
+		if sender != address {
+			continue
+		}
+		if queued := tx.GetNonce(); queued >= next {
+			next = queued + 1
+		}
+	}
+	return next
 }
 
 // HasTransactionID reports whether a transaction ID is already known, in the
