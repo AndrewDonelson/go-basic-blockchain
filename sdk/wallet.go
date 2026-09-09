@@ -85,6 +85,10 @@ type Wallet struct {
 	EncryptionParams *EncryptionParams
 	Ciphertext       []byte
 	vault            *Vault
+	// mnemonic is the BIP-39 recovery phrase for a wallet created or recovered in
+	// this process. It is never serialised: a recovery phrase stored beside the
+	// wallet it recovers protects nothing.
+	mnemonic string
 	//nolint:unused
 	mutex sync.Mutex // Currently unused but kept for potential future use
 }
@@ -174,11 +178,29 @@ func NewWallet(options *WalletOptions) (*Wallet, error) {
 		Ciphertext: []byte{},
 	}
 
-	// Generate a new private key.
-	err = wallet.vault.NewKeyPair()
+	// Generate a new private key from a BIP-39 recovery phrase, so every wallet is
+	// recoverable by default.
+	//
+	// The key used to be raw ecdsa.GenerateKey output with no way to reproduce it,
+	// which made a lost wallet file final. sdk/mnemonic.go existed but nothing
+	// called it -- and could not have, since it derives secp256k1 material while
+	// wallets are P-256. Call Wallet.Mnemonic() to show the phrase to the user
+	// before the wallet goes out of scope; it is never written to disk.
+	mnemonic, err := GenerateMnemonic()
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("generate recovery phrase: %w", err)
 	}
+	seed, err := SeedFromMnemonic(mnemonic, "")
+	if err != nil {
+		return nil, fmt.Errorf("derive seed: %w", err)
+	}
+	key, err := deriveP256Key(seed)
+	if err != nil {
+		return nil, fmt.Errorf("derive wallet key: %w", err)
+	}
+	wallet.vault.Key = key
+	wallet.vault.Pem = NewPEM(key)
+	wallet.mnemonic = mnemonic
 
 	wallet.GetAddress()
 
