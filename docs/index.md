@@ -14,6 +14,7 @@ Welcome to the comprehensive documentation for the Go Basic Blockchain project. 
 - **[Helios Consensus](helios.md)** - The proof-of-work algorithm, and why determinism is what makes it work
 - **[Chain Synchronisation](sync.md)** - How nodes exchange blocks
 - **[Fork Choice & Reorganisation](forkchoice.md)** - How competing histories are resolved
+- **[Dynamic Difficulty](difficulty.md)** - How the chain retargets itself
 - **[UTXO Set](utxo.md)** - The authoritative record of who owns what
 - **[P2P Security](p2p-security.md)** - Peer authentication, forward secrecy, session encryption
 
@@ -72,9 +73,10 @@ correctly, but does not yet form a network.
 | Chain synchronisation | ✅ Working — see [sync.md](sync.md) |
 | Peer authentication | ✅ Working — mutual auth + forward-secret sessions ([p2p-security.md](p2p-security.md)) |
 | Fork choice / reorg | ✅ Working — heaviest-chain, see [forkchoice.md](forkchoice.md) |
+| Dynamic difficulty | ✅ Working — retargets from chain history, validated per branch ([difficulty.md](difficulty.md)) |
 | UTXO state model | ✅ Working — authoritative balances, double-spend prevention ([utxo.md](utxo.md)) |
 
-- **Test Coverage**: 57.0% (`sdk`), 85–97% across the Helios packages
+- **Test Coverage**: 66.5% (`sdk`), 85–97% across the Helios packages
 - **Test Performance**: ~17 seconds; ~85 seconds under `-race`
 - **Documentation**: ✅ Comprehensive
 

@@ -2,11 +2,13 @@ package sdk
 
 import (
 	"errors"
+	"fmt"
 	"math/big"
 	"os"
 	"path/filepath"
 	"sync"
 	"testing"
+	"time"
 )
 
 // -----------------------------------------------------------------------------
@@ -35,10 +37,17 @@ func forkTestChain(t *testing.T, height int, difficulty uint32) *Blockchain {
 		useHeliosMining: false,
 	}
 
+	// Anchor the fixture well in the past. Tests extend these chains forward with
+	// controlled spacing, and Block.Validate rejects timestamps in the future.
+	base := time.Now().Add(-48 * time.Hour)
+
 	previousHash := ""
 	for i := 0; i <= height; i++ {
-		bc.Blocks = append(bc.Blocks, forkTestBlock(i, previousHash, difficulty, ""))
-		previousHash = bc.Blocks[i].Hash
+		b := forkTestBlock(i, previousHash, difficulty, "")
+		b.Header.Timestamp = base.Add(time.Duration(i) * time.Minute)
+		b.Hash = b.CalculateHash()
+		bc.Blocks = append(bc.Blocks, b)
+		previousHash = b.Hash
 	}
 	bc.CurrentBlockIndex = height
 	bc.NextBlockIndex = height + 1
@@ -60,6 +69,44 @@ func forkTestBlock(index int, previousHash string, difficulty uint32, salt strin
 	}
 	b.Hash = b.CalculateHash()
 	return b
+}
+
+// extendValidChain builds a branch whose blocks declare the difficulty their own
+// ancestry requires, with a chosen spacing between timestamps.
+//
+// Spacing is what drives retargeting: blocks closer together than the target
+// block time make the next window harder, further apart make it easier. This is
+// how a branch legitimately becomes heavier -- it can no longer be done by simply
+// declaring a high difficulty, which is the point of deriving difficulty from the
+// chain.
+func extendValidChain(bc *Blockchain, ancestry []*Block, count int, spacing time.Duration, salt string) []*Block {
+	history := append([]*Block{}, ancestry...)
+	blocks := make([]*Block, 0, count)
+
+	parent := history[len(history)-1]
+	previousHash := parent.Hash
+	index := int(parent.Index.Int64())
+	timestamp := parent.Header.Timestamp
+
+	for i := 0; i < count; i++ {
+		index++
+		timestamp = timestamp.Add(spacing)
+
+		b := NewBlock(nil, previousHash)
+		b.Index = *big.NewInt(int64(index))
+		b.Header.Difficulty = uint32(bc.ExpectedDifficulty(history))
+		b.Header.Timestamp = timestamp
+		b.Header.Nonce = uint32(len(salt)*1000 + index)
+		if salt != "" {
+			b.Header.MerkleRoot = []byte(salt)
+		}
+		b.Hash = b.CalculateHash()
+
+		blocks = append(blocks, b)
+		history = append(history, b)
+		previousHash = b.Hash
+	}
+	return blocks
 }
 
 // extendChain appends `count` blocks to a parent, returning them in order.
@@ -306,18 +353,35 @@ func TestReorgOntoHeavierBranch(t *testing.T) {
 
 // TestReorgOntoShorterButHeavierBranch is the case that distinguishes work from
 // length: a *shorter* branch wins because its blocks are harder.
+//
+// The branch cannot simply declare a high difficulty any more -- difficulty comes
+// from the chain -- so it earns one: its blocks arrive far faster than the target
+// interval, the retarget raises the requirement, and the resulting blocks carry
+// enough work to outweigh a longer but slower chain.
 func TestReorgOntoShorterButHeavierBranch(t *testing.T) {
-	// Our chain: 0..6, difficulty 4 (six blocks after the fork at 1).
-	bc := forkTestChain(t, 6, 4)
+	bc := forkTestChain(t, 1, 4)
+	// Retarget every 2 blocks so the effect is reachable inside a short test.
+	bc.cfg.DifficultyWindow = 2
+	bc.cfg.BlockTime = 60 // target 60s per block
 
-	// Rival: two blocks at difficulty 12 -- 256x the work each.
-	rival := extendChain(bc.Blocks[1], 2, 12, "heavy")
+	// Our chain: slow blocks, so each retarget makes it easier.
+	slow := extendValidChain(bc, bc.Blocks, 8, 10*time.Minute, "")
+	for _, block := range slow {
+		if _, err := bc.AcceptBlockWithResult(block); err != nil {
+			t.Fatalf("slow block %s: %v", block.Index.String(), err)
+		}
+	}
+	slowWork := bc.ChainWork()
+	slowHeight := bc.Height()
+
+	// A rival branch from block 1: fast blocks, so each retarget makes it harder.
+	rival := extendValidChain(bc, bc.Blocks[:2], 5, time.Second, "fast")
 
 	reorged := false
 	for _, block := range rival {
 		r, err := bc.AcceptBlockWithResult(block)
 		if err != nil && !errors.Is(err, ErrWeakerBranch) {
-			t.Fatalf("rival block: %v", err)
+			t.Fatalf("rival block %s: %v", block.Index.String(), err)
 		}
 		if r.Reorganised {
 			reorged = true
@@ -325,13 +389,14 @@ func TestReorgOntoShorterButHeavierBranch(t *testing.T) {
 	}
 
 	if !reorged {
-		t.Fatal("a shorter but heavier branch should have won; weighing by length would keep the longer one")
+		t.Fatalf("a shorter branch of harder blocks should have won "+
+			"(chain work %s at height %d)", slowWork, slowHeight)
 	}
-	if bc.Height() != 3 {
-		t.Fatalf("expected the chain to shorten to height 3, got %d", bc.Height())
+	if bc.Height() >= slowHeight {
+		t.Fatalf("expected the chain to shorten: height %d, was %d", bc.Height(), slowHeight)
 	}
-	if bc.HeadHash() != rival[1].Hash {
-		t.Fatal("head is not the heavy branch's tip")
+	if bc.ChainWork().Cmp(slowWork) <= 0 {
+		t.Fatal("the chain switched to a branch with less work")
 	}
 	assertChainLinks(t, bc)
 }
@@ -605,9 +670,18 @@ func TestFailedReorgLeavesTheChainIntact(t *testing.T) {
 // TestReorgRemovesStaleBlockFiles: after switching to a shorter branch, files for
 // indices that no longer exist must go, or a restart resurrects them.
 func TestReorgRemovesStaleBlockFiles(t *testing.T) {
-	bc := forkTestChain(t, 6, 4)
+	bc := forkTestChain(t, 1, 4)
+	bc.cfg.DifficultyWindow = 2
+	bc.cfg.BlockTime = 60
 
-	// Persist the current chain.
+	// Extend slowly, so the chain gets long and easy.
+	slow := extendValidChain(bc, bc.Blocks, 8, 10*time.Minute, "")
+	for _, block := range slow {
+		if _, err := bc.AcceptBlockWithResult(block); err != nil {
+			t.Fatalf("slow block: %v", err)
+		}
+	}
+
 	for _, b := range bc.Blocks {
 		if err := b.save(); err != nil {
 			t.Fatalf("save: %v", err)
@@ -615,26 +689,28 @@ func TestReorgRemovesStaleBlockFiles(t *testing.T) {
 	}
 
 	blocksDir := filepath.Join(bc.cfg.DataPath, "blocks")
-	if _, err := os.Stat(filepath.Join(blocksDir, "6.json")); err != nil {
-		t.Fatalf("expected block 6 on disk: %v", err)
+	topIndex := bc.Height()
+	if _, err := os.Stat(filepath.Join(blocksDir, fmt.Sprintf("%d.json", topIndex))); err != nil {
+		t.Fatalf("expected block %d on disk: %v", topIndex, err)
 	}
 
-	// Reorganise onto a shorter, heavier branch: 2 blocks at difficulty 12.
-	rival := extendChain(bc.Blocks[1], 2, 12, "short")
+	// Reorganise onto a shorter branch of harder blocks.
+	rival := extendValidChain(bc, bc.Blocks[:2], 5, time.Second, "fast")
 	for _, block := range rival {
 		if _, err := bc.AcceptBlockWithResult(block); err != nil && !errors.Is(err, ErrWeakerBranch) {
 			t.Fatalf("rival block: %v", err)
 		}
 	}
 
-	if bc.Height() != 3 {
-		t.Fatalf("expected height 3, got %d", bc.Height())
+	if bc.Height() >= topIndex {
+		t.Fatalf("expected the chain to shorten, height is %d", bc.Height())
 	}
 
-	for _, stale := range []string{"4.json", "5.json", "6.json"} {
-		if _, err := os.Stat(filepath.Join(blocksDir, stale)); err == nil {
-			t.Fatalf("stale block file %s survived the reorganisation; a restart would "+
-				"resurrect a block that is no longer on the chain", stale)
+	for index := bc.Height() + 1; index <= topIndex; index++ {
+		path := filepath.Join(blocksDir, fmt.Sprintf("%d.json", index))
+		if _, err := os.Stat(path); err == nil {
+			t.Fatalf("stale block file %d.json survived the reorganisation; a restart "+
+				"would resurrect a block that is no longer on the chain", index)
 		}
 	}
 }

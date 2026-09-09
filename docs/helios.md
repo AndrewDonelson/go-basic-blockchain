@@ -218,8 +218,6 @@ go test ./internal/helios/... -v
 ## 📈 Future work
 
 - Replace phase 2 with a genuine VDF so verification is cheaper than computation.
-- Wire `internal/helios/difficulty` into block production. It is implemented and
-  tested but nothing calls it; `Config.Difficulty` is currently static.
 - Scale the phase parameters by the weights, so the weights are load-bearing
   rather than descriptive.
 - Analyse the memory phase properly, or replace it with real Argon2id.

@@ -154,11 +154,12 @@ both are normal while retracing a branch you partly have.
 **No finality.** Any block within `maxReorgDepth` can still be reorganised away.
 Wait for confirmations before treating a transaction as settled.
 
-**Difficulty is static.** `internal/helios/difficulty` is implemented and tested
-but nothing calls it, so `Config.Difficulty` never changes. Cumulative work is
-therefore proportional to length in practice today. The work-based rule is what
-makes variable difficulty safe to introduce later, and the tests already cover
-mixed-difficulty branches.
+**Difficulty is derived from history**, so cumulative work is no longer
+proportional to length: a shorter branch mined at a higher difficulty can and does
+win. A block's declared difficulty is checked against what its own ancestry
+requires before its work counts for anything — otherwise a miner could simply
+declare a large difficulty and outweigh every honest chain for free. See
+[difficulty.md](difficulty.md).
 
 **Side blocks are memory-only.** The block index is not persisted, so competing
 branches are forgotten on restart. Sync re-fetches them if they still matter.

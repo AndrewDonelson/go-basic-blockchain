@@ -82,7 +82,7 @@ Go Basic Blockchain is an educational blockchain implementation written in Go th
 | Fork choice / reorganisation | ✅ Working — heaviest-chain by cumulative work |
 
 ### Performance Metrics
-- **Test Coverage**: 57.0% (`sdk`), 85–97% across the Helios packages
+- **Test Coverage**: 66.5% (`sdk`), 85–97% across the Helios packages
 - **Test Performance**: ~17 seconds; ~85 seconds under the race detector
 - **Memory Usage**: Optimized for educational use
 
@@ -93,8 +93,6 @@ broken:
 
 - **Transaction finality.** Any block within 100 of the head can still be
   reorganised away. Wait for confirmations.
-- **Dynamic difficulty.** `internal/helios/difficulty` is implemented and tested,
-  but nothing calls it, so difficulty never changes.
 - **Explicit transaction inputs.** The UTXO set selects inputs deterministically
   at apply time, so a transaction cannot be validated in isolation — you need the
   set as of its block.

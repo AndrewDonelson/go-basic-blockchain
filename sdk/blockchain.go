@@ -864,6 +864,9 @@ func (bc *Blockchain) createNewBlock(difficulty int) {
 	queuedTransactions := append([]Transaction(nil), bc.TransactionQueue...)
 	bc.TransactionQueue = []Transaction{}
 	nextBlockIndex := bc.NextBlockIndex
+	// Difficulty is derived from the chain's own history, so every node agrees on
+	// what this block was required to meet.
+	blockDifficulty := bc.expectedDifficultyForNextLocked()
 	bc.mux.Unlock()
 
 	// The mempool already holds the real transactions, including the ones mirrored
@@ -872,13 +875,13 @@ func (bc *Blockchain) createNewBlock(difficulty int) {
 
 	newBlock := NewBlock(allTransactions, previousHash)
 	newBlock.Index = *big.NewInt(int64(nextBlockIndex))
-	// Stamp the difficulty this block is actually mined at.
+	// Stamp the difficulty this block is required to meet.
 	//
 	// Header.Difficulty used to be left at the InitialDifficulty constant while
 	// verification used cfg.Difficulty, so the field was decorative and disagreed
-	// with the work done. Fork choice weighs branches by the work their blocks
-	// claim, so that work has to come from the block itself.
-	newBlock.Header.Difficulty = uint32(bc.cfg.Difficulty)
+	// with the work done. It is now the retargeted value derived from the chain,
+	// which is also what peers will validate this block against.
+	newBlock.Header.Difficulty = uint32(blockDifficulty)
 	newBlock.Header.MerkleRoot = newBlock.CalculateMerkleRoot()
 
 	// Show block progress
@@ -886,7 +889,7 @@ func (bc *Blockchain) createNewBlock(difficulty int) {
 		bc.progressIndicator.ShowBlockProgress(int(newBlock.Index.Int64()), len(allTransactions))
 	}
 
-	minedBlock, err := bc.Mine(newBlock, int(newBlock.Header.Difficulty))
+	minedBlock, err := bc.Mine(newBlock, blockDifficulty)
 	if err != nil {
 		// Mining failed, so there is no block. Return the transactions to the
 		// mempool rather than losing them: previously the unmined block was
@@ -1063,6 +1066,14 @@ func (bc *Blockchain) acceptBlockLocked(block *Block) (ReorgResult, []*Block, []
 		}
 		if err := block.Validate(head); err != nil {
 			return result, nil, nil, fmt.Errorf("block validation failed: %w", err)
+		}
+		// A block must declare the difficulty its own history requires. Without
+		// this a peer could simply pick an easy value, and fork choice weighs
+		// branches by the work their blocks claim.
+		if want := bc.expectedDifficultyForNextLocked(); int(block.Header.Difficulty) != want {
+			return result, nil, nil, fmt.Errorf(
+				"block %s declares difficulty %d but its history requires %d",
+				block.Index.String(), block.Header.Difficulty, want)
 		}
 
 		// Apply to the UTXO set BEFORE committing the block. A block that cannot

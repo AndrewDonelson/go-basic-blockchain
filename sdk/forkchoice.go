@@ -174,6 +174,12 @@ func (bc *Blockchain) validateBranchLocked(b branch) error {
 		return fmt.Errorf("fork point %d is outside the chain", b.forkAt)
 	}
 
+	// Difficulty is per-branch: a competing branch has its own history and may
+	// legitimately be at a different difficulty, so each block is checked against
+	// the ancestry it actually builds on rather than against the main chain.
+	ancestry := make([]*Block, 0, b.forkAt+1+len(b.blocks))
+	ancestry = append(ancestry, bc.Blocks[:b.forkAt+1]...)
+
 	previous := bc.Blocks[b.forkAt]
 	for _, block := range b.blocks {
 		if block == nil {
@@ -186,6 +192,12 @@ func (bc *Blockchain) validateBranchLocked(b branch) error {
 			return fmt.Errorf("block %s breaks the index sequence (expected %d)",
 				block.Index.String(), want)
 		}
+		if want := bc.ExpectedDifficulty(ancestry); int(block.Header.Difficulty) != want {
+			return fmt.Errorf("block %s in branch declares difficulty %d but its history requires %d",
+				block.Index.String(), block.Header.Difficulty, want)
+		}
+
+		ancestry = append(ancestry, block)
 		previous = block
 	}
 

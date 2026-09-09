@@ -75,9 +75,10 @@ specific about which is which.
 | Transaction propagation | ✅ Working — relayed transactions are signature-verified |
 | Peer authentication | ✅ Working — mutual auth, forward-secret encrypted sessions ([docs](docs/p2p-security.md)) |
 | Fork choice / reorganisation | ✅ Working — heaviest-chain by cumulative work ([docs](docs/forkchoice.md)) |
+| Dynamic difficulty | ✅ Working — retargets from chain history, validated per branch ([docs](docs/difficulty.md)) |
 | UTXO state model | ✅ Working — authoritative balances, double-spend prevention ([docs](docs/utxo.md)) |
 
-- **Test Coverage:** 57.0% (`sdk`); 89.8% / 94.4% / 85.2% / 96.8% across the Helios packages
+- **Test Coverage:** 66.5% (`sdk`); 89.8% / 94.4% / 85.2% / 96.8% across the Helios packages
 - **Test Suite Performance:** ~17 seconds for the full suite, ~85 seconds under `-race`
 
 > **Heads up if you are upgrading:** authentication now **fails closed**. There is
@@ -212,7 +213,7 @@ go-basic-blockchain/
 
 The project includes a comprehensive test suite with optimized performance:
 
-- **Test Coverage**: 57.0% (`sdk`), 85–97% across the Helios packages
+- **Test Coverage**: 66.5% (`sdk`), 85–97% across the Helios packages
 - **Test Execution Time**: ~17 seconds; ~85 seconds with the race detector
 - **Race Detector**: The full suite runs clean under `go test -race`
 - **Regression Suite**: `sdk/regression_test.go` pins one test per historical

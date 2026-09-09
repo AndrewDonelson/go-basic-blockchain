@@ -45,6 +45,7 @@ type Config struct {
 	SeedAddress       string   // New field: Address of the seed node to connect to
 	Verbose           bool     // Enable verbose logging
 	AllowedPeers      []string // If non-empty, only these node IDs may connect
+	DifficultyWindow  int      // Blocks between difficulty retargets
 	promptUpdate      bool
 	testing           bool
 }
@@ -113,6 +114,7 @@ func (c *Config) setDefaultValues() {
 	c.AllowNewTokens = allowNewTokens
 	c.MaxBlockSize = MaxBlockSize
 	c.MinTransactionFee = minTransactionFee
+	c.DifficultyWindow = defaultDifficultyWindow
 }
 
 // loadFromEnv loads configuration values from environment variables.
@@ -182,6 +184,7 @@ func (c *Config) loadFromEnv() {
 		c.MinTransactionFee = getEnvAsFloat("MIN_TRANSACTION_FEE", c.MinTransactionFee)
 		c.Verbose = getEnvAsBool("VERBOSE", c.Verbose)
 		c.AllowedPeers = getEnvAsList("P2P_ALLOWED_PEERS", c.AllowedPeers)
+		c.DifficultyWindow = getEnvAsInt("DIFFICULTY_WINDOW", c.DifficultyWindow)
 	}
 }
 
@@ -257,6 +260,9 @@ func (c *Config) Validate() error {
 	// there produces a nonsensical target.
 	if c.Difficulty < 1 || c.Difficulty > 255 {
 		return errors.New("difficulty must be between 1 and 255")
+	}
+	if c.DifficultyWindow < 0 {
+		return errors.New("difficulty window cannot be negative")
 	}
 	if c.TransactionFee < 0 {
 		return errors.New("transaction fee cannot be negative")
