@@ -75,7 +75,7 @@ specific about which is which.
 | Transaction propagation | ✅ Working — relayed transactions are signature-verified |
 | Peer authentication | ❌ Not implemented — any host may claim any node ID; transport is plaintext |
 | Fork choice / reorganisation | ✅ Working — heaviest-chain by cumulative work ([docs](docs/forkchoice.md)) |
-| UTXO / account state model | ❌ Not implemented — balances are derived by scanning the chain |
+| UTXO state model | ✅ Working — authoritative balances, double-spend prevention ([docs](docs/utxo.md)) |
 
 - **Test Coverage:** 57.0% (`sdk`); 89.8% / 94.4% / 85.2% / 96.8% across the Helios packages
 - **Test Suite Performance:** ~17 seconds for the full suite, ~85 seconds under `-race`

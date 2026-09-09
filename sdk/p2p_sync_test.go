@@ -445,6 +445,7 @@ func TestAnnouncedTransactionIsVerifiedBeforeAcceptance(t *testing.T) {
 
 	from := newTestWallet(t, "announce-from", 1000)
 	to := newTestWallet(t, "announce-to", 0)
+	fundWalletForTest(t, chain, from, 1000)
 
 	t.Run("a signed transaction is accepted", func(t *testing.T) {
 		tx, err := NewBankTransaction(from, to, 5)
@@ -529,6 +530,7 @@ func TestRelayedTransactionIsNotReAnnounced(t *testing.T) {
 
 	from := newTestWallet(t, "relay-from", 100)
 	to := newTestWallet(t, "relay-to", 0)
+	fundWalletForTest(t, chain, from, 100)
 	tx, err := NewBankTransaction(from, to, 1)
 	if err != nil {
 		t.Fatalf("create tx: %v", err)
@@ -559,6 +561,7 @@ func TestAddTransactionLocalDeduplicates(t *testing.T) {
 
 	from := newTestWallet(t, "dedup-from", 100)
 	to := newTestWallet(t, "dedup-to", 0)
+	fundWalletForTest(t, chain, from, 100)
 	tx, err := NewBankTransaction(from, to, 1)
 	if err != nil {
 		t.Fatalf("create tx: %v", err)

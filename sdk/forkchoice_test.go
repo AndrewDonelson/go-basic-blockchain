@@ -431,6 +431,7 @@ func TestReorgRestoresOrphanedTransactions(t *testing.T) {
 
 	from := newTestWallet(t, "reorg-from", 10000)
 	to := newTestWallet(t, "reorg-to", 0)
+	fundWalletForTest(t, bc, from, 10000)
 
 	orphanedTx, err := NewBankTransaction(from, to, 42)
 	if err != nil {
@@ -494,6 +495,7 @@ func TestReorgDoesNotRestoreTransactionsPresentInBothBranches(t *testing.T) {
 
 	from := newTestWallet(t, "both-from", 10000)
 	to := newTestWallet(t, "both-to", 0)
+	fundWalletForTest(t, bc, from, 10000)
 	tx, err := NewBankTransaction(from, to, 7)
 	if err != nil {
 		t.Fatalf("create tx: %v", err)

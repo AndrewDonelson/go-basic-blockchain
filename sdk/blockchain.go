@@ -68,6 +68,11 @@ type Blockchain struct {
 	menuActive bool
 	menuMutex  sync.RWMutex
 
+	// utxos is the authoritative record of who owns what, derived from the blocks.
+	// It replaces both the O(chain) rescan in GetBalance and the per-wallet
+	// balance that nothing kept in step with the chain.
+	utxos *UTXOSet
+
 	// blockIndex holds every block we have seen, on the main chain or not, keyed
 	// by hash. Fork choice walks it to assemble a candidate branch, so a block
 	// arriving out of order is retained rather than discarded.
@@ -98,6 +103,7 @@ func NewBlockchain(cfg *Config) *Blockchain {
 		AvgTxsPerBlock:    0,
 		State:             &State{},
 		useHeliosMining:   true, // Enable Helios mining by default
+		utxos:             NewUTXOSet(),
 		progressIndicator: progress.NewProgressIndicator(),
 	}
 	if n := GetNode(); n != nil && n.ProgressIndicator != nil {
@@ -162,6 +168,14 @@ func NewBlockchain(cfg *Config) *Blockchain {
 	if len(bc.Blocks) == 0 {
 		log.Println("No blocks found, creating genesis block")
 		bc.GenerateGenesisBlock([]Transaction{})
+	}
+
+	// Rebuild the UTXO set from the blocks we have. The set is derived state, so
+	// it is never loaded from disk -- replaying the chain is what guarantees it
+	// matches the blocks rather than some stale snapshot.
+	if err := bc.RebuildUTXOSet(); err != nil {
+		log.Printf("Error rebuilding the UTXO set: %v", err)
+		return nil
 	}
 
 	log.Printf("Blockchain initialized with %d blocks", len(bc.Blocks))
@@ -401,6 +415,11 @@ func (bc *Blockchain) GenerateGenesisBlock(txs []Transaction) {
 		}
 
 		bc.Blocks = append(bc.Blocks, genesisBlock)
+		bc.mux.Lock()
+		if _, err := bc.ensureUTXOSetLocked().ApplyBlock(genesisBlock, bc.feeSplitFor()); err != nil {
+			log.Printf("Error applying genesis block to the UTXO set: %v", err)
+		}
+		bc.mux.Unlock()
 
 		err = bc.TXLookup.Add(genesisBlock)
 		if err != nil {
@@ -558,6 +577,14 @@ func (bc *Blockchain) AddTransaction(transaction Transaction) {
 // not counted or re-announced.
 func (bc *Blockchain) AddTransactionLocal(transaction Transaction) bool {
 	if transaction == nil {
+		return false
+	}
+
+	// Reject a transaction the sender cannot afford. Nothing used to check a
+	// transaction against unspent outputs, so the same funds could be committed
+	// any number of times.
+	if err := bc.ValidateTransactionFunds(transaction); err != nil {
+		LogVerbosef("Rejecting transaction %s: %v", transaction.GetID(), err)
 		return false
 	}
 
@@ -896,6 +923,16 @@ func (bc *Blockchain) commitMinedBlock(newBlock *Block, txCount int) {
 	bc.mux.Lock()
 	defer bc.mux.Unlock()
 
+	{
+		if _, err := bc.ensureUTXOSetLocked().ApplyBlock(newBlock, bc.feeSplitFor()); err != nil {
+			// The block cannot be applied, so it must not join the chain. Its
+			// transactions were validated on the way into the mempool, so this
+			// means they conflict with each other.
+			LogInfof("Refusing to commit block %s: %v", newBlock.Index.String(), err)
+			return
+		}
+	}
+
 	bc.Blocks = append(bc.Blocks, newBlock)
 	bc.CurrentBlockIndex = int(newBlock.Index.Int64())
 	bc.NextBlockIndex = bc.CurrentBlockIndex + 1
@@ -1028,6 +1065,13 @@ func (bc *Blockchain) acceptBlockLocked(block *Block) (ReorgResult, []*Block, []
 			return result, nil, nil, fmt.Errorf("block validation failed: %w", err)
 		}
 
+		// Apply to the UTXO set BEFORE committing the block. A block that cannot
+		// be applied -- a double spend, or a spend of outputs that do not exist --
+		// must not join the chain, and ApplyBlock is all-or-nothing.
+		if _, err := bc.ensureUTXOSetLocked().ApplyBlock(block, bc.feeSplitFor()); err != nil {
+			return result, nil, nil, fmt.Errorf("block rejected by the UTXO set: %w", err)
+		}
+
 		bc.Blocks = append(bc.Blocks, block)
 		bc.CurrentBlockIndex = int(block.Index.Int64())
 		bc.NextBlockIndex = bc.CurrentBlockIndex + 1
@@ -1069,10 +1113,19 @@ func (bc *Blockchain) acceptBlockLocked(block *Block) (ReorgResult, []*Block, []
 			ErrWeakerBranch, candidateWork.String(), currentWork.String())
 	}
 
+	// Rebuild the set across the switch before touching the chain. If the branch
+	// contains a double spend, this fails and the chain is left as it was.
+	newSet, err := bc.utxoSetForBranchLocked(candidate)
+	if err != nil {
+		return result, nil, nil, fmt.Errorf("branch rejected by the UTXO set: %w", err)
+	}
+
 	disconnected, err := bc.reorganiseLocked(candidate)
 	if err != nil {
 		return result, nil, nil, err
 	}
+
+	bc.utxos = newSet
 
 	// Reindex transactions for the branch we switched to.
 	for _, connected := range candidate.blocks {
@@ -1101,6 +1154,33 @@ func (bc *Blockchain) acceptBlockLocked(block *Block) (ReorgResult, []*Block, []
 	}
 
 	return result, disconnected, candidate.blocks, nil
+}
+
+// utxoSetForBranchLocked returns what the UTXO set would be after switching to a
+// branch, without modifying the live one.
+//
+// The candidate is built on a clone: a branch that turns out to contain a double
+// spend leaves the live set untouched, exactly as a failed reorganisation leaves
+// the chain untouched.
+func (bc *Blockchain) utxoSetForBranchLocked(candidate branch) (*UTXOSet, error) {
+	set := bc.ensureUTXOSetLocked().Clone()
+	split := bc.feeSplitFor()
+
+	// Revert the blocks being disconnected, newest first.
+	for i := len(bc.Blocks) - 1; i > candidate.forkAt; i-- {
+		if err := set.RevertBlock(bc.Blocks[i].Hash); err != nil {
+			return nil, fmt.Errorf("reverting block %s: %w", bc.Blocks[i].Index.String(), err)
+		}
+	}
+
+	// Apply the branch in order.
+	for _, block := range candidate.blocks {
+		if _, err := set.ApplyBlock(block, split); err != nil {
+			return nil, fmt.Errorf("applying branch block %s: %w", block.Index.String(), err)
+		}
+	}
+
+	return set, nil
 }
 
 // validateStandalone checks everything about a block that does not depend on
@@ -1231,85 +1311,178 @@ func (bc *Blockchain) GetTransactionByID(id string) Transaction {
 // GetBalance returns the balance of a given wallet address.
 func (bc *Blockchain) GetBalance(address string) float64 {
 	bc.mux.Lock()
+	set := bc.ensureUTXOSetLocked()
+	bc.mux.Unlock()
+
+	return set.Balance(address)
+}
+
+// GetBalanceUnits returns a balance in indivisible base units.
+//
+// Prefer this over GetBalance wherever the value is compared or accumulated:
+// float64 cannot represent 0.1 exactly, so float balances drift.
+func (bc *Blockchain) GetBalanceUnits(address string) int64 {
+	bc.mux.Lock()
+	set := bc.ensureUTXOSetLocked()
+	bc.mux.Unlock()
+
+	return set.BalanceUnits(address)
+}
+
+// UTXOs returns the unspent outputs held by an address.
+func (bc *Blockchain) UTXOs(address string) []*UTXO {
+	bc.mux.Lock()
+	set := bc.ensureUTXOSetLocked()
+	bc.mux.Unlock()
+
+	return set.OutputsFor(address)
+}
+
+// UTXOSet returns the live set. Callers must not mutate it.
+func (bc *Blockchain) UTXOSet() *UTXOSet {
+	bc.mux.Lock()
 	defer bc.mux.Unlock()
+	return bc.ensureUTXOSetLocked()
+}
 
-	balance := 0.0
+// ensureUTXOSetLocked lazily creates the set, replaying any blocks already held.
+//
+// Blockchain is constructed as a struct literal in several places, so the set
+// cannot rely on NewBlockchain having run.
+func (bc *Blockchain) ensureUTXOSetLocked() *UTXOSet {
+	if bc.utxos != nil {
+		return bc.utxos
+	}
+
+	set := NewUTXOSet()
+	split := bc.feeSplitFor()
 	for _, block := range bc.Blocks {
-		for _, tx := range block.Transactions {
-			sender := ""
-			if w := tx.GetSenderWallet(); w != nil {
-				sender = w.GetAddress()
-			}
-			recipient := ""
-			if w := tx.GetRecipientWallet(); w != nil {
-				recipient = w.GetAddress()
-			}
-
-			switch concrete := tx.(type) {
-			case *Coinbase:
-				// Coinbase output was never credited to anyone, so the minted
-				// supply existed in CalculateTotalSupply but in nobody's balance.
-				if recipient == address {
-					balance += float64(concrete.TokenCount)
-				}
-			case *Bank:
-				if sender == address {
-					balance -= concrete.Amount + concrete.GetFee()
-				}
-				if recipient == address {
-					balance += concrete.Amount
-				}
-			default:
-				if sender == address {
-					balance -= tx.GetFee()
-				}
-			}
-
-			// Fees are paid out rather than destroyed.
-			balance += bc.feeCreditFor(tx, address)
+		if _, err := set.ApplyBlock(block, split); err != nil {
+			LogVerbosef("Could not replay block %s into the UTXO set: %v",
+				block.Index.String(), err)
 		}
 	}
-	return balance
+	bc.utxos = set
+	return set
 }
 
-// feeCreditFor returns the share of a transaction's fee credited to address.
+// feeSplitFor returns where fees are paid, from the chain config.
+func (bc *Blockchain) feeSplitFor() feeSplit {
+	if bc.cfg == nil {
+		return feeSplit{}
+	}
+	return feeSplit{
+		MinerAddress: bc.cfg.MinerAddress,
+		MinerPercent: bc.cfg.MinerRewardPCT,
+		DevAddress:   bc.cfg.DevAddress,
+		DevPercent:   bc.cfg.DevRewardPCT,
+	}
+}
+
+// RebuildUTXOSet replays the chain to reconstruct the set from scratch.
 //
-// Fees used to be subtracted from the sender and credited to nobody, so every
-// transaction quietly destroyed value. They are now split between the miner and
-// the developer per MinerRewardPCT / DevRewardPCT, which the config has always
-// described but nothing implemented.
-func (bc *Blockchain) feeCreditFor(tx Transaction, address string) float64 {
-	fee := tx.GetFee()
-	if fee <= 0 || bc.cfg == nil {
-		return 0
+// The set is derived state and is deliberately not persisted: replaying the
+// blocks is what guarantees it matches them. Loading a snapshot would let the
+// two drift, which is the class of bug this whole file exists to remove.
+func (bc *Blockchain) RebuildUTXOSet() error {
+	bc.mux.Lock()
+	blocks := make([]*Block, len(bc.Blocks))
+	copy(blocks, bc.Blocks)
+	split := bc.feeSplitFor()
+	bc.mux.Unlock()
+
+	rebuilt := NewUTXOSet()
+	for _, block := range blocks {
+		if _, err := rebuilt.ApplyBlock(block, split); err != nil {
+			return fmt.Errorf("replaying block %s: %w", block.Index.String(), err)
+		}
 	}
 
-	credit := 0.0
-	if bc.cfg.MinerAddress == address {
-		credit += fee * bc.cfg.MinerRewardPCT / 100.0
-	}
-	if bc.cfg.DevAddress == address {
-		credit += fee * bc.cfg.DevRewardPCT / 100.0
-	}
-	return credit
+	bc.mux.Lock()
+	bc.utxos = rebuilt
+	bc.mux.Unlock()
+
+	LogVerbosef("UTXO set rebuilt: %d unspent outputs, %.8f tokens in circulation",
+		rebuilt.Size(), UnitsToAmount(rebuilt.TotalUnits()))
+	return nil
 }
 
-// CalculateTotalSupply calculates the total supply of tokens in the blockchain.
-func (bc *Blockchain) CalculateTotalSupply() float64 {
+// CanSpend reports whether an address can cover an amount plus a fee.
+func (bc *Blockchain) CanSpend(address string, amount, fee float64) bool {
+	need := AmountToUnits(amount) + AmountToUnits(fee)
+	return bc.GetBalanceUnits(address) >= need
+}
+
+// ValidateTransactionFunds checks a transaction against the current set.
+//
+// This is what actually prevents a double spend: previously nothing compared a
+// transaction against what remained unspent, so the same funds could be
+// committed any number of times.
+func (bc *Blockchain) ValidateTransactionFunds(tx Transaction) error {
+	if tx == nil {
+		return errors.New("transaction is nil")
+	}
+
+	sender, _ := transactionParties(tx)
+	if sender == "" {
+		return errors.New("transaction has no sender")
+	}
+
+	need := AmountToUnits(tx.GetFee())
+	if bank, ok := tx.(*Bank); ok {
+		need += AmountToUnits(bank.Amount)
+	}
+	if need <= 0 {
+		return nil
+	}
+
+	// Funds already committed by queued transactions must count against the
+	// balance, or a sender could queue the same coins repeatedly.
+	pending := bc.pendingSpendUnits(sender, tx.GetID())
+
+	if available := bc.GetBalanceUnits(sender); available < need+pending {
+		return fmt.Errorf("%w: %s has %s unspent (%s already committed in the mempool), needs %s",
+			ErrInsufficientFunds, sender, formatUnits(available),
+			formatUnits(pending), formatUnits(need))
+	}
+	return nil
+}
+
+// pendingSpendUnits sums what a sender has already committed in the mempool,
+// ignoring the transaction being validated.
+func (bc *Blockchain) pendingSpendUnits(address, excludeID string) int64 {
 	bc.mux.Lock()
 	defer bc.mux.Unlock()
 
-	totalSupply := 0.0
-	for _, block := range bc.Blocks {
-		for _, tx := range block.Transactions {
-			if tx.GetProtocol() == CoinbaseProtocolID {
-				if coinbaseTx, ok := tx.(*Coinbase); ok {
-					totalSupply += float64(coinbaseTx.TokenCount)
-				}
-			}
+	var total int64
+	for _, tx := range bc.TransactionQueue {
+		if tx.GetID() == excludeID {
+			continue
+		}
+		sender, _ := transactionParties(tx)
+		if sender != address {
+			continue
+		}
+		total += AmountToUnits(tx.GetFee())
+		if bank, ok := tx.(*Bank); ok {
+			total += AmountToUnits(bank.Amount)
 		}
 	}
-	return totalSupply
+	return total
+}
+
+// CalculateTotalSupply calculates the total supply of tokens in the blockchain.
+// CalculateTotalSupply returns the tokens currently in circulation.
+//
+// This is the sum of every unspent output, not the sum of every coinbase ever
+// minted. The old version counted minted supply only, so it never reflected what
+// was actually held.
+func (bc *Blockchain) CalculateTotalSupply() float64 {
+	bc.mux.Lock()
+	set := bc.ensureUTXOSetLocked()
+	bc.mux.Unlock()
+
+	return UnitsToAmount(set.TotalUnits())
 }
 
 // ValidateChain validates the entire blockchain.

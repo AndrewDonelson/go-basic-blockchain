@@ -1450,9 +1450,7 @@ func testTransactionCreation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to open sender wallet: %v", err)
 	}
-	if err := sender.SetData("balance", 500.0); err != nil {
-		t.Fatalf("Failed to fund sender wallet: %v", err)
-	}
+	fundWalletForTest(t, testNode.Blockchain, sender, 500.0)
 	if err := sender.Close(apiWalletPassphrase); err != nil {
 		t.Fatalf("Failed to persist funded sender wallet: %v", err)
 	}
@@ -1761,9 +1759,9 @@ func buildSignedBankTransaction(t *testing.T, amount float64) *Bank {
 	if err := to.Unlock(pass); err != nil {
 		t.Fatalf("unlock recipient: %v", err)
 	}
-	if err := from.SetData("balance", amount+100.0); err != nil {
-		t.Fatalf("fund sender: %v", err)
-	}
+	// Fund on-chain as well: the UTXO set is what decides whether a transaction
+	// can be submitted, not the wallet's own cached number.
+	fundWalletForTest(t, testNode.Blockchain, from, amount+100.0)
 
 	tx, err := NewBankTransaction(from, to, amount)
 	if err != nil {

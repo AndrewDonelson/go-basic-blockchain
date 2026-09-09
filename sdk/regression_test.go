@@ -764,6 +764,7 @@ func TestBankSendPreservesAmount(t *testing.T) {
 	bc := &Blockchain{cfg: NewConfig(), TXLookup: NewTXLookupManager()}
 	from := newTestWallet(t, "send-from", 500)
 	to := newTestWallet(t, "send-to", 0)
+	fundWalletForTest(t, bc, from, 500)
 
 	tx, err := NewBankTransaction(from, to, 77.5)
 	if err != nil {

@@ -75,6 +75,7 @@ Go Basic Blockchain is an educational blockchain implementation written in Go th
 | Core blockchain (blocks, mining, persistence) | ✅ Working |
 | Helios consensus | ✅ Working — deterministic proof, verified on every block |
 | Wallet system | ✅ Working — encrypted at rest, atomic writes, recorded KDF parameters |
+| UTXO state model | ✅ Working — authoritative balances, double-spend prevention |
 | API layer | ✅ Working — fails closed, rate limited, paginated |
 | Chain synchronisation | ✅ Working — pull from longer peers, push mined blocks |
 | Fork choice / reorganisation | ✅ Working — heaviest-chain by cumulative work |
@@ -93,8 +94,9 @@ broken:
   reorganised away. Wait for confirmations.
 - **Dynamic difficulty.** `internal/helios/difficulty` is implemented and tested,
   but nothing calls it, so difficulty never changes.
-- **A UTXO or account state model.** Balances are recomputed by scanning the
-  chain, which is correct but O(chain) per query.
+- **Explicit transaction inputs.** The UTXO set selects inputs deterministically
+  at apply time, so a transaction cannot be validated in isolation — you need the
+  set as of its block.
 - **Peer authentication and transport security.** P2P is plaintext and any peer
   may claim any identity.
 

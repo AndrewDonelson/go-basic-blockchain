@@ -44,7 +44,13 @@ func NewBankTransaction(from *Wallet, to *Wallet, amount float64) (*Bank, error)
 		return nil, err
 	}
 
-	// Check if the from wallet has enough balance
+	// Advisory affordability check against the wallet's own cached balance.
+	//
+	// This is a convenience for callers building a transaction locally; it is NOT
+	// authoritative. The UTXO set decides what can actually be spent, and
+	// Blockchain.ValidateTransactionFunds enforces it when the transaction is
+	// submitted. A wallet's cached number was the only check that existed before
+	// the UTXO set, and nothing kept it in step with the chain.
 	total := amount + transactionFee
 	if from.GetBalance() < total {
 		return nil, fmt.Errorf("insufficient balance in the wallet")

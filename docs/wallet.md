@@ -121,16 +121,26 @@ err := wallet.SetData("balance", 100.0)
 v, err := wallet.GetData("some-key")  // errors if the key is absent
 ```
 
-**There are two notions of balance, and they are not the same thing:**
+> ### ⚠️ `wallet.GetBalance()` is advisory, not authoritative
+>
+> The [UTXO set](utxo.md) is the authoritative record of who owns what.
+> `wallet.GetBalance()` returns the wallet's own cached number, which nothing keeps
+> in step with the chain.
+>
+> `NewBankTransaction` checks it as a client-side convenience, so building an
+> unaffordable transaction fails fast locally. The real check happens on
+> submission, against the set — a transaction the chain cannot fund is refused by
+> the mempool however large the wallet's cached number is.
+>
+> **If you need a balance, use `blockchain.GetBalanceUnits(address)`.** Prefer the
+> units form wherever the value is compared or accumulated: `GetBalance` returns
+> float64 for display, and float64 cannot represent 0.1 exactly.
 
-1. `wallet.GetBalance()` — the value in the wallet's own encrypted store.
-2. `blockchain.GetBalance(address)` — derived by scanning the chain: coinbase
-   output credited to its recipient, bank transfers moving value between parties,
-   and fees paid out to the miner and developer per `MINER_REWARD_PCT` /
-   `DEV_REWARD_PCT`.
-
-The chain is authoritative. Unifying these behind a single state model is
-outstanding work — see `_design/` and the roadmap in `docs/intro.md`.
+```go
+units := blockchain.GetBalanceUnits(address)   // authoritative, exact
+tokens := blockchain.GetBalance(address)       // authoritative, for display
+outputs := blockchain.UTXOs(address)           // the unspent outputs themselves
+```
 
 ## 💸 Signing and sending
 

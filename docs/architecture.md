@@ -117,7 +117,13 @@ type Blockchain struct {
 - Automatic peer discovery
 - Connection management
 
-### 5. Persistence
+### 5. State (UTXO set)
+
+The authoritative record of balances, derived deterministically from the blocks
+and held in memory. See [utxo.md](utxo.md). It is never loaded from disk: it is
+rebuilt by replaying the chain, so it cannot drift from the blocks.
+
+### 6. Persistence
 
 **Location**: `sdk/localstorage.go`
 
