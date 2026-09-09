@@ -370,6 +370,10 @@ func (s *UTXOSet) applyTransactionLocked(tx Transaction, blockIndex int64, split
 	// so it cannot be edited to make an old transaction look new.
 	//
 	// A coinbase is exempt: it has no sender and mints rather than spends.
+	// A coinbase is exempt from the nonce rule. Genesis mints and has no sender;
+	// a subsidy is authorised by height rather than by a sender's sequence, and
+	// the height already makes it unrepeatable -- one subsidy per block, checked
+	// against the schedule.
 	if _, isCoinbase := tx.(*Coinbase); !isCoinbase && sender != "" {
 		nonce := tx.GetNonce()
 		if last, seen := s.nonces[sender]; seen && nonce <= last {
@@ -390,21 +394,47 @@ func (s *UTXOSet) applyTransactionLocked(tx Transaction, blockIndex int64, split
 
 	switch concrete := tx.(type) {
 	case *Coinbase:
-		// Newly minted supply. It consumes nothing, which is exactly why it must
-		// never be applied outside block 0 -- see Block.Validate. This is the
-		// second line of defence: any future path that reaches the set without
-		// going through block validation still cannot inflate the supply.
-		if blockIndex != 0 {
-			return fmt.Errorf("coinbase transaction %s is not permitted in block %d", txID, blockIndex)
-		}
 		if recipient == "" {
 			return errors.New("coinbase transaction has no recipient")
 		}
-		units := concrete.TokenCount * UnitsPerToken
-		if units < 0 {
-			return errors.New("coinbase token count is negative")
+
+		// Genesis: the one place new supply comes into existence.
+		if blockIndex == 0 {
+			units := concrete.TokenCount * UnitsPerToken
+			if units < 0 {
+				return errors.New("coinbase token count is negative")
+			}
+			emit(recipient, units, true)
+			return nil
 		}
-		emit(recipient, units, true)
+
+		// Every later block: the subsidy is a TRANSFER OUT OF THE RESERVE, never
+		// newly minted supply.
+		//
+		// This is what keeps the supply fixed, and it is also what bounds the
+		// damage if the amount check above it were ever wrong: a transfer cannot
+		// create coins, so the worst case is that the reserve empties early. A
+		// minting subsidy has no such floor -- get its amount check wrong and the
+		// chain inflates without limit, which is exactly the hole that once let
+		// any block mint the entire supply.
+		if concrete.SubsidyUnits <= 0 {
+			return fmt.Errorf("coinbase transaction %s in block %d pays nothing",
+				txID, blockIndex)
+		}
+		if sender == "" {
+			return fmt.Errorf("subsidy %s has no reserve to draw from", txID)
+		}
+
+		spent, totalIn, err := s.spendLocked(sender, concrete.SubsidyUnits, staged, undo)
+		if err != nil {
+			return fmt.Errorf("subsidy %s: %w", txID, err)
+		}
+		_ = spent
+
+		emit(recipient, concrete.SubsidyUnits, true)
+		if change := totalIn - concrete.SubsidyUnits; change > 0 {
+			emit(sender, change, false)
+		}
 		return nil
 
 	case *Bank:

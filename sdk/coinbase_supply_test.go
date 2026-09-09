@@ -50,10 +50,14 @@ func TestCoinbaseOutsideGenesisIsRejected(t *testing.T) {
 
 	_, err = bc.AcceptBlockWithResult(block)
 	if err == nil {
-		t.Fatal("a block containing a coinbase was accepted outside genesis")
+		t.Fatal("a block minting the whole supply outside genesis was accepted")
 	}
-	if !strings.Contains(err.Error(), "coinbase") {
-		t.Fatalf("block was rejected, but not for the coinbase: %v", err)
+	// A coinbase outside genesis is now the block subsidy, so the rejection comes
+	// from the amount rather than from the transaction type. The guarantee is
+	// stronger than it was: even a correctly-shaped claim can only move what the
+	// schedule allows, out of a finite reserve, instead of minting without limit.
+	if !strings.Contains(err.Error(), "subsidy") && !strings.Contains(err.Error(), "coinbase") {
+		t.Fatalf("block was rejected, but not for the coinbase or its subsidy: %v", err)
 	}
 
 	if after := bc.GetBalanceUnits(attacker.GetAddress()); after != before {
@@ -62,29 +66,58 @@ func TestCoinbaseOutsideGenesisIsRejected(t *testing.T) {
 	}
 }
 
-// TestBlockValidateRejectsACoinbase checks the consensus rule directly, since
-// Block.Validate is the one path AcceptBlock, branch validation and ValidateChain
-// all share.
-func TestBlockValidateRejectsACoinbase(t *testing.T) {
+// TestBlockValidateConfinesCoinbases checks the structural half of the rule.
+//
+// A coinbase outside genesis is the block subsidy, so it is no longer forbidden
+// -- it is confined. Block.Validate enforces the shape (at most one, and first);
+// validateSubsidyLocked enforces the amount, where the chain configuration is
+// available to say what the height allows. Neither alone is sufficient, which is
+// why both exist.
+func TestBlockValidateConfinesCoinbases(t *testing.T) {
 	bc := forkTestChain(t, 0, uint32(genesisDifficulty))
 	w := coinbaseTestWallet(t, "coinbase-direct")
 
-	cb, err := NewCoinbaseTransaction(w, w, bc.cfg)
-	if err != nil {
-		t.Fatalf("coinbase: %v", err)
+	newCoinbase := func() *Coinbase {
+		cb, err := NewCoinbaseTransaction(w, w, bc.cfg)
+		if err != nil {
+			t.Fatalf("coinbase: %v", err)
+		}
+		cb.SetStatus(StatusConfirmed)
+		return cb
 	}
-	cb.SetStatus(StatusConfirmed)
 
 	head := bc.Blocks[0]
-	block := NewBlock([]Transaction{cb}, head.Hash)
-	block.Index = *big.NewInt(1)
-	block.Header.Timestamp = head.Header.Timestamp.Add(time.Minute)
-	block.Header.MerkleRoot = block.CalculateMerkleRoot()
-	block.Hash = block.CalculateHash()
-
-	if err := block.Validate(head); err == nil {
-		t.Fatal("Block.Validate accepted a coinbase outside genesis")
+	build := func(txs ...Transaction) *Block {
+		b := NewBlock(txs, head.Hash)
+		b.Index = *big.NewInt(1)
+		b.Header.Timestamp = head.Header.Timestamp.Add(time.Minute)
+		b.Header.MerkleRoot = b.CalculateMerkleRoot()
+		b.Hash = b.CalculateHash()
+		return b
 	}
+
+	t.Run("a subsidy in first position is structurally allowed", func(t *testing.T) {
+		if err := build(newCoinbase()).Validate(head); err != nil {
+			t.Fatalf("a first-position coinbase was refused: %v", err)
+		}
+	})
+
+	t.Run("a coinbase after another transaction is refused", func(t *testing.T) {
+		message, err := NewMessageTransaction(w, w, "payload")
+		if err != nil {
+			t.Fatalf("message: %v", err)
+		}
+		if err := build(message, newCoinbase()).Validate(head); err == nil {
+			t.Fatal("a coinbase in second position was accepted; the subsidy must " +
+				"be first so its presence is checkable without a scan")
+		}
+	})
+
+	t.Run("two coinbases are refused", func(t *testing.T) {
+		if err := build(newCoinbase(), newCoinbase()).Validate(head); err == nil {
+			t.Fatal("a block paying two subsidies was accepted")
+		}
+	})
 }
 
 // TestUTXOSetRefusesACoinbaseOutsideGenesis is the second line of defence: the

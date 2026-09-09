@@ -51,6 +51,8 @@ type txWire struct {
 	TokenCount       int64   `json:"token_count,omitempty"`
 	TokenPrice       float64 `json:"token_price,omitempty"`
 	AllowNewTokens   bool    `json:"allow_new_tokens,omitempty"`
+	SubsidyUnits     int64   `json:"subsidy_units,omitempty"`
+	BlockHeight      int64   `json:"block_height,omitempty"`
 }
 
 // toWire projects the base transaction onto the wire shape.
@@ -155,6 +157,13 @@ func DecodeTransaction(data []byte) (Transaction, error) {
 			TokenCount:       w.TokenCount,
 			TokenPrice:       w.TokenPrice,
 			AllowNewTokens:   w.AllowNewTokens,
+			// Without these a reloaded subsidy pays nothing, so a block that was
+			// valid when mined is refused when read back from disk. This branch
+			// is a second decode path alongside Coinbase.UnmarshalJSON, and the
+			// two can drift -- which is how the fields went missing here in the
+			// first place. TestCoinbaseWireFormatCarriesEveryField compares them.
+			SubsidyUnits: w.SubsidyUnits,
+			BlockHeight:  w.BlockHeight,
 		}, nil
 
 	case ChainProtocolID, P2PProtocolID:

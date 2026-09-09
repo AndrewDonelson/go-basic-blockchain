@@ -49,6 +49,22 @@ func integrationWallet(t *testing.T, name string) *Wallet {
 	return w
 }
 
+// nonSubsidyTransactions returns a block's payload, excluding the block subsidy.
+//
+// Every mined block now leads with a coinbase paying the subsidy out of the
+// emission reserve, so tests that care about what was submitted have to look past
+// it rather than assume transaction zero is theirs.
+func nonSubsidyTransactions(b *Block) []Transaction {
+	var out []Transaction
+	for _, tx := range b.Transactions {
+		if tx != nil && tx.GetProtocol() == CoinbaseProtocolID {
+			continue
+		}
+		out = append(out, tx)
+	}
+	return out
+}
+
 // freeMessage builds a zero-fee MESSAGE transaction.
 //
 // A zero fee spends nothing, so the transaction needs no funding and replays
@@ -102,11 +118,14 @@ func TestEndToEndSubmitMineRestartAndRevalidate(t *testing.T) {
 		t.Fatal("the mined transaction is still in the mempool")
 	}
 
+	// A mined block carries the subsidy first, then the mempool's transactions.
 	mined := bc.GetLatestBlock()
-	if len(mined.Transactions) != 1 {
-		t.Fatalf("the mined block holds %d transactions, want 1", len(mined.Transactions))
+	payload := nonSubsidyTransactions(mined)
+	if len(payload) != 1 {
+		t.Fatalf("the mined block holds %d non-subsidy transactions, want 1",
+			len(payload))
 	}
-	if mined.Transactions[0].GetID() != message.GetID() {
+	if payload[0].GetID() != message.GetID() {
 		t.Fatal("the mined block does not contain the submitted transaction")
 	}
 
@@ -128,17 +147,19 @@ func TestEndToEndSubmitMineRestartAndRevalidate(t *testing.T) {
 		t.Fatalf("the reloaded head hash is %s, want %s -- block hashes must be "+
 			"stable across serialisation", head.Hash, minedHash)
 	}
-	if len(head.Transactions) != 1 {
-		t.Fatalf("the reloaded block holds %d transactions, want 1", len(head.Transactions))
+	reloadedPayload := nonSubsidyTransactions(head)
+	if len(reloadedPayload) != 1 {
+		t.Fatalf("the reloaded block holds %d non-subsidy transactions, want 1",
+			len(reloadedPayload))
 	}
-	if head.Transactions[0].GetID() != minedTxID {
+	if reloadedPayload[0].GetID() != minedTxID {
 		t.Fatalf("the reloaded transaction is %s, want %s",
-			head.Transactions[0].GetID(), minedTxID)
+			reloadedPayload[0].GetID(), minedTxID)
 	}
-	if head.Transactions[0].GetProtocol() != MessageProtocolID {
+	if reloadedPayload[0].GetProtocol() != MessageProtocolID {
 		t.Fatalf("the transaction came back as %s, not %s -- the protocol "+
 			"discriminator is what makes the interface decodable",
-			head.Transactions[0].GetProtocol(), MessageProtocolID)
+			reloadedPayload[0].GetProtocol(), MessageProtocolID)
 	}
 
 	// 4. Re-validate.

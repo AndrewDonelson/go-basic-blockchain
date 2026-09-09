@@ -308,6 +308,13 @@ func (bc *Blockchain) validateStandalone(block *Block) error {
 		}
 	}
 
+	// The subsidy amount is checked against the height schedule. Block.Validate
+	// confines a subsidy to one, first; this is where the chain's configuration
+	// is available to say how much it may be.
+	if err := bc.validateSubsidyLocked(block); err != nil {
+		return err
+	}
+
 	// The proof of work is NOT checked here.
 	//
 	// It depends on the parent's delay output, which this function does not have

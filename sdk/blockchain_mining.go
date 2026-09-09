@@ -260,9 +260,18 @@ func (bc *Blockchain) createNewBlock(difficulty int) {
 	blockDifficulty := bc.expectedDifficultyForNextLocked()
 	bc.mux.Unlock()
 
-	// The mempool already holds the real transactions, including the ones mirrored
-	// to the sidechain, so there is nothing to merge in from the router.
+	// The subsidy goes first, before the mempool's transactions.
+	//
+	// Position is a consensus rule rather than a convention: validation requires
+	// the subsidy to be transaction zero, which makes "at most one subsidy" a
+	// check on one element instead of a scan, and gives every block an
+	// unambiguous shape for anything reading it later.
 	allTransactions := queuedTransactions
+	if subsidy, err := bc.buildSubsidyTransaction(int64(nextBlockIndex), bc.cfg.MinerAddress); err != nil {
+		LogInfof("Could not build the block subsidy: %v", err)
+	} else if subsidy != nil {
+		allTransactions = append([]Transaction{subsidy}, queuedTransactions...)
+	}
 
 	newBlock := NewBlock(allTransactions, previousHash)
 	newBlock.Index = *big.NewInt(int64(nextBlockIndex))

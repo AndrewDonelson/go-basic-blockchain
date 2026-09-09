@@ -278,7 +278,8 @@ func (b *Block) Validate(previousBlock *Block) error {
 	if b.Header.Timestamp.After(time.Now()) {
 		return errors.New("block timestamp is in the future")
 	}
-	for _, tx := range b.Transactions {
+	subsidiesSeen := 0
+	for index, tx := range b.Transactions {
 		if tx == nil {
 			return errors.New("block contains a nil transaction")
 		}
@@ -290,19 +291,27 @@ func (b *Block) Validate(previousBlock *Block) error {
 		if err := tx.Validate(); err != nil {
 			return fmt.Errorf("invalid transaction: %w", err)
 		}
-		// Newly minted supply is a genesis-only event.
+		// A coinbase outside genesis is the block subsidy, and it is confined.
 		//
-		// The UTXO set credits a coinbase's TokenCount to its recipient and
-		// consumes nothing, and nothing used to restrict which block a coinbase
-		// could appear in. A peer could therefore mine an ordinary block
-		// containing a coinbase for the entire TokenCount, have it accepted, and
-		// mint the whole supply to itself out of nothing -- repeatably, once per
-		// block. This chain's supply is fixed and minted in block 0; miners are
-		// paid from transaction fees.
+		// Supply is created only in block 0. A later coinbase transfers the
+		// scheduled subsidy out of the emission reserve, so it cannot mint --
+		// which matters, because when a coinbase COULD mint and nothing
+		// restricted where it appeared, a peer could put one for the entire
+		// supply in an ordinary block and have it accepted, repeatably.
+		//
+		// Two rules here: at most one, and it must be first. The amount is
+		// checked against the height schedule in validateSubsidyLocked, which is
+		// where the chain's configuration is available.
 		if b.Index.Sign() != 0 && tx.GetProtocol() == CoinbaseProtocolID {
-			return fmt.Errorf(
-				"block %s contains a coinbase transaction (%s); supply is minted only in the genesis block",
-				b.Index.String(), tx.GetID())
+			if index != 0 {
+				return fmt.Errorf(
+					"block %s carries a subsidy at position %d; it must be the first transaction",
+					b.Index.String(), index)
+			}
+			if subsidiesSeen > 0 {
+				return fmt.Errorf("block %s carries more than one subsidy", b.Index.String())
+			}
+			subsidiesSeen++
 		}
 	}
 	if b.Hash != b.CalculateHash() {

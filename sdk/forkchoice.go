@@ -248,6 +248,10 @@ func (bc *Blockchain) validateBranchLocked(b branch) error {
 			return fmt.Errorf("block %s breaks the index sequence (expected %d)",
 				block.Index.String(), want)
 		}
+		if err := bc.validateSubsidyLocked(block); err != nil {
+			return fmt.Errorf("block %s in branch: %w", block.Index.String(), err)
+		}
+
 		// The proof of work is verified here, against this branch's own ancestry.
 		// A block whose parent had not arrived was left unchecked at acceptance
 		// -- there was nothing to chain its delay onto -- so this is where an

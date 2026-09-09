@@ -80,7 +80,7 @@ specific about which is which.
 | Dynamic difficulty | ✅ Working — retargets from chain history, validated per branch ([docs](docs/difficulty.md)) |
 | Mempool policy & block size | ✅ Working — fee-rate ordering, replace-by-fee, bounded mempool, capped blocks ([docs](docs/mempool.md)) |
 | Replay protection | ✅ Working — per-sender nonce sequencing, reorg-safe ([docs](docs/nonces.md)) |
-| Supply & miner rewards | ✅ Working — fixed supply, coinbase only in genesis, fees split to miner/dev ([docs](docs/supply.md)) |
+| Supply & miner rewards | ✅ Working — fixed supply, reserve-funded block subsidy, fees split to miner/platform ([docs](docs/supply.md)) |
 | Wallet recovery | ✅ Working — every wallet derives from a BIP-39 recovery phrase ([docs](docs/recovery.md)) |
 | Observability | ✅ Working — Prometheus `/metrics`, real hash rate ([docs](docs/metrics.md)) |
 | REST API TLS | ✅ Working — optional HTTPS with a modern profile ([docs](docs/api-tls.md)) |

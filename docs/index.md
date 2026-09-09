@@ -86,7 +86,7 @@ correctly, but does not yet form a network.
 | Dynamic difficulty | ✅ Working — retargets from chain history, validated per branch ([difficulty.md](difficulty.md)) |
 | Mempool policy | ✅ Working — fee-rate ordering, replace-by-fee, bounded, size-capped ([mempool.md](mempool.md)) |
 | Replay protection | ✅ Working — per-sender nonce sequencing ([nonces.md](nonces.md)) |
-| Supply & miner rewards | ✅ Working — fixed supply, genesis-only minting, fees split to miner/dev ([supply.md](supply.md)) |
+| Supply & miner rewards | ✅ Working — fixed supply, reserve-funded block subsidy, fee split ([supply.md](supply.md)) |
 | Wallet recovery | ✅ Working — every wallet derives from a BIP-39 phrase ([recovery.md](recovery.md)) |
 | Observability | ✅ Working — Prometheus /metrics, real hash rate ([metrics.md](metrics.md)) |
 | REST API TLS | ✅ Working — optional HTTPS, TLS 1.2 floor, forward-secret suites ([api-tls.md](api-tls.md)) |

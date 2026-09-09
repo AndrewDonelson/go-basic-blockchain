@@ -18,6 +18,13 @@ type Coinbase struct {
 	BlockTime        int
 	Difficulty       int
 	TransactionFee   float64
+	// SubsidyUnits is what this coinbase pays out of the emission reserve, and
+	// BlockHeight is the height that entitles it. Both are covered by the
+	// signing payload, and both are checked against the schedule -- a coinbase
+	// outside genesis that claims anything else is refused.
+	SubsidyUnits int64
+	BlockHeight  int64
+
 	MinerRewardPCT   float64
 	MinerAddress     string
 	DevRewardPCT     float64
@@ -44,6 +51,8 @@ func (c *Coinbase) MarshalJSON() ([]byte, error) {
 	w.TokenCount = c.TokenCount
 	w.TokenPrice = c.TokenPrice
 	w.AllowNewTokens = c.AllowNewTokens
+	w.SubsidyUnits = c.SubsidyUnits
+	w.BlockHeight = c.BlockHeight
 	return json.Marshal(w)
 }
 
@@ -67,6 +76,10 @@ func (c *Coinbase) UnmarshalJSON(data []byte) error {
 	c.TokenCount = w.TokenCount
 	c.TokenPrice = w.TokenPrice
 	c.AllowNewTokens = w.AllowNewTokens
+	// Without these the subsidy would be zero after a reload, so a block that was
+	// valid when mined would fail validation when read back from disk.
+	c.SubsidyUnits = w.SubsidyUnits
+	c.BlockHeight = w.BlockHeight
 	return nil
 }
 
@@ -116,6 +129,11 @@ func (c *Coinbase) Process() string {
 // SigningBytes includes the chain parameters a coinbase commits to.
 func (c *Coinbase) SigningBytes() ([]byte, error) {
 	fields := c.Tx.signingFields()
+	// The subsidy amount and its height are signed. They are also checked against
+	// the schedule, but leaving them unsigned would mean the value the signature
+	// covers and the value the chain pays could differ.
+	fields["subsidy_units"] = c.SubsidyUnits
+	fields["block_height"] = c.BlockHeight
 	fields["token_count"] = c.TokenCount
 	fields["token_price"] = c.TokenPrice
 	fields["miner_address"] = c.MinerAddress

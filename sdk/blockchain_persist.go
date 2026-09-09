@@ -140,12 +140,41 @@ func (bc *Blockchain) createBlockchain() error {
 	bc.cfg.MinerAddress = minerWallet.GetAddress()
 	LogVerbosef("Miner wallet created: %s (password: %s)", bc.cfg.MinerAddress, minerWalletPW)
 
+	// The supply is split at genesis between an emission reserve and the founder
+	// allocation. Every later block's subsidy is a transfer out of the reserve,
+	// so the total never changes -- see sdk/subsidy.go for why that is preferred
+	// to minting.
+	// The reserve is an address with no keypair behind it -- see
+	// DeriveReserveAddress. Nothing can sign for it, so the subsidy schedule is
+	// the only way coins leave.
+	if bc.cfg.ReserveAddress == "" {
+		bc.cfg.ReserveAddress = DeriveReserveAddress(bc.cfg.BlockchainName)
+	}
+	reserveStub := addressOnlyWallet(bc.cfg.ReserveAddress)
+	LogVerbosef("Emission reserve address: %s", bc.cfg.ReserveAddress)
+
+	reserveShare := bc.cfg.ReserveAllocationPCT
+	if reserveShare < 0 || reserveShare > 100 {
+		reserveShare = defaultReserveAllocationPCT
+	}
+	reserveTokens := int64(float64(bc.cfg.TokenCount) * reserveShare / 100.0)
+	founderTokens := bc.cfg.TokenCount - reserveTokens
+
 	cbTX, err := NewCoinbaseTransaction(devWallet, devWallet, bc.cfg)
 	if err != nil {
 		return err
 	}
+	cbTX.TokenCount = founderTokens
 
-	err = devWallet.SetData("balance", bc.cfg.TokenCount)
+	// Minted TO the reserve by the founder's coinbase: the reserve cannot sign,
+	// so it cannot be the sender.
+	reserveTX, err := NewCoinbaseTransaction(devWallet, reserveStub, bc.cfg)
+	if err != nil {
+		return err
+	}
+	reserveTX.TokenCount = reserveTokens
+
+	err = devWallet.SetData("balance", founderTokens)
 	if err != nil {
 		return err
 	}
@@ -154,9 +183,17 @@ func (bc *Blockchain) createBlockchain() error {
 	if err != nil {
 		return err
 	}
-	LogVerbosef("Coinbase transaction created: %d tokens allocated", cbTX.TokenCount)
+	LogVerbosef("Coinbase transaction created: %d tokens allocated to the founder",
+		cbTX.TokenCount)
 
-	genesisTxs = append(genesisTxs, cbTX)
+	reserveTX.Signature, err = reserveTX.Sign([]byte(devWallet.PrivatePEM()))
+	if err != nil {
+		return err
+	}
+	LogInfof("Emission reserve funded with %d tokens; the schedule will pay out %s",
+		reserveTX.TokenCount, formatUnits(bc.TotalEmission().Int64()))
+
+	genesisTxs = append(genesisTxs, cbTX, reserveTX)
 
 	bankTX, err := NewBankTransaction(devWallet, minerWallet, bc.cfg.FundWalletAmount)
 	if err != nil {

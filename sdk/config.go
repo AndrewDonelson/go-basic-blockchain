@@ -54,8 +54,15 @@ type Config struct {
 	AllowedPeers      []string // If non-empty, only these node IDs may connect
 	DifficultyWindow  int      // Blocks between difficulty retargets
 	MaxMempoolTxs     int      // Maximum transactions held in the mempool
-	promptUpdate      bool
-	testing           bool
+
+	// Block subsidy. Paid out of the emission reserve rather than minted, so the
+	// supply stays fixed; see sdk/subsidy.go.
+	InitialBlockSubsidy    float64 // First-era reward, in tokens
+	SubsidyHalvingInterval int     // Blocks per halving era
+	ReserveAddress         string  // Address the subsidy is paid from
+	ReserveAllocationPCT   float64 // Share of TokenCount held back for emission
+	promptUpdate           bool
+	testing                bool
 }
 
 // NewConfig creates a new configuration object with default values.
@@ -130,6 +137,10 @@ func (c *Config) setDefaultValues() {
 	c.MinTransactionFee = minTransactionFee
 	c.DifficultyWindow = defaultDifficultyWindow
 	c.MaxMempoolTxs = defaultMaxMempoolTxs
+	c.InitialBlockSubsidy = defaultInitialSubsidy
+	c.SubsidyHalvingInterval = defaultSubsidyHalvingInterval
+	c.ReserveAddress = DeriveReserveAddress(c.BlockchainName)
+	c.ReserveAllocationPCT = defaultReserveAllocationPCT
 }
 
 // loadFromEnv loads configuration values from environment variables.
@@ -204,6 +215,10 @@ func (c *Config) loadFromEnv() {
 		c.AllowedPeers = getEnvAsList("P2P_ALLOWED_PEERS", c.AllowedPeers)
 		c.DifficultyWindow = getEnvAsInt("DIFFICULTY_WINDOW", c.DifficultyWindow)
 		c.MaxMempoolTxs = getEnvAsInt("MAX_MEMPOOL_TXS", c.MaxMempoolTxs)
+		c.InitialBlockSubsidy = getEnvAsFloat("INITIAL_BLOCK_SUBSIDY", c.InitialBlockSubsidy)
+		c.SubsidyHalvingInterval = getEnvAsInt("SUBSIDY_HALVING_INTERVAL", c.SubsidyHalvingInterval)
+		c.ReserveAddress = getEnv("RESERVE_ADDRESS", c.ReserveAddress)
+		c.ReserveAllocationPCT = getEnvAsFloat("RESERVE_ALLOCATION_PCT", c.ReserveAllocationPCT)
 	}
 }
 
@@ -262,6 +277,15 @@ func (c *Config) Validate() error {
 	}
 	if c.MaxMempoolTxs < 0 {
 		problems = append(problems, "max mempool transactions cannot be negative")
+	}
+	if c.InitialBlockSubsidy < 0 {
+		problems = append(problems, "initial block subsidy cannot be negative")
+	}
+	if c.SubsidyHalvingInterval < 0 {
+		problems = append(problems, "subsidy halving interval cannot be negative")
+	}
+	if c.ReserveAllocationPCT < 0 || c.ReserveAllocationPCT > 100 {
+		problems = append(problems, "reserve allocation percentage must be between 0 and 100")
 	}
 
 	if c.DifficultyWindow < 0 {
@@ -368,6 +392,9 @@ func (c *Config) Show() {
 	log.Printf("- Data Path: %s\n", c.DataPath)
 	log.Printf("- Max Block Size: %d bytes\n", c.MaxBlockSize)
 	log.Printf("- Max Mempool Txs: %d\n", c.MaxMempoolTxs)
+	log.Printf("- Initial Block Subsidy: %.2f\n", c.InitialBlockSubsidy)
+	log.Printf("- Subsidy Halving Interval: %d blocks\n", c.SubsidyHalvingInterval)
+	log.Printf("- Reserve Allocation: %.2f%%\n", c.ReserveAllocationPCT)
 	log.Printf("- Min Transaction Fee: %.2f\n", c.MinTransactionFee)
 	log.Printf("- Is Seed Node: %v\n", c.IsSeed)
 	log.Printf("- Seed Address: %s\n", c.SeedAddress)

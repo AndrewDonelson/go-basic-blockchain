@@ -45,7 +45,69 @@ checks.
 
 ---
 
-## 🚫 Why there is no block subsidy
+## 💰 The block subsidy
+
+Miners are paid a **block subsidy out of a finite emission reserve**, plus their
+share of transaction fees.
+
+### It is paid from a reserve, not minted
+
+The obvious way to pay miners is to let each block create coins. This chain does
+not, for two reasons.
+
+**The supply is fixed and publishers hold it.** A platform token whose quantity
+changes under its holders is a different product from one whose quantity does not,
+and predictability is worth more here than an elegant emission curve.
+
+**And it bounds the damage from a mistake.** A minting subsidy is only as safe as
+the check on its amount — get that wrong and the chain inflates without limit,
+which is exactly the hole that once let any block mint the entire supply. A
+subsidy that *moves* coins out of a reserve cannot create any, whatever the
+schedule says. The amount check is still there; it is simply no longer the only
+thing between the chain and unbounded inflation.
+
+### The reserve has no private key
+
+`DeriveReserveAddress` is the hash of a domain string, not of a public key, so no
+keypair produces it and nobody can sign a transfer out of it. The only way coins
+leave is the subsidy, whose amount consensus fixes by height and whose recipient
+is the block's miner.
+
+A reserve behind a real wallet would put the entire remaining emission behind one
+secret. On a chain publishers depend on, that is not a risk worth carrying for the
+convenience of a signature nobody needs.
+
+### The schedule
+
+| | |
+|---|---|
+| `INITIAL_BLOCK_SUBSIDY` | 50 tokens |
+| `SUBSIDY_HALVING_INTERVAL` | 210,000 blocks |
+| `RESERVE_ALLOCATION_PCT` | 63% of `TOKEN_COUNT` |
+
+The series `50 × 210,000 × (1 + ½ + ¼ + …)` converges to **21,000,000** tokens
+over the life of the chain. The reserve holds 21,139,292 — the schedule fits, with
+a little spare. `TestTotalEmissionFitsTheReserve` checks that relationship rather
+than trusting the arithmetic in this table.
+
+Genesis splits `TOKEN_COUNT` between the reserve and the founder allocation. Total
+supply never changes afterwards.
+
+### The rules a subsidy must satisfy
+
+- **At most one per block, and it must be first.** Position is a consensus rule:
+  it makes "at most one" a check on a single element rather than a scan, and gives
+  every block an unambiguous shape.
+- **The amount must equal `BlockSubsidyUnits(height)` exactly** — a pure function
+  of height, so every node computes the same answer and can check rather than
+  trust.
+- **It must be drawn from the reserve**, and it must declare its own height.
+
+When the reserve empties the subsidy becomes zero and miners are on transaction
+fees alone. That is the steady state the schedule exists to bridge to, not a
+failure.
+
+## 🚫 Why the subsidy does not mint
 
 `Block.CalculateBlockReward` exists and implements Bitcoin-style halving:
 
@@ -54,21 +116,14 @@ halvings := currentBlockHeight / BlockRewardHalvingInterval
 return InitialBlockReward * math.Pow(0.5, float64(halvings))
 ```
 
-**It is deliberately not wired into consensus.** Paying it would mint new coins
-per block, which contradicts the two things the configuration actually says:
+It is superseded by `Blockchain.BlockSubsidyUnits`, which is the value consensus
+actually enforces. The older helper returns a float and knows nothing about the
+reserve; it is kept because the course refers to it.
 
-- `TOKEN_COUNT` is a fixed supply (33,554,432), minted in full at genesis
-- `AllowNewTokens` is `false`
-
-Adding a subsidy would mean choosing a different monetary policy, not filling in
-a gap. The function is kept because it is a clear worked example of halving for
-readers of the course, and its tests document the schedule — but nothing in block
-production or validation calls it.
-
-If you *did* want a subsidy, the work is not "call this function": you would need
-a consensus rule fixing the exact permitted amount per height, or every node
-would disagree about which blocks are valid — and an unvalidated amount is the
-same hole described at the top of this page.
+The concern that left it unwired still holds, and is why the current subsidy is
+built the way it is: an unvalidated per-block amount is the same hole described at
+the top of this page. The answer was a consensus rule fixing the amount by height
+**and** a finite reserve behind it, so that even a flawed rule cannot inflate.
 
 ---
 
