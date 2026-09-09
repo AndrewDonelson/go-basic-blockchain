@@ -68,6 +68,11 @@ type Blockchain struct {
 	menuActive bool
 	menuMutex  sync.RWMutex
 
+	// blockIndex holds every block we have seen, on the main chain or not, keyed
+	// by hash. Fork choice walks it to assemble a candidate branch, so a block
+	// arriving out of order is retained rather than discarded.
+	blockIndex map[string]*Block
+
 	// Network announcement hooks. These let the P2P layer relay blocks and
 	// transactions without the chain package depending on it.
 	announceBlock func(*Block)
@@ -381,6 +386,7 @@ func (bc *Blockchain) GenerateGenesisBlock(txs []Transaction) {
 
 		genesisBlock := NewBlock(txs, "")
 		genesisBlock.Index = *big.NewInt(0)
+		genesisBlock.Header.Difficulty = uint32(genesisDifficulty)
 
 		mined, err := bc.Mine(genesisBlock, 1)
 		if err != nil {
@@ -691,6 +697,15 @@ func (bc *Blockchain) mineWithHelios(block *Block, difficulty int) (*Block, erro
 	return block, nil
 }
 
+// blockDifficulty returns the difficulty a block declares, falling back to the
+// chain default for blocks written before the field was populated.
+func blockDifficulty(block *Block, fallback int) int {
+	if block != nil && block.Header.Difficulty > 0 {
+		return int(block.Header.Difficulty)
+	}
+	return fallback
+}
+
 // verifyHeliosProof checks a block's stored Helios proof against its header and
 // the target difficulty.
 func (bc *Blockchain) verifyHeliosProof(block *Block, difficulty int) error {
@@ -830,13 +845,21 @@ func (bc *Blockchain) createNewBlock(difficulty int) {
 
 	newBlock := NewBlock(allTransactions, previousHash)
 	newBlock.Index = *big.NewInt(int64(nextBlockIndex))
+	// Stamp the difficulty this block is actually mined at.
+	//
+	// Header.Difficulty used to be left at the InitialDifficulty constant while
+	// verification used cfg.Difficulty, so the field was decorative and disagreed
+	// with the work done. Fork choice weighs branches by the work their blocks
+	// claim, so that work has to come from the block itself.
+	newBlock.Header.Difficulty = uint32(bc.cfg.Difficulty)
+	newBlock.Header.MerkleRoot = newBlock.CalculateMerkleRoot()
 
 	// Show block progress
 	if bc.progressIndicator != nil {
 		bc.progressIndicator.ShowBlockProgress(int(newBlock.Index.Int64()), len(allTransactions))
 	}
 
-	minedBlock, err := bc.Mine(newBlock, difficulty)
+	minedBlock, err := bc.Mine(newBlock, int(newBlock.Header.Difficulty))
 	if err != nil {
 		// Mining failed, so there is no block. Return the transactions to the
 		// mempool rather than losing them: previously the unmined block was
@@ -924,58 +947,223 @@ func (bc *Blockchain) HasTransactionID(id string) bool {
 	return false
 }
 
-// AcceptBlock validates a block received from a peer and appends it if it extends
-// the current head.
+// AcceptBlock validates a block received from a peer and adds it to the chain.
 //
-// Fork choice and reorganisation are deliberately out of scope here: a block that
-// does not extend the current head is refused rather than silently accepted. The
-// /consensus/block endpoint previously answered {"accepted":true} for any payload
-// at all, without inspecting it.
+// Three outcomes:
+//
+//  1. It extends the current head -- appended directly.
+//  2. It belongs to a branch whose cumulative work exceeds ours -- the chain is
+//     reorganised onto that branch.
+//  3. It is valid but on a lighter branch, or its parent is unknown -- retained
+//     in the block index and reported. Nothing is discarded, because a later
+//     block may make that branch the heaviest.
+//
+// This used to accept only blocks that extended the head and refuse everything
+// else, so two nodes that mined simultaneously diverged permanently.
 func (bc *Blockchain) AcceptBlock(block *Block) error {
+	_, err := bc.AcceptBlockWithResult(block)
+	return err
+}
+
+// AcceptBlockWithResult is AcceptBlock, reporting what it did.
+func (bc *Blockchain) AcceptBlockWithResult(block *Block) (ReorgResult, error) {
+	var result ReorgResult
+
 	if block == nil {
-		return errors.New("block is nil")
+		return result, errors.New("block is nil")
 	}
+
+	// Standalone validation happens outside the lock: verifying the proof of work
+	// re-runs the memory-hard phase, and holding the chain lock for that would
+	// stall mining and every reader.
+	if err := bc.validateStandalone(block); err != nil {
+		return result, err
+	}
+
+	result, disconnected, connected, err := bc.acceptBlockLocked(block)
+	if err != nil {
+		return result, err
+	}
+
+	// Mempool restoration takes the lock itself, so it runs after acceptBlockLocked
+	// has released it.
+	if len(disconnected) > 0 {
+		result.RestoredTransactions = bc.restoreDisconnectedTransactions(disconnected, connected)
+		if result.RestoredTransactions > 0 {
+			LogInfof("Returned %d transactions to the mempool after reorganisation",
+				result.RestoredTransactions)
+		}
+	}
+
+	return result, nil
+}
+
+// acceptBlockLocked performs the chain mutation. It returns the disconnected and
+// connected blocks so the caller can restore the mempool without the lock.
+func (bc *Blockchain) acceptBlockLocked(block *Block) (ReorgResult, []*Block, []*Block, error) {
+	var result ReorgResult
 
 	bc.mux.Lock()
-	head := (*Block)(nil)
-	if len(bc.Blocks) > 0 {
-		head = bc.Blocks[len(bc.Blocks)-1]
-	}
-	expectedIndex := int64(bc.NextBlockIndex)
-	bc.mux.Unlock()
+	defer bc.mux.Unlock()
 
-	if head == nil {
-		return errors.New("cannot accept a block before the genesis block exists")
+	if len(bc.Blocks) == 0 {
+		return result, nil, nil, errors.New("cannot accept a block before the genesis block exists")
 	}
 
-	if block.Index.Int64() != expectedIndex {
-		return fmt.Errorf("block index %s does not extend the current head (expected %d)",
-			block.Index.String(), expectedIndex)
+	bc.indexMainChainLocked()
+
+	if _, known := bc.blockIndex[block.Hash]; known {
+		return result, nil, nil, ErrKnownBlock
 	}
 
-	if err := block.Validate(head); err != nil {
-		return fmt.Errorf("block validation failed: %w", err)
+	head := bc.Blocks[len(bc.Blocks)-1]
+
+	// Fast path: the block extends the head.
+	if block.Header.PreviousHash == head.Hash {
+		if want := head.Index.Int64() + 1; block.Index.Int64() != want {
+			return result, nil, nil, fmt.Errorf("block index %s does not follow the head (expected %d)",
+				block.Index.String(), want)
+		}
+		if err := block.Validate(head); err != nil {
+			return result, nil, nil, fmt.Errorf("block validation failed: %w", err)
+		}
+
+		bc.Blocks = append(bc.Blocks, block)
+		bc.CurrentBlockIndex = int(block.Index.Int64())
+		bc.NextBlockIndex = bc.CurrentBlockIndex + 1
+		bc.rememberBlockLocked(block)
+
+		if err := bc.TXLookup.Add(block); err != nil {
+			LogInfof("Error adding accepted block to TXLookup: %v", err)
+		}
+		if err := block.save(); err != nil {
+			return result, nil, nil, fmt.Errorf("failed to persist accepted block: %w", err)
+		}
+
+		bc.removeMinedTransactionsLocked(block)
+
+		result.Extended = true
+		result.Connected = 1
+		return result, nil, nil, bc.saveLocked()
+	}
+
+	// Otherwise the block is on some other branch. Keep it either way: even a
+	// lighter branch may later be extended past ours.
+	bc.rememberBlockLocked(block)
+
+	candidate, err := bc.assembleBranchLocked(block)
+	if err != nil {
+		return result, nil, nil, err
+	}
+
+	currentWork := ChainWork(bc.Blocks)
+	candidateWork := new(big.Int).Add(
+		ChainWork(bc.Blocks[:candidate.forkAt+1]),
+		ChainWork(candidate.blocks),
+	)
+
+	if candidateWork.Cmp(currentWork) <= 0 {
+		// Ties keep the chain we already have. Switching on equal work would make
+		// nodes flip-flop between branches with every arriving block.
+		return result, nil, nil, fmt.Errorf("%w (branch %s vs chain %s)",
+			ErrWeakerBranch, candidateWork.String(), currentWork.String())
+	}
+
+	disconnected, err := bc.reorganiseLocked(candidate)
+	if err != nil {
+		return result, nil, nil, err
+	}
+
+	// Reindex transactions for the branch we switched to.
+	for _, connected := range candidate.blocks {
+		if err := bc.TXLookup.Add(connected); err != nil {
+			LogInfof("Error indexing reorganised block %s: %v", connected.Index.String(), err)
+		}
+		bc.removeMinedTransactionsLocked(connected)
+	}
+
+	staleAbove := int(bc.Blocks[len(bc.Blocks)-1].Index.Int64()) + 1
+	if err := bc.persistChainFrom(candidate.blocks, staleAbove); err != nil {
+		LogInfof("Error persisting reorganised chain: %v", err)
+	}
+
+	result.Reorganised = true
+	result.ForkHeight = candidate.forkAt
+	result.Disconnected = len(disconnected)
+	result.Connected = len(candidate.blocks)
+
+	LogInfof("Chain reorganised at height %d: -%d blocks, +%d blocks (work %s -> %s)",
+		candidate.forkAt, len(disconnected), len(candidate.blocks),
+		currentWork.String(), candidateWork.String())
+
+	if err := bc.saveLocked(); err != nil {
+		LogInfof("Error saving blockchain state after reorganisation: %v", err)
+	}
+
+	return result, disconnected, candidate.blocks, nil
+}
+
+// validateStandalone checks everything about a block that does not depend on
+// where it sits in the chain.
+func (bc *Blockchain) validateStandalone(block *Block) error {
+	if block.Hash == "" {
+		return errors.New("block has no hash")
+	}
+	if block.Hash != block.CalculateHash() {
+		return errors.New("block hash does not match its header")
+	}
+
+	// Read the header field directly rather than through blockDifficulty(), whose
+	// fallback exists for blocks already on our chain that predate the field.
+	// Applying that fallback here would let a peer send difficulty 0 and have it
+	// silently promoted to the chain default -- bypassing the floor entirely.
+	declared := int(block.Header.Difficulty)
+	if declared < minAcceptableDifficulty {
+		// Fork choice weighs work, so a branch of trivially mined blocks must not
+		// be able to outweigh honest work by being long.
+		return fmt.Errorf("block difficulty %d is below the minimum of %d",
+			declared, minAcceptableDifficulty)
+	}
+
+	for _, tx := range block.Transactions {
+		if tx == nil {
+			return errors.New("block contains a nil transaction")
+		}
+		if err := tx.Validate(); err != nil {
+			return fmt.Errorf("invalid transaction %s: %w", tx.GetID(), err)
+		}
 	}
 
 	if bc.useHeliosMining {
-		if err := bc.verifyHeliosProof(block, bc.cfg.Difficulty); err != nil {
+		if err := bc.verifyHeliosProof(block, declared); err != nil {
 			return fmt.Errorf("proof-of-work validation failed: %w", err)
 		}
 	}
 
-	if err := bc.TXLookup.Add(block); err != nil {
-		LogInfof("Error adding accepted block to TXLookup: %v", err)
-	}
-	if err := block.save(); err != nil {
-		return fmt.Errorf("failed to persist accepted block: %w", err)
+	return nil
+}
+
+// removeMinedTransactionsLocked drops from the mempool anything now in a block.
+func (bc *Blockchain) removeMinedTransactionsLocked(block *Block) {
+	if len(bc.TransactionQueue) == 0 || len(block.Transactions) == 0 {
+		return
 	}
 
-	bc.mux.Lock()
-	defer bc.mux.Unlock()
-	bc.Blocks = append(bc.Blocks, block)
-	bc.CurrentBlockIndex = int(block.Index.Int64())
-	bc.NextBlockIndex = bc.CurrentBlockIndex + 1
-	return bc.saveLocked()
+	mined := map[string]struct{}{}
+	for _, tx := range block.Transactions {
+		if tx != nil {
+			mined[tx.GetID()] = struct{}{}
+		}
+	}
+
+	remaining := bc.TransactionQueue[:0]
+	for _, tx := range bc.TransactionQueue {
+		if _, ok := mined[tx.GetID()]; ok {
+			continue
+		}
+		remaining = append(remaining, tx)
+	}
+	bc.TransactionQueue = remaining
 }
 
 // GetLatestBlock returns the latest block in the blockchain.
@@ -1148,7 +1336,7 @@ func (bc *Blockchain) ValidateChain() error {
 		// Verify the proof of work. ValidateChain previously checked hash linkage
 		// and transaction validity but never that any work had been done.
 		if bc.useHeliosMining {
-			if err := bc.verifyHeliosProof(currentBlock, bc.cfg.Difficulty); err != nil {
+			if err := bc.verifyHeliosProof(currentBlock, blockDifficulty(currentBlock, bc.cfg.Difficulty)); err != nil {
 				return fmt.Errorf("invalid proof of work at block %d: %v", i, err)
 			}
 		}

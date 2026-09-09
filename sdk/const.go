@@ -16,13 +16,21 @@ const (
 	// Blockchain Parameters
 	blockTimeInSec        = 20
 	proofOfWorkDifficulty = 2
-	transactionFee        = 0.05    // 5 hundredths of a coin (a nickel-ish)
-	minTransactionFee     = 0.01    // Minimum transaction fee
-	minerRewardPCT        = 50.0    // Miner reward is 50% of the transaction fee
-	devRewardPCT          = 50.0    // Developer reward is 50% of the transaction fee
-	MaxBlockSize          = 1000000 // Maximum block size in bytes (1MB)
-	MaxMessageLength      = 4096    // Maximum MESSAGE protocol body length in bytes
-	indexCacheSize        = 65536   // Size of the block/transaction index cache (1,572,864 bytes or 1.5 MB)
+	// genesisDifficulty is the difficulty stamped on the genesis block.
+	genesisDifficulty = 1
+	// minAcceptableDifficulty is the lowest difficulty a block may declare.
+	// Without a floor, a peer could present a long branch of trivially mined
+	// blocks; fork choice weighs work, so cheap blocks must be refused outright.
+	minAcceptableDifficulty = 1
+	// maxReorgDepth bounds how far back a reorganisation may rewrite history.
+	maxReorgDepth     = 100
+	transactionFee    = 0.05    // 5 hundredths of a coin (a nickel-ish)
+	minTransactionFee = 0.01    // Minimum transaction fee
+	minerRewardPCT    = 50.0    // Miner reward is 50% of the transaction fee
+	devRewardPCT      = 50.0    // Developer reward is 50% of the transaction fee
+	MaxBlockSize      = 1000000 // Maximum block size in bytes (1MB)
+	MaxMessageLength  = 4096    // Maximum MESSAGE protocol body length in bytes
+	indexCacheSize    = 65536   // Size of the block/transaction index cache (1,572,864 bytes or 1.5 MB)
 
 	// Token Related
 	tokenCount       = 33554432

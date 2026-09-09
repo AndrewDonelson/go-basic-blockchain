@@ -74,7 +74,7 @@ specific about which is which.
 | Chain synchronisation | ✅ Working — pull from longer peers, push mined blocks ([docs](docs/sync.md)) |
 | Transaction propagation | ✅ Working — relayed transactions are signature-verified |
 | Peer authentication | ❌ Not implemented — any host may claim any node ID; transport is plaintext |
-| Fork choice / reorganisation | ❌ Not implemented — a block that does not extend the head is refused |
+| Fork choice / reorganisation | ✅ Working — heaviest-chain by cumulative work ([docs](docs/forkchoice.md)) |
 | UTXO / account state model | ❌ Not implemented — balances are derived by scanning the chain |
 
 - **Test Coverage:** 57.0% (`sdk`); 89.8% / 94.4% / 85.2% / 96.8% across the Helios packages

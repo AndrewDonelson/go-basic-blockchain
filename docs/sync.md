@@ -90,14 +90,13 @@ message may exceed 1 MiB. Reads have deadlines.
 
 ## 🚧 What this is not
 
-**There is still no fork choice.** `AcceptBlock` only accepts blocks that extend
-the current head. A peer on a competing fork of equal or greater length is
-recorded in `SyncResult.Skipped` and otherwise ignored; the node does **not**
-compare cumulative work, keep an orphan pool, or roll back.
+**Fork choice is implemented** — see [Fork Choice & Reorganisation](forkchoice.md).
+When `AcceptBlock` reports an orphan, the download rewinds by 16 blocks (up to 8
+times) to walk back to the fork point, so the branch's earlier blocks arrive and
+fork choice can weigh the whole thing.
 
-The practical consequence: two nodes that mine simultaneously diverge, and the
-divergence is permanent. Sync closes gaps; it does not resolve competing
-histories. That is the next piece of work.
+**There is no finality.** Any block within 100 of the head can be reorganised
+away.
 
 **There is no peer authentication.** Any host may claim any node ID, and the
 transport is plaintext. Do not expose a node to an untrusted network.

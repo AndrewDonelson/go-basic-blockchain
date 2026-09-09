@@ -30,6 +30,16 @@ const (
 	// maxSyncBatchSize caps what a peer may ask us for in a single request, so a
 	// remote caller cannot request the entire chain in one allocation.
 	maxSyncBatchSize = 512
+
+	// syncRewindStep is how far back to restart a download when a peer's blocks
+	// turn out to belong to a branch we do not have. Fork choice needs the
+	// branch's earlier blocks before it can weigh it against our chain.
+	syncRewindStep = 16
+
+	// maxSyncRewinds bounds how far back one pass will walk looking for a fork
+	// point, so a peer on a wildly different history cannot make us download
+	// indefinitely.
+	maxSyncRewinds = 8
 )
 
 // ErrGenesisMismatch is returned when a peer is on a different network.
@@ -280,8 +290,17 @@ func (s *Syncer) selectBestPeer(ctx context.Context, peers []PeerRef, skipped ma
 }
 
 // downloadFrom pulls blocks from one peer until we reach its height.
+//
+// When a block turns out to be an orphan -- its parent is on a branch we do not
+// have -- the download rewinds and requests earlier blocks, so fork choice gets
+// the whole branch and can weigh it. Without the rewind a node could never follow
+// a reorganisation: it would keep asking from its own height and keep receiving
+// blocks whose parents it was missing.
 func (s *Syncer) downloadFrom(ctx context.Context, peer PeerRef, status ChainStatus, skipped map[string]string) (int, error) {
 	applied := 0
+	rewinds := 0
+	// nextOverride forces the next request to start at a specific index.
+	nextOverride := -1
 
 	for {
 		if err := ctx.Err(); err != nil {
@@ -289,6 +308,13 @@ func (s *Syncer) downloadFrom(ctx context.Context, peer PeerRef, status ChainSta
 		}
 
 		next := s.chain.Height() + 1
+		if nextOverride >= 0 {
+			next = nextOverride
+			nextOverride = -1
+		}
+		if next < 0 {
+			next = 0
+		}
 		if next > status.Height {
 			return applied, nil // caught up
 		}
@@ -312,20 +338,58 @@ func (s *Syncer) downloadFrom(ctx context.Context, peer PeerRef, status ChainSta
 			return applied, nil
 		}
 
+		progressed := false
 		for _, block := range blocks {
 			if block == nil {
 				skipped[peer.ID] = "peer sent a nil block"
 				return applied, fmt.Errorf("peer %s sent a nil block", peer.ID)
 			}
 
-			if err := s.chain.AcceptBlock(block); err != nil {
-				// A rejected block ends the download. Either the peer is on a fork
-				// we cannot follow, or it is sending invalid blocks; in both cases
-				// continuing would be wrong.
+			err := s.chain.AcceptBlock(block)
+			switch {
+			case err == nil:
+				applied++
+				progressed = true
+
+			case errors.Is(err, ErrKnownBlock), errors.Is(err, ErrWeakerBranch):
+				// Already have it, or it sits on a branch that does not beat ours.
+				// Both are normal while walking back to a fork point.
+				progressed = true
+
+			case errors.Is(err, ErrOrphanBlock):
+				// The parent is on a branch we do not have. Rewind and fetch the
+				// branch's earlier blocks so fork choice can see the whole thing.
+				if rewinds >= maxSyncRewinds {
+					skipped[peer.ID] = fmt.Sprintf("gave up looking for a fork point after %d rewinds", rewinds)
+					return applied, fmt.Errorf("no common ancestor with %s within %d blocks",
+						peer.ID, maxSyncRewinds*syncRewindStep)
+				}
+				rewinds++
+
+				rewindTo := int(block.Index.Int64()) - syncRewindStep
+				if rewindTo < 0 {
+					rewindTo = 0
+				}
+				nextOverride = rewindTo
+				LogVerbosef("Orphan block %s from %s; rewinding to %d",
+					block.Index.String(), peer.ID, rewindTo)
+				progressed = true
+
+			default:
 				skipped[peer.ID] = fmt.Sprintf("block %s rejected: %v", block.Index.String(), err)
 				return applied, fmt.Errorf("applying block %s from %s: %w", block.Index.String(), peer.ID, err)
 			}
-			applied++
+
+			if nextOverride >= 0 {
+				break // restart the download from the rewind point
+			}
+		}
+
+		if !progressed && nextOverride < 0 {
+			// Nothing was applied and nothing was rewound: without this the loop
+			// would request the same range forever.
+			skipped[peer.ID] = "made no progress against this peer"
+			return applied, nil
 		}
 	}
 }
