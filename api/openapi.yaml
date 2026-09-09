@@ -419,10 +419,20 @@ paths:
                   items: { type: string }
       responses:
         '201':
-          description: Created
+          description: |
+            Created. The `mnemonic` is returned here and nowhere else -- it is
+            never stored, so this response is the only chance to keep it.
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/Wallet' }
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Wallet'
+                  - type: object
+                    properties:
+                      mnemonic:
+                        type: string
+                        description: BIP-39 recovery phrase; shown once, never stored.
+                      warning: { type: string }
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
 

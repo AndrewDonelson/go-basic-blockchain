@@ -107,9 +107,15 @@ func NewBlockchain(cfg *Config) *Blockchain {
 		utxos:             NewUTXOSet(),
 		progressIndicator: progress.NewProgressIndicator(),
 	}
-	if n := GetNode(); n != nil && n.ProgressIndicator != nil {
-		bc.progressIndicator = n.ProgressIndicator
-	}
+	// The progress indicator is NOT looked up from the global node here.
+	//
+	// It used to be, and that silently broke when construction stopped going
+	// through the global: newNode builds the blockchain before registering
+	// itself, so GetNode() returned nil, the blockchain kept the indicator it
+	// made for itself, and the node had a second one. Both rendered to the same
+	// terminal, so the status line alternated between real numbers and a
+	// permanently empty "Blk:0/0 Up:0s". The node now injects its own -- see
+	// SetProgressIndicator.
 
 	// Initialize Helios components
 	heliosConfig := algorithm.TestHeliosConfig() // Use test config for faster mining

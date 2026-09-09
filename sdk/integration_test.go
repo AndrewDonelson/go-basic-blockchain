@@ -380,3 +380,48 @@ func TestEndToEndNodeLifecycle(t *testing.T) {
 		t.Fatal("Shutdown did not return; a node that cannot stop cannot flush state")
 	}
 }
+
+// TestNodeAndChainShareOneProgressIndicator.
+//
+// NewBlockchain used to adopt the node's indicator via GetNode(). That broke
+// silently when construction stopped going through the global: newNode builds
+// the chain before registering itself, so the lookup returned nil, the chain
+// kept the indicator it made for itself, and the node had a second one. Both
+// render to stdout, so the status line alternated between real numbers and a
+// permanently empty "Blk:0/0 Up:0s".
+func TestNodeAndChainShareOneProgressIndicator(t *testing.T) {
+	n := newTestNode(t)
+
+	if n.ProgressIndicator == nil {
+		t.Fatal("the node has no progress indicator")
+	}
+	if n.Blockchain.GetProgressIndicator() != n.ProgressIndicator {
+		t.Fatal("the node and its chain hold different progress indicators; both " +
+			"render to the terminal and their output interleaves")
+	}
+}
+
+// TestCreatedWalletsCarryTheirRecoveryPhrase: the phrase is never stored, so the
+// creation response is the only chance to keep it. A wallet created without it
+// surfacing anywhere is unrecoverable in practice.
+func TestCreatedWalletsCarryTheirRecoveryPhrase(t *testing.T) {
+	bc := integrationChain(t, t.TempDir())
+	_ = bc
+
+	wallet, err := NewWallet(NewWalletOptions(
+		ThisBlockchainOrganizationID, ThisBlockchainAppID,
+		ThisBlockchainAdminUserID, ThisBlockchainDevAssetID,
+		"api-created", testPassPhrase, []string{"test"}))
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	phrase := wallet.Mnemonic()
+	if phrase == "" {
+		t.Fatal("a freshly created wallet exposes no recovery phrase, so the " +
+			"API has nothing to return and the wallet cannot be recovered")
+	}
+	if err := ValidateMnemonic(phrase); err != nil {
+		t.Fatalf("the phrase is not a valid BIP-39 mnemonic: %v", err)
+	}
+}

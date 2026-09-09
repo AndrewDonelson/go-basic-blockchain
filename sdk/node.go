@@ -152,6 +152,8 @@ func newNode(opts *NodeOptions) (*Node, error) {
 		return nil, errors.New("failed to create blockchain")
 	}
 	n.Blockchain = blockchain
+	// One indicator for the whole process; see SetProgressIndicator.
+	blockchain.SetProgressIndicator(n.ProgressIndicator)
 
 	// Initialize API
 	if opts.Config.EnableAPI {

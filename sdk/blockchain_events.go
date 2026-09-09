@@ -121,6 +121,20 @@ func (bc *Blockchain) onRollupCreated(rollup *sidechain.RollupBlock) error {
 	return nil
 }
 
+// SetProgressIndicator replaces the chain's progress indicator.
+//
+// Exactly one indicator may render at a time: each Start() spawns a goroutine
+// writing to stdout, and two of them interleave into unreadable output. The node
+// owns one and hands it here so both halves report through the same instance.
+func (bc *Blockchain) SetProgressIndicator(pi *progress.ProgressIndicator) {
+	if pi == nil {
+		return
+	}
+	bc.mux.Lock()
+	defer bc.mux.Unlock()
+	bc.progressIndicator = pi
+}
+
 // GetProgressIndicator returns the progress indicator instance
 func (bc *Blockchain) GetProgressIndicator() *progress.ProgressIndicator {
 	return bc.progressIndicator

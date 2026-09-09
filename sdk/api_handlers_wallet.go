@@ -176,16 +176,28 @@ func (api *API) handleCreateWallet(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// The recovery phrase is returned here and nowhere else.
+	//
+	// Every wallet is derived from one, but it is never written to disk -- a
+	// phrase stored beside the wallet it recovers protects nothing -- so this
+	// response is the only chance the caller has to keep it. Without it a wallet
+	// created through the API was unrecoverable in practice, which is the exact
+	// failure the derivation work set out to remove.
 	respondJSON(w, http.StatusCreated, struct {
 		WalletID string   `json:"wallet_id"`
 		Address  string   `json:"address"`
 		Name     string   `json:"name"`
 		Tags     []string `json:"tags"`
+		Mnemonic string   `json:"mnemonic"`
+		Warning  string   `json:"warning"`
 	}{
 		WalletID: wallet.ID.String(),
 		Address:  wallet.GetAddress(),
 		Name:     name,
 		Tags:     tags,
+		Mnemonic: wallet.Mnemonic(),
+		Warning: "Store this recovery phrase now. It is not saved anywhere and " +
+			"cannot be shown again; without it a lost wallet file is unrecoverable.",
 	})
 }
 
