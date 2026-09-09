@@ -16,6 +16,7 @@ Welcome to the comprehensive documentation for the Go Basic Blockchain project. 
 - **[Fork Choice & Reorganisation](forkchoice.md)** - How competing histories are resolved
 - **[Dynamic Difficulty](difficulty.md)** - How the chain retargets itself
 - **[Verifiable Delay Function](vdf.md)** - Wesolowski VDF over a class group
+- **[Memory Hardness](memory-hardness.md)** - Argon2id for stage 1
 - **[UTXO Set](utxo.md)** - The authoritative record of who owns what
 - **[Mempool Policy](mempool.md)** - Fee ordering, replace-by-fee, eviction, block size
 - **[Nonces & Replay Protection](nonces.md)** - Per-sender sequencing

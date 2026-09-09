@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/AndrewDonelson/go-basic-blockchain/internal/helios/vdf"
+	"golang.org/x/crypto/argon2"
 )
 
 const (
@@ -46,10 +47,21 @@ type HeliosConfig struct {
 	TimeLockWeight int `json:"timelock_weight"` // 30%
 	CryptoWeight   int `json:"crypto_weight"`   // 30%
 
-	// Memory phase parameters
-	MemoryBaseSize    int     `json:"memory_base_size"`    // 64MB
-	MemoryScaleFactor float64 `json:"memory_scale_factor"` // 1.0
-	MemoryIterations  int     `json:"memory_iterations"`   // 3
+	// Memory phase parameters (Argon2id, RFC 9106).
+	//
+	// All four are consensus-critical: Argon2's output depends on every one of
+	// them, so nodes configured differently compute different stage-1 results and
+	// reject each other's blocks.
+	Argon2MemoryKiB   uint32 `json:"argon2_memory_kib"`
+	Argon2TimeCost    uint32 `json:"argon2_time_cost"`
+	Argon2Parallelism uint8  `json:"argon2_parallelism"`
+	Argon2KeyLength   uint32 `json:"argon2_key_length"`
+
+	// Retained so existing configuration files still parse. They no longer
+	// affect anything: the hand-rolled buffer they sized has been replaced.
+	MemoryBaseSize    int     `json:"memory_base_size"`
+	MemoryScaleFactor float64 `json:"memory_scale_factor"`
+	MemoryIterations  int     `json:"memory_iterations"`
 
 	// Time-lock parameters
 	TimeLockBaseDuration time.Duration `json:"timelock_base_duration"` // 50ms
@@ -78,6 +90,24 @@ type HeliosConfig struct {
 	MiningTimeout time.Duration `json:"mining_timeout"`
 }
 
+// Argon2id defaults.
+//
+// 64 MiB with a time cost of 1 is the RFC 9106 second recommendation, and it is
+// chosen here for the reason that matters to a proof of work rather than to a
+// password hash: memory is what denies an attacker the GPU and ASIC advantage.
+// A device can put thousands of hash cores on a die; it cannot put thousands of
+// 64 MiB memories next to them.
+//
+// Parallelism is 1 deliberately. It is a consensus parameter, not a performance
+// knob -- raising it changes the digest, so it cannot be tuned per machine, and 1
+// is the value that makes a single attempt cost one core rather than several.
+const (
+	defaultArgon2MemoryKiB   = 64 * 1024 // 64 MiB
+	defaultArgon2TimeCost    = 1
+	defaultArgon2Parallelism = 1
+	defaultArgon2KeyLength   = 32
+)
+
 // DefaultHeliosConfig returns the default configuration for Helios
 // Optimized for 20-second block time
 func DefaultHeliosConfig() *HeliosConfig {
@@ -85,9 +115,10 @@ func DefaultHeliosConfig() *HeliosConfig {
 		MemoryWeight:         40,
 		TimeLockWeight:       30,
 		CryptoWeight:         30,
-		MemoryBaseSize:       1 * 1024 * 1024, // 1MB (reduced from 64MB)
-		MemoryScaleFactor:    1.0,
-		MemoryIterations:     1,                    // Reduced from 3
+		Argon2MemoryKiB:      defaultArgon2MemoryKiB,
+		Argon2TimeCost:       defaultArgon2TimeCost,
+		Argon2Parallelism:    defaultArgon2Parallelism,
+		Argon2KeyLength:      defaultArgon2KeyLength,
 		TimeLockBaseDuration: 2 * time.Millisecond, // Reduced from 50ms
 		TimeLockScaleFactor:  1.0,
 		TimeLockIterations:   50, // Reduced from 1000
@@ -104,12 +135,16 @@ func DefaultHeliosConfig() *HeliosConfig {
 // TestHeliosConfig returns a configuration for fast mining in tests
 func TestHeliosConfig() *HeliosConfig {
 	return &HeliosConfig{
-		MemoryWeight:         40,
-		TimeLockWeight:       30,
-		CryptoWeight:         30,
-		MemoryBaseSize:       128 * 1024, // 128KB (much smaller)
-		MemoryScaleFactor:    1.0,
-		MemoryIterations:     1,
+		MemoryWeight:   40,
+		TimeLockWeight: 30,
+		CryptoWeight:   30,
+		// Small but real Argon2id: the suite mines blocks, and 64 MiB per nonce
+		// attempt would dominate its runtime. 8 MiB still exercises the actual
+		// KDF rather than a stub.
+		Argon2MemoryKiB:      8 * 1024,
+		Argon2TimeCost:       1,
+		Argon2Parallelism:    1,
+		Argon2KeyLength:      32,
 		TimeLockBaseDuration: 1 * time.Millisecond,
 		TimeLockScaleFactor:  1.0,
 		TimeLockIterations:   10,
@@ -270,58 +305,83 @@ func (h *HeliosAlgorithm) MineOnParent(blockHeader, parentOutput []byte, targetD
 // executeMemoryPhase implements Stage 1: Memory Phase (40% weight)
 // Uses Argon2-inspired memory-hard function
 func (h *HeliosAlgorithm) executeMemoryPhase(blockHeader []byte, nonce uint64) ([]byte, error) {
-	// Calculate memory size based on difficulty
-	memorySize := h.config.MemoryBaseSize
-	if h.config.MemoryScaleFactor != 1.0 {
-		memorySize = int(float64(memorySize) * h.config.MemoryScaleFactor)
+	memoryKiB, timeCost, parallelism, keyLength, err := h.argon2Parameters()
+	if err != nil {
+		return nil, err
 	}
 
-	// The buffer must hold at least one 32-byte digest: `copy(memory[:32], ...)`
-	// below panics with "slice bounds out of range" on anything smaller, which a
-	// small MemoryBaseSize or a fractional MemoryScaleFactor could produce.
-	if memorySize < sha256.Size {
-		memorySize = sha256.Size
+	// The password commits to the header and the nonce; the salt is derived from
+	// the same pair under a different domain string.
+	//
+	// The salt must be deterministic, because a verifier has to reproduce this
+	// exactly -- a random salt would make the stage unverifiable, which is the
+	// defect the whole Helios rewrite started from. It must also differ per
+	// candidate, or every nonce would share one salt and the work could be
+	// amortised across attempts.
+	password := memoryPhaseInput("helios/stage1/argon2/password", blockHeader, nonce)
+	salt := memoryPhaseInput("helios/stage1/argon2/salt", blockHeader, nonce)
+
+	return argon2.IDKey(password, salt, timeCost, memoryKiB, parallelism, keyLength), nil
+}
+
+// memoryPhaseInput builds a domain-separated, unambiguous input.
+//
+// The nonce is encoded as eight fixed bytes rather than decimal text. The old
+// code appended fmt.Sprintf("%d", nonce), so a header ending in digits and a
+// nonce could collide with a different header and a different nonce -- two
+// distinct candidates sharing a stage-1 input.
+func memoryPhaseInput(domain string, blockHeader []byte, nonce uint64) []byte {
+	h := sha256.New()
+	h.Write([]byte(domain))
+
+	var buf [8]byte
+	binary.BigEndian.PutUint64(buf[:], uint64(len(blockHeader)))
+	h.Write(buf[:])
+	h.Write(blockHeader)
+
+	binary.BigEndian.PutUint64(buf[:], nonce)
+	h.Write(buf[:])
+
+	return h.Sum(nil)
+}
+
+// argon2Parameters resolves the Argon2id cost parameters, filling in defaults.
+//
+// EVERY ONE OF THESE IS CONSENSUS-CRITICAL. Argon2's output depends on the memory
+// size, the time cost, the degree of parallelism and the output length, so two
+// nodes configured differently compute different stage-1 results and reject each
+// other's blocks. They are validated here rather than trusted, because a
+// misconfiguration presents as blocks being mysteriously refused by the network
+// rather than as an error.
+func (h *HeliosAlgorithm) argon2Parameters() (memoryKiB uint32, timeCost uint32, parallelism uint8, keyLength uint32, err error) {
+	memoryKiB = h.config.Argon2MemoryKiB
+	if memoryKiB == 0 {
+		memoryKiB = defaultArgon2MemoryKiB
+	}
+	timeCost = h.config.Argon2TimeCost
+	if timeCost == 0 {
+		timeCost = defaultArgon2TimeCost
+	}
+	parallelism = h.config.Argon2Parallelism
+	if parallelism == 0 {
+		parallelism = defaultArgon2Parallelism
+	}
+	keyLength = h.config.Argon2KeyLength
+	if keyLength == 0 {
+		keyLength = defaultArgon2KeyLength
 	}
 
-	// Create memory buffer
-	memory := make([]byte, memorySize)
-
-	// Initialize memory with block header and nonce.
-	// The seed is built in a fresh buffer: append(blockHeader, ...) writes into the
-	// caller's backing array whenever it has spare capacity, corrupting the header
-	// across mining iterations.
-	seed := make([]byte, 0, len(blockHeader)+20)
-	seed = append(seed, blockHeader...)
-	seed = append(seed, []byte(fmt.Sprintf("%d", nonce))...)
-	hash := sha256.Sum256(seed)
-	copy(memory[:32], hash[:])
-
-	// Memory-hard computation (simplified Argon2-inspired)
-	for i := 0; i < h.config.MemoryIterations; i++ {
-		// Fill memory with pseudo-random data
-		for j := 32; j < len(memory); j += 32 {
-			chunk := memory[max(0, j-32):j]
-			hash := sha256.Sum256(chunk)
-			copy(memory[j:min(j+32, len(memory))], hash[:])
-		}
-
-		// Mix memory blocks. The upper bound keeps both 32-byte windows inside the
-		// buffer: memory[(j+32)%len : (j+32)%len+32] read out of range whenever
-		// len(memory) was not a multiple of 32 (reachable via MemoryScaleFactor).
-		for j := 0; j+64 <= len(memory); j += 32 {
-			block1 := memory[j : j+32]
-			block2 := memory[j+32 : j+64]
-
-			// XOR blocks
-			for k := 0; k < 32; k++ {
-				block1[k] ^= block2[k]
-			}
-		}
+	// RFC 9106: memory must be at least 8 * parallelism blocks of 1 KiB.
+	if minimum := 8 * uint32(parallelism); memoryKiB < minimum {
+		return 0, 0, 0, 0, fmt.Errorf(
+			"argon2 memory of %d KiB is below the %d KiB minimum for parallelism %d",
+			memoryKiB, minimum, parallelism)
+	}
+	if keyLength < 16 {
+		return 0, 0, 0, 0, fmt.Errorf("argon2 key length %d is too short", keyLength)
 	}
 
-	// Return final memory state hash
-	result := sha256.Sum256(memory)
-	return result[:], nil
+	return memoryKiB, timeCost, parallelism, keyLength, nil
 }
 
 // executeTimeLockPhase implements Stage 2: a Wesolowski verifiable delay

@@ -215,6 +215,15 @@ Run them with:
 go test ./internal/helios/... -v
 ```
 
+## 🧠 Stage 1 is Argon2id
+
+Stage 1 was a hand-rolled buffer fill that was **not memory-hard**: the fill was a
+sequential SHA-256 chain and the mix only touched adjacent blocks, so the whole
+phase could be reproduced by streaming — 64 bytes of state reproduced the output
+of a 131,072-byte buffer, demonstrated before it was replaced.
+
+It is now Argon2id (RFC 9106). See [memory-hardness.md](memory-hardness.md).
+
 ## ⏳ Stage 2 is a verifiable delay function
 
 Stage 2 was a sequential SHA-256 chain. It is now a **Wesolowski VDF over a class
@@ -235,4 +244,3 @@ time. Stage 2 therefore runs once, before the search.
 
 - Scale the phase parameters by the weights, so the weights are load-bearing
   rather than descriptive.
-- Analyse the memory phase properly, or replace it with real Argon2id.

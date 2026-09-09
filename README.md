@@ -66,6 +66,7 @@ specific about which is which.
 | Area | Status |
 |---|---|
 | Block production & persistence | ✅ Working — blocks mine, save, reload and re-validate |
+| Memory hardness (stage 1) | ✅ Working — Argon2id (RFC 9106), 64 MiB ([docs](docs/memory-hardness.md)) |
 | Verifiable delay (stage 2) | ✅ Working — Wesolowski VDF over a class group, no trusted setup ([docs](docs/vdf.md)) |
 | Proof of work (Helios) | ✅ Working — deterministic, stored on the block, verified on every block |
 | Transaction signing | ✅ Working — signatures cover all protocol fields |

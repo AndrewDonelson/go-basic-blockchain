@@ -753,6 +753,65 @@ while holding A" takes a minute and is the whole audit.
 
 ---
 
+## Case 22: The memory-hard function that needed 64 bytes
+
+Helios stage 1 was the memory-hard phase. It allocated a buffer — 1 MB by default,
+64 MB originally — filled it, mixed it, and hashed the result. The whole point of
+the stage is that memory is what denies an attacker the GPU and ASIC advantage: a
+device can fit thousands of hash cores on a die, but not thousands of 64 MB
+memories beside them.
+
+Except the fill was a sequential chain:
+
+```go
+for j := 32; j < len(memory); j += 32 {
+    hash := sha256.Sum256(memory[j-32 : j])   // depends only on the block before
+    copy(memory[j:j+32], hash[:])
+}
+```
+
+and the mix only combined adjacent blocks. Neither step needs the buffer to
+exist. Each block regenerates from its predecessor on demand and can be fed
+straight into the final hash.
+
+Rather than argue this, it was demonstrated. A streaming implementation using **64
+bytes of state** reproduced the exact output of a **131,072-byte** buffer:
+
+```
+buffer allocated by the real implementation: 131072 bytes
+working set of the streaming equivalent:     64 bytes
+NOT MEMORY-HARD: a 131072-byte buffer reproduced with 64 bytes of state
+```
+
+So the stage cost honest miners the full buffer and cost an attacker with custom
+hardware nothing — the exact inversion of what it was for.
+
+**The fix** is Argon2id (RFC 9106), whose data dependencies are designed so that
+computing it with less memory than configured costs disproportionately more time.
+The replacement test measures allocation through `runtime.MemStats` and fails if
+the phase does not actually use the memory it asks for, because "it is
+memory-hard" is precisely the claim that had gone unchecked.
+
+A smaller bug fell out alongside it: the old input was
+`append(blockHeader, fmt.Sprintf("%d", nonce))`, so a header ending in digits and
+a nonce could collide with a different header and a different nonce — two distinct
+candidates sharing stage-1 work. The nonce is now eight fixed bytes behind a
+length prefix.
+
+**Lesson.** *A name is not a property.* The function was called the memory phase,
+it allocated memory, it was described in comments as "Argon2-inspired" — and none
+of that made it memory-hard. The question that settles it is not "does this look
+expensive?" but **"what is the cheapest way to produce this output?"** For a
+sequential chain the answer is always a constant working set, and that is
+determined by the data dependencies, which you can read off the loop in a minute.
+
+Where a standard primitive exists for the property you need, the burden of proof
+for rolling your own is that you can state what an attacker's cheapest strategy
+costs. If you cannot, you have not designed a hard function — you have designed a
+slow one, and only for yourself.
+
+---
+
 ## The meta-lesson
 
 Before the audit:
