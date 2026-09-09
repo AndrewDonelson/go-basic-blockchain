@@ -50,6 +50,17 @@ installed in `Start()`, so `api.router` on its own was an unauthenticated API an
 anything serving it directly — an embedder, or a test harness wiring it into its
 own `http.Server` — silently got no authentication at all.
 
+### Machine-readable specification
+
+[`api/openapi.yaml`](../api/openapi.yaml) is the contract — 25 paths, schemas and
+auth. Before it, the only description of the API was a Postman collection, so a
+client author had to read the handlers.
+
+`TestOpenAPISpecCoversEveryRoute` and its counterparts check the document against
+the real router in both directions, so an undocumented endpoint or a documented
+one that is not served fails the build. Writing them immediately caught five
+paths in a draft spec that the code has commented out.
+
 ### Error shape
 
 **Every** error is this JSON envelope. Handlers previously mixed it with

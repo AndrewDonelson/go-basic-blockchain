@@ -84,7 +84,7 @@ correctly, but does not yet form a network.
 | Observability | ✅ Working — Prometheus /metrics, real hash rate ([metrics.md](metrics.md)) |
 | UTXO state model | ✅ Working — authoritative balances, double-spend prevention ([utxo.md](utxo.md)) |
 
-- **Test Coverage**: 71.1% (`sdk`), 85–97% across the Helios packages
+- **Test Coverage**: 71.9% (`sdk`), 85–97% across the Helios packages
 - **Test Performance**: ~17 seconds; ~85 seconds under `-race`
 - **Documentation**: ✅ Comprehensive
 

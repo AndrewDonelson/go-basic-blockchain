@@ -1,0 +1,548 @@
+openapi: 3.0.3
+info:
+  title: Go Basic Blockchain API
+  version: 0.1.0
+  description: |
+    REST API for a Go Basic Blockchain node.
+
+    This specification is the contract. Before it existed the only description of
+    the API was a Postman collection, so a client author had to read the handlers.
+
+    **Authentication.** Every path outside the public list requires an API key.
+    Authentication fails closed: there is no built-in fallback credential, so
+    `BLOCKCHAIN_API_KEY` and `BLOCKCHAIN_SERVER_SEED` must be set before the API
+    accepts anything.
+
+    **Errors.** Every failure returns the same JSON envelope, on every path and
+    for every status code.
+  license:
+    name: See repository LICENSE
+
+servers:
+  - url: http://localhost:8100
+    description: Default local node
+
+tags:
+  - name: Public
+    description: No credential required
+  - name: Chain
+    description: Blocks and transactions
+  - name: Wallets
+  - name: Accounts
+  - name: Consensus
+    description: Node-to-node endpoints, authenticated as a peer
+
+components:
+  securitySchemes:
+    ApiKeyAuth:
+      type: apiKey
+      in: header
+      name: X-API-Key
+
+  parameters:
+    Page:
+      name: page
+      in: query
+      description: 1-based page number. Out-of-range values are clamped.
+      schema: { type: integer, minimum: 1, default: 1 }
+    Limit:
+      name: limit
+      in: query
+      description: Items per page. Clamped to a server maximum.
+      schema: { type: integer, minimum: 1, default: 20 }
+
+  schemas:
+    Error:
+      type: object
+      description: |
+        The single shape every API error takes. `status` repeats the HTTP status
+        because a client holding only the payload -- a log line, a queued webhook
+        -- cannot otherwise tell a 400 from a 500.
+      required: [message, status]
+      properties:
+        message: { type: string, example: invalid api key }
+        status: { type: integer, example: 401 }
+
+    Health:
+      type: object
+      properties:
+        status: { type: string, example: ok }
+        block_count: { type: integer }
+        mempool_size: { type: integer }
+
+    Block:
+      type: object
+      properties:
+        index: { type: string, description: Block height as a decimal string }
+        hash: { type: string }
+        header:
+          type: object
+          properties:
+            previous_hash: { type: string }
+            timestamp: { type: string, format: date-time }
+            difficulty:
+              type: integer
+              description: |
+                Exponent, not a linear scalar: expected work is 2^difficulty.
+                Derived from chain history, not configuration.
+            nonce: { type: integer }
+            merkle_root: { type: string }
+        transactions:
+          type: array
+          items: { $ref: '#/components/schemas/Transaction' }
+
+    Transaction:
+      type: object
+      properties:
+        id: { type: string, description: "PUID, formatted organizationID:appID:userID:assetID" }
+        protocol:
+          type: string
+          enum: [COINBASE, BANK, MESSAGE, PERSIST, CHAIN, P2P]
+          description: |
+            The wire discriminator. Without it the Transaction interface cannot
+            be decoded, and blocks carrying transactions cannot be reloaded.
+        from: { type: string }
+        to: { type: string }
+        fee: { type: number, format: double }
+        status: { type: string, enum: [pending, confirmed, failed] }
+
+    Wallet:
+      type: object
+      properties:
+        id: { type: string }
+        address: { type: string }
+        name: { type: string }
+        encrypted: { type: boolean }
+
+    Balance:
+      type: object
+      properties:
+        address: { type: string }
+        balance:
+          type: number
+          format: double
+          description: |
+            Derived from the UTXO set, which is the authoritative record. A
+            wallet's own stored balance is advisory.
+
+    Paginated:
+      type: object
+      properties:
+        page: { type: integer }
+        limit: { type: integer }
+        total: { type: integer }
+
+  responses:
+    Unauthorized:
+      description: Missing, malformed or unrecognised credential
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    BadRequest:
+      description: Malformed request
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    NotFound:
+      description: Resource does not exist
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    Unprocessable:
+      description: |
+        Well formed but semantically rejected -- a bad signature, insufficient
+        funds, or a block that does not extend the head.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    RateLimited:
+      description: Too many attempts
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+
+security:
+  - ApiKeyAuth: []
+
+paths:
+  /:
+    get:
+      tags: [Public]
+      summary: HTML summary of the chain
+      security: []
+      responses:
+        '200':
+          description: OK
+          content:
+            text/html:
+              schema: { type: string }
+
+  /version:
+    get:
+      tags: [Public]
+      summary: Node version
+      security: []
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { type: object }
+
+  /info:
+    get:
+      tags: [Public]
+      summary: Chain parameters as JSON
+      security: []
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { type: object }
+
+  /health:
+    get:
+      tags: [Public]
+      summary: Liveness and basic counts
+      security: []
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Health' }
+
+  /metrics:
+    get:
+      tags: [Public]
+      summary: Prometheus metrics
+      description: |
+        Public by design. A metrics endpoint behind authentication is one no
+        scraper gets configured for, and this exposes counts, timings and a hash
+        rate -- no addresses, balances or keys.
+      security: []
+      responses:
+        '200':
+          description: Prometheus text exposition format
+          content:
+            text/plain:
+              schema: { type: string }
+
+  /account/register:
+    post:
+      tags: [Public, Accounts]
+      summary: Register an account
+      description: |
+        POST, not GET: it creates state and carries a credential, neither of
+        which belongs in a query string.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password]
+              properties:
+                email: { type: string, format: email }
+                password: { type: string, format: password }
+      responses:
+        '201': { description: Created }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+
+  /account/login:
+    post:
+      tags: [Public, Accounts]
+      summary: Log in
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password]
+              properties:
+                email: { type: string, format: email }
+                password: { type: string, format: password }
+      responses:
+        '200': { description: OK }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+
+  /account/verify:
+    get:
+      tags: [Public, Accounts]
+      summary: Verify an account
+      security: []
+      responses:
+        '200': { description: OK }
+        '400': { $ref: '#/components/responses/BadRequest' }
+
+  /blockchain:
+    get:
+      tags: [Chain]
+      summary: Chain status
+      responses:
+        '200': { description: OK }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /blockchain/blocks:
+    get:
+      tags: [Chain]
+      summary: List blocks
+      parameters:
+        - { $ref: '#/components/parameters/Page' }
+        - { $ref: '#/components/parameters/Limit' }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Paginated'
+                  - type: object
+                    properties:
+                      blocks:
+                        type: array
+                        items: { $ref: '#/components/schemas/Block' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /blockchain/blocks/{index}:
+    get:
+      tags: [Chain]
+      summary: A block by height
+      parameters:
+        - { name: index, in: path, required: true, schema: { type: integer } }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Block' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /blockchain/blocks/{index}/transactions:
+    get:
+      tags: [Chain]
+      summary: Transactions in a block
+      parameters:
+        - { name: index, in: path, required: true, schema: { type: integer } }
+        - { $ref: '#/components/parameters/Page' }
+        - { $ref: '#/components/parameters/Limit' }
+      responses:
+        '200': { description: OK }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /blockchain/blocks/{index}/transactions/{id}:
+    get:
+      tags: [Chain]
+      summary: One transaction in a block
+      parameters:
+        - { name: index, in: path, required: true, schema: { type: integer } }
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Transaction' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /blockchain/transactions:
+    get:
+      tags: [Chain]
+      summary: List transactions
+      parameters:
+        - { $ref: '#/components/parameters/Page' }
+        - { $ref: '#/components/parameters/Limit' }
+      responses:
+        '200': { description: OK }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /blockchain/transactions/{id}:
+    get:
+      tags: [Chain]
+      summary: A transaction by ID
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Transaction' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /blockchain/wallets:
+    get:
+      tags: [Wallets]
+      summary: List wallets
+      parameters:
+        - { $ref: '#/components/parameters/Page' }
+        - { $ref: '#/components/parameters/Limit' }
+      responses:
+        '200': { description: OK }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /blockchain/wallets/new:
+    post:
+      tags: [Wallets]
+      summary: Create a wallet
+      description: |
+        Every wallet is derived from a BIP-39 recovery phrase. The phrase is
+        returned once, at creation, and never stored: a recovery phrase kept
+        beside the wallet it recovers protects nothing.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, passphrase]
+              properties:
+                name: { type: string }
+                passphrase: { type: string, format: password }
+                tags:
+                  type: array
+                  items: { type: string }
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Wallet' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /blockchain/wallets/tx:
+    post:
+      tags: [Wallets]
+      summary: Submit a wallet transaction
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                from: { type: string }
+                to: { type: string }
+                amount: { type: number, format: double }
+                protocol: { type: string, enum: [BANK, MESSAGE] }
+      responses:
+        '201': { description: Accepted into the mempool }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '422': { $ref: '#/components/responses/Unprocessable' }
+
+  /blockchain/wallets/{id}:
+    get:
+      tags: [Wallets]
+      summary: A wallet by ID
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Wallet' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    post:
+      tags: [Wallets]
+      summary: Update a wallet
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object }
+      responses:
+        '200': { description: OK }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /blockchain/wallets/{id}/balance:
+    get:
+      tags: [Wallets]
+      summary: A wallet's balance
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Balance' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /blockchain/wallets/{id}/transactions:
+    get:
+      tags: [Wallets]
+      summary: A wallet's transactions
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+        - { $ref: '#/components/parameters/Page' }
+        - { $ref: '#/components/parameters/Limit' }
+      responses:
+        '200': { description: OK }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /blockchain/wallets/{id}/transactions/{txid}:
+    get:
+      tags: [Wallets]
+      summary: One transaction for a wallet
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+        - { name: txid, in: path, required: true, schema: { type: string } }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Transaction' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /consensus/p2p:
+    post:
+      tags: [Consensus]
+      summary: Receive a P2P consensus message
+      responses:
+        '201': { description: Accepted }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '503': { description: Consensus authentication is not configured }
+
+  /consensus/tx:
+    post:
+      tags: [Consensus]
+      summary: Receive a relayed transaction
+      responses:
+        '201': { description: Accepted }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '422': { $ref: '#/components/responses/Unprocessable' }
+
+  /consensus/block:
+    post:
+      tags: [Consensus]
+      summary: Receive an announced block
+      responses:
+        '201': { description: Accepted }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '422': { $ref: '#/components/responses/Unprocessable' }
