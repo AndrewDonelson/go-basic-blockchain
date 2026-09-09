@@ -1,7 +1,7 @@
 package sdk_test
 
 import (
-	"os"
+	"flag"
 	"testing"
 
 	"github.com/AndrewDonelson/go-basic-blockchain/sdk"
@@ -54,12 +54,16 @@ func TestArguments_RegisterSubCommand(t *testing.T) {
 }
 
 // TestArguments_Parse tests the Parse method
+//
+// This used to be skipped: every Arguments registered into the global
+// flag.CommandLine, so building a second one in the same process panicked on
+// flag redefinition. Each instance now owns a private FlagSet, and ParseArgs
+// takes the arguments explicitly instead of reaching for os.Args.
 func TestArguments_Parse(t *testing.T) {
-	t.Skip("Skipping due to Go flag package global state: flag redefinition panics if run multiple times in the same process. Refactor needed for isolation.")
-	// Reset os.Args for each test case
-	origArgs := os.Args
-	defer func() { os.Args = origArgs }()
-
+	// Sub-commands are registered on the same FlagSet as their parent, so on the
+	// command line they are ordinary flags. The "unknown sub-command" path only
+	// applies to a token the flag package left as a positional argument -- that
+	// is, after a "--" terminator.
 	tests := []struct {
 		name     string
 		args     []string
@@ -68,82 +72,77 @@ func TestArguments_Parse(t *testing.T) {
 	}{
 		{
 			name:     "Test No Arguments",
-			args:     []string{"test"},
+			args:     []string{},
 			wantErr:  true,
 			errValue: "no arguments",
 		},
 		{
 			name:     "Test Invalid Argument",
-			args:     []string{"test", "--arg3"},
+			args:     []string{"--arg3"},
 			wantErr:  true,
-			errValue: "unknown argument: \"--arg3\"",
+			errValue: "unknown argument",
 		},
 		{
-			name:     "Test Argument With No SubCommand",
-			args:     []string{"test", "--arg1"},
-			wantErr:  false,
-			errValue: "",
+			// arg1 is a string flag, so it takes a value.
+			name:    "Test Argument With No SubCommand",
+			args:    []string{"--arg1", "value"},
+			wantErr: false,
 		},
 		{
-			name:     "Test Argument With SubCommand",
-			args:     []string{"test", "--arg1", "--strVal", "test string", "--intVal", "5", "--fltVal", "5.5", "--boolVal", "true"},
-			wantErr:  false,
-			errValue: "",
+			name: "Test Argument With SubCommand",
+			args: []string{"--arg1", "value", "--strVal", "test string", "--intVal", "5",
+				"--fltVal", "5.5", "--boolVal=true"},
+			wantErr: false,
 		},
 		{
 			name:     "Test Argument With Invalid SubCommand",
-			args:     []string{"test", "--arg1", "--invalidSubCmd"},
+			args:     []string{"--arg1", "value", "--", "--invalidSubCmd"},
 			wantErr:  true,
-			errValue: "unknown sub-command \"--invalidSubCmd\" for Argument \"--arg1\"",
+			errValue: "unknown sub-command",
+		},
+		{
+			// A valid sub-command in the same position must be accepted. The
+			// lookup used to compare "--strVal" against a key stored as
+			// "strVal", so every sub-command was reported unknown.
+			name:    "Test Argument With Valid Positional SubCommand",
+			args:    []string{"--arg1", "value", "--", "--strVal"},
+			wantErr: false,
 		},
 	}
 
-	// Create a fresh Arguments instance for this test
-	args := sdk.NewArguments()
+	// A fresh instance per case. A FlagSet accumulates what it has seen across
+	// Parse calls, so sharing one would let an earlier case's flags decide a
+	// later case's outcome.
+	newArgs := func(t *testing.T) *sdk.Arguments {
+		t.Helper()
 
-	var (
-		strVal1, strVal2   string
-		intVal1, intVal2   int
-		fltVal1, fltVal2   float64
-		boolVal1, boolVal2 bool
-	)
+		var (
+			strVal1, strVal2   string
+			intVal1, intVal2   int
+			fltVal1, fltVal2   float64
+			boolVal1, boolVal2 bool
+		)
 
-	// Register main arguments
-	err := args.Register("arg1", "arg1 desc", "")
-	require.NoError(t, err, "Failed to register arg1")
+		args := sdk.NewArguments()
+		require.NoError(t, args.Register("arg1", "arg1 desc", ""))
+		require.NoError(t, args.Register("arg2", "arg2 desc", ""))
 
-	err = args.Register("arg2", "arg2 desc", "")
-	require.NoError(t, err, "Failed to register arg2")
+		require.NoError(t, args.RegisterSubCommand("arg1", "strVal", "strVal desc", &strVal1, "I am String #1"))
+		require.NoError(t, args.RegisterSubCommand("arg1", "intVal", "intVal desc", &intVal1, 1))
+		require.NoError(t, args.RegisterSubCommand("arg1", "fltVal", "fltVal desc", &fltVal1, 1.23))
+		require.NoError(t, args.RegisterSubCommand("arg1", "boolVal", "boolVal desc", &boolVal1, true))
 
-	// Register sub-commands for main arguments
-	err = args.RegisterSubCommand("arg1", "strVal", "strVal desc", &strVal1, "I am String #1")
-	require.NoError(t, err, "Failed to register arg1 sub-command strVal")
+		require.NoError(t, args.RegisterSubCommand("arg2", "strVal2", "strVal desc", &strVal2, "I am String #2"))
+		require.NoError(t, args.RegisterSubCommand("arg2", "intVal2", "intVal desc", &intVal2, 2))
+		require.NoError(t, args.RegisterSubCommand("arg2", "fltVal2", "fltVal desc", &fltVal2, 4.56))
+		require.NoError(t, args.RegisterSubCommand("arg2", "boolVal2", "boolVal desc", &boolVal2, false))
 
-	err = args.RegisterSubCommand("arg1", "intVal", "intVal desc", &intVal1, 1)
-	require.NoError(t, err, "Failed to register arg1 sub-command intVal")
-
-	err = args.RegisterSubCommand("arg1", "fltVal", "fltVal desc", &fltVal1, 1.23)
-	require.NoError(t, err, "Failed to register arg1 sub-command fltVal")
-
-	err = args.RegisterSubCommand("arg1", "boolVal", "boolVal desc", &boolVal1, true)
-	require.NoError(t, err, "Failed to register arg1 sub-command boolVal")
-
-	err = args.RegisterSubCommand("arg2", "strVal", "strVal desc", &strVal2, "I am String #2")
-	require.NoError(t, err, "Failed to register arg2 sub-command strVal")
-
-	err = args.RegisterSubCommand("arg2", "intVal", "intVal desc", &intVal2, 2)
-	require.NoError(t, err, "Failed to register arg2 sub-command intVal")
-
-	err = args.RegisterSubCommand("arg2", "fltVal", "fltVal desc", &fltVal2, 4.56)
-	require.NoError(t, err, "Failed to register arg2 sub-command fltVal")
-
-	err = args.RegisterSubCommand("arg2", "boolVal", "boolVal desc", &boolVal2, false)
-	require.NoError(t, err, "Failed to register arg2 sub-command boolVal")
+		return args
+	}
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			os.Args = test.args
-			err := args.Parse()
+			err := newArgs(t).ParseArgs(test.args)
 
 			if test.wantErr {
 				assert.Error(t, err, "Expected an error but got none")
@@ -156,6 +155,45 @@ func TestArguments_Parse(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestArgumentsAreIsolatedBetweenInstances is the property that made the skip
+// unnecessary: two Arguments registering the same names must not collide.
+func TestArgumentsAreIsolatedBetweenInstances(t *testing.T) {
+	first := sdk.NewArguments()
+	require.NoError(t, first.Register("shared", "first", "one"))
+
+	// Before the private FlagSet this panicked with "flag redefined: shared".
+	second := sdk.NewArguments()
+	require.NoError(t, second.Register("shared", "second", "two"))
+
+	require.NoError(t, first.ParseArgs([]string{"--shared", "from-first"}))
+	assert.Equal(t, "from-first", first.GetString("shared"))
+	assert.Equal(t, "two", second.GetString("shared"),
+		"parsing one instance must not affect another")
+}
+
+// TestRegisterRejectsADuplicateName: silently replacing a registration would
+// leave the earlier Value pointer orphaned and never updated by Parse.
+func TestRegisterRejectsADuplicateName(t *testing.T) {
+	args := sdk.NewArguments()
+	require.NoError(t, args.Register("once", "first", "a"))
+	assert.Error(t, args.Register("once", "again", "b"))
+}
+
+// TestParseDoesNotTouchTheGlobalFlagSet. The testing package registers its own
+// -test.* flags on flag.CommandLine; a library that parses it either chokes on
+// them or consumes them.
+func TestParseDoesNotTouchTheGlobalFlagSet(t *testing.T) {
+	before := flag.CommandLine.NFlag()
+
+	args := sdk.NewArguments()
+	require.NoError(t, args.Register("isolated", "isolated flag", "x"))
+	require.NoError(t, args.ParseArgs([]string{"--isolated", "y"}))
+
+	assert.Nil(t, flag.CommandLine.Lookup("isolated"),
+		"the flag leaked into the global command line")
+	assert.Equal(t, before, flag.CommandLine.NFlag())
 }
 
 // TestArguments_GetMethods tests the various Get methods

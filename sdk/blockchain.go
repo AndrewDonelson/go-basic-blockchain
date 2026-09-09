@@ -142,18 +142,15 @@ func NewBlockchain(cfg *Config) *Blockchain {
 		}
 	}
 
-	// Ensure the node is initialized
-	if GetNode() == nil {
-		log.Println("Creating default node for blockchain")
-		nodeOpts := DefaultNodeOptions()
-		nodeOpts.Config = cfg
-
-		err := NewNode(nodeOpts)
-		if err != nil {
-			log.Printf("Error creating default node: %v", err)
-			return nil
-		}
-	}
+	// A blockchain does not create a node.
+	//
+	// This used to call NewNode when the global node was nil, while NewNode
+	// itself builds a blockchain -- a cycle that only terminated because NewNode
+	// assigned the global halfway through its own construction. Separating
+	// construction from registration exposed it as unbounded recursion.
+	//
+	// Nothing here needs a node: every other GetNode() call site already treats
+	// nil as "not running inside a node" and degrades accordingly.
 
 	err := bc.Load()
 	if err != nil {

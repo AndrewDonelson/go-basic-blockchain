@@ -230,11 +230,10 @@ func registerMultipleNodes(p2p *sdk.P2P, count int) {
 	}
 }
 
-// TestConnectToSeedNode tests the ConnectToSeedNode method
-func TestConnectToSeedNode(t *testing.T) {
-	// Skip this test as it requires network connectivity
-	t.Skip("Skipping network test")
-}
+// ConnectToSeedNode is covered by TestConnectToSeedNodeOverLoopback in
+// p2p_seed_test.go. It was skipped here as "requires network connectivity",
+// which it does not: a seed node runs in-process on the loopback interface, and
+// the sync tests already start real listeners that way.
 
 // TestMax tests the max function
 func TestMax(t *testing.T) {

@@ -82,7 +82,7 @@ Go Basic Blockchain is an educational blockchain implementation written in Go th
 | Fork choice / reorganisation | ✅ Working — heaviest-chain by cumulative work |
 
 ### Performance Metrics
-- **Test Coverage**: 66.5% (`sdk`), 85–97% across the Helios packages
+- **Test Coverage**: 69.7% (`sdk`), 85–97% across the Helios packages
 - **Test Performance**: ~17 seconds; ~85 seconds under the race detector
 - **Memory Usage**: Optimized for educational use
 

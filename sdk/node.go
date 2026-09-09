@@ -93,8 +93,27 @@ func NewNode(opts *NodeOptions) error {
 	if node != nil {
 		return errors.New("node already exists")
 	}
+
+	built, err := newNode(opts)
+	if err != nil {
+		return err
+	}
+
+	node = built
+	LogInfof("Node initialized: %s", node.ID)
+	return nil
+}
+
+// newNode builds a Node without touching the package-level singleton.
+//
+// NewNode used to do both, which made a node impossible to construct twice in
+// one process: the second call returned "node already exists". That is why every
+// meaningful test in node_test.go was skipped. Construction and registration are
+// now separate concerns, so a test can build as many independent nodes as it
+// needs while the CLI keeps its single global one.
+func newNode(opts *NodeOptions) (*Node, error) {
 	if opts == nil {
-		return errors.New("node options cannot be nil")
+		return nil, errors.New("node options cannot be nil")
 	}
 	if opts.Config == nil {
 		opts.Config = NewConfig()
@@ -116,10 +135,10 @@ func NewNode(opts *NodeOptions) error {
 	// itself, which any host could claim.
 	identity, err := LoadOrCreatePeerIdentity(opts.Config.DataPath)
 	if err != nil {
-		return fmt.Errorf("failed to establish node identity: %w", err)
+		return nil, fmt.Errorf("failed to establish node identity: %w", err)
 	}
 
-	node = &Node{
+	n := &Node{
 		Identity:          identity,
 		ID:                identity.NodeID,
 		Config:            opts.Config,
@@ -130,30 +149,30 @@ func NewNode(opts *NodeOptions) error {
 	// Initialize blockchain
 	blockchain := NewBlockchain(opts.Config)
 	if blockchain == nil {
-		return errors.New("failed to create blockchain")
+		return nil, errors.New("failed to create blockchain")
 	}
-	node.Blockchain = blockchain
+	n.Blockchain = blockchain
 
 	// Initialize API
 	if opts.Config.EnableAPI {
 		api := NewAPI(blockchain)
 		if api == nil {
-			return errors.New("failed to create API")
+			return nil, errors.New("failed to create API")
 		}
-		node.API = api
+		n.API = api
 	}
 
 	// Initialize P2P and connect it to the chain, so this node can both serve
 	// sync requests and apply what peers send it.
 	p2p := NewP2P()
 	if p2p == nil {
-		return errors.New("failed to create P2P")
+		return nil, errors.New("failed to create P2P")
 	}
-	node.P2P = p2p
+	n.P2P = p2p
 
 	p2p.SetChain(blockchain)
 	p2p.SetIdentity(identity)
-	p2p.SetSelfInfo(node.ID, opts.Config.P2PHostName)
+	p2p.SetSelfInfo(n.ID, opts.Config.P2PHostName)
 	p2p.SetAllowedPeers(opts.Config.AllowedPeers)
 	if opts.IsSeed {
 		p2p.SetAsSeedNode()
@@ -170,9 +189,9 @@ func NewNode(opts *NodeOptions) error {
 		Peers:     p2p,
 	})
 	if err != nil {
-		return fmt.Errorf("failed to create chain syncer: %w", err)
+		return nil, fmt.Errorf("failed to create chain syncer: %w", err)
 	}
-	node.Syncer = syncer
+	n.Syncer = syncer
 
 	// Initialize the node wallet.
 	//
@@ -182,7 +201,7 @@ func NewNode(opts *NodeOptions) error {
 	// with it again, and every restart orphaned another wallet file on disk.
 	strongPassword, err := nodeWalletPassphrase()
 	if err != nil {
-		return fmt.Errorf("failed to resolve node wallet passphrase: %w", err)
+		return nil, fmt.Errorf("failed to resolve node wallet passphrase: %w", err)
 	}
 
 	walletOptions := NewWalletOptions(
@@ -196,21 +215,20 @@ func NewNode(opts *NodeOptions) error {
 	)
 	wallet, err := NewWallet(walletOptions)
 	if err != nil {
-		return fmt.Errorf("failed to create wallet: %v", err)
+		return nil, fmt.Errorf("failed to create wallet: %v", err)
 	}
-	node.Wallet = wallet
+	n.Wallet = wallet
 
 	// Load existing data
-	err = node.load()
+	err = n.load()
 	if err != nil {
 		LogVerbosef("No existing node state found, creating new node")
 	}
 
-	node.initialized = true
-	node.Status = "ready"
+	n.initialized = true
+	n.Status = "ready"
 
-	LogInfof("Node initialized: %s", node.ID)
-	return nil
+	return n, nil
 }
 
 // nodeWalletPassphrase resolves the node wallet passphrase from the environment.

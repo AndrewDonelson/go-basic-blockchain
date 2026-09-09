@@ -107,6 +107,16 @@ func startTestServer(t *testing.T) {
 	testNode.initialized = true
 	testNode.ID = uuid.New().String()
 
+	// Install this node as the package-level one for the duration of the test.
+	//
+	// Handlers such as the consensus P2P endpoint look the running node up via
+	// GetNode(). This used to happen by accident: NewBlockchain created a default
+	// global node when it found none, so the endpoint answered using a node the
+	// test had never configured. NewBlockchain no longer does that (it was half
+	// of an unbounded recursion), so the test installs its own node explicitly.
+	previousGlobalNode = node
+	node = testNode
+
 	t.Log("Initializing test node...")
 	testNode.Config.Show()
 
@@ -151,7 +161,14 @@ func stopTestServer() {
 		testServerInstance.wg.Wait()
 		testServerInstance = nil
 	}
+
+	node = previousGlobalNode
+	previousGlobalNode = nil
 }
+
+// previousGlobalNode holds whatever the package-level node was before the test
+// server installed its own, so the global is left as it was found.
+var previousGlobalNode *Node
 
 // Helper function to initialize test node if not already initialized
 func initializeTestNode(t *testing.T) {
