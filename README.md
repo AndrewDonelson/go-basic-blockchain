@@ -79,6 +79,7 @@ specific about which is which.
 | Mempool policy & block size | ✅ Working — fee-rate ordering, bounded mempool, capped blocks ([docs](docs/mempool.md)) |
 | Supply & miner rewards | ✅ Working — fixed supply, coinbase only in genesis, fees split to miner/dev ([docs](docs/supply.md)) |
 | Wallet recovery | ✅ Working — every wallet derives from a BIP-39 recovery phrase ([docs](docs/recovery.md)) |
+| Observability | ✅ Working — Prometheus `/metrics`, real hash rate ([docs](docs/metrics.md)) |
 | UTXO state model | ✅ Working — authoritative balances, double-spend prevention ([docs](docs/utxo.md)) |
 
 - **Test Coverage:** 66.5% (`sdk`); 89.8% / 94.4% / 85.2% / 96.8% across the Helios packages

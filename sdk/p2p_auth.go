@@ -513,6 +513,9 @@ func (p *P2P) serverHandshake(conn net.Conn) (*secureConn, *authenticatedPeer, e
 	transcript := handshakeTranscript(peerID, identity.NodeID, clientNonce, serverNonce,
 		clientEphemeral, serverEphemeral.public)
 	if err := VerifyPeerSignature(peerPublicPEM, transcript, signature); err != nil {
+		if p.chain != nil {
+			p.chain.Metrics().Inc("peer_auth_failed")
+		}
 		return nil, nil, fmt.Errorf("peer %s failed authentication: %w", peerID, err)
 	}
 
@@ -547,6 +550,9 @@ func (p *P2P) serverHandshake(conn net.Conn) (*secureConn, *authenticatedPeer, e
 		return nil, nil, errors.New("peer sent data before the handshake completed")
 	}
 
+	if p.chain != nil {
+		p.chain.Metrics().Inc("peers_connected")
+	}
 	return secure, &authenticatedPeer{NodeID: peerID, PublicPEM: peerPublicPEM, Address: peerAddress}, nil
 }
 

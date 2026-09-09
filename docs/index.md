@@ -19,6 +19,7 @@ Welcome to the comprehensive documentation for the Go Basic Blockchain project. 
 - **[Mempool Policy](mempool.md)** - Fee ordering, eviction, and block size limits
 - **[Supply & Incentives](supply.md)** - Fixed supply, genesis-only minting, fee rewards
 - **[Wallet Recovery](recovery.md)** - BIP-39 phrases and deterministic key derivation
+- **[Observability](metrics.md)** - The /metrics endpoint, counters and hash rate
 - **[P2P Security](p2p-security.md)** - Peer authentication, forward secrecy, session encryption
 
 ### User Guides
@@ -80,6 +81,7 @@ correctly, but does not yet form a network.
 | Mempool policy | ✅ Working — fee-rate ordering, bounded, size-capped blocks ([mempool.md](mempool.md)) |
 | Supply & miner rewards | ✅ Working — fixed supply, genesis-only minting, fees split to miner/dev ([supply.md](supply.md)) |
 | Wallet recovery | ✅ Working — every wallet derives from a BIP-39 phrase ([recovery.md](recovery.md)) |
+| Observability | ✅ Working — Prometheus /metrics, real hash rate ([metrics.md](metrics.md)) |
 | UTXO state model | ✅ Working — authoritative balances, double-spend prevention ([utxo.md](utxo.md)) |
 
 - **Test Coverage**: 66.5% (`sdk`), 85–97% across the Helios packages

@@ -102,6 +102,7 @@ func (bc *Blockchain) admitToMempoolLocked(tx Transaction) error {
 	bc.TransactionQueue = append(bc.TransactionQueue, tx)
 
 	if evicted != nil {
+		bc.Metrics().Inc("mempool_evicted")
 		LogVerbosef("Evicted transaction %s (fee rate %.8f) to admit %s (fee rate %.8f)",
 			evicted.GetID(), txFeeRate(evicted), tx.GetID(), txFeeRate(tx))
 	}
@@ -222,6 +223,7 @@ func (bc *Blockchain) trimMempoolLocked() {
 	}
 	bc.TransactionQueue = remaining
 
+	bc.Metrics().Add("mempool_evicted", uint64(dropped))
 	LogVerbosef("Trimmed %d transaction(s) from the mempool to stay within %d", dropped, capacity)
 }
 

@@ -125,6 +125,7 @@ var publicPaths = []string{
 	"/version",
 	"/info",
 	"/health",
+	"/metrics",
 	"/account/register",
 	"/account/login",
 	"/account/verify",
@@ -360,6 +361,7 @@ func (api *API) registerRoutes() {
 	api.router.HandleFunc("/version", api.handleVersion).Methods("GET")
 	api.router.HandleFunc("/info", api.handleInfo).Methods("GET") // Same as / but JSON only
 	api.router.HandleFunc("/health", api.handleHealth).Methods("GET")
+	api.router.HandleFunc("/metrics", api.handleMetrics).Methods("GET")
 
 	// Register Public Account Endpoints.
 	// register/login are POST: they create state and carry a credential, neither
@@ -561,6 +563,52 @@ func (api *API) handleHealth(w http.ResponseWriter, r *http.Request) {
 	if _, err := w.Write(data); err != nil {
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return
+	}
+}
+
+// handleMetrics exposes node metrics in the Prometheus text exposition format.
+//
+// Public alongside /health: a metrics endpoint behind authentication is one no
+// scraper will be configured for, and nothing here is a secret -- counts,
+// timings and a hash rate, no addresses, balances or keys.
+//
+// Live gauges are passed in rather than mirrored into the recorder, so there is
+// one source of truth for each: the mempool knows its own depth, the P2P layer
+// knows its peer count, and the syncer already keeps its own stats.
+func (api *API) handleMetrics(w http.ResponseWriter, r *http.Request) {
+	extra := map[string]float64{}
+
+	if api.bc != nil {
+		extra["chain_height"] = float64(api.bc.Height())
+		extra["mempool_size"] = float64(api.bc.GetMempoolSize())
+		extra["difficulty"] = float64(api.bc.CurrentDifficulty())
+		extra["utxo_count"] = float64(api.bc.UTXOSet().Size())
+		extra["total_supply"] = api.bc.CalculateTotalSupply()
+	}
+
+	if node := GetNode(); node != nil {
+		if node.P2P != nil {
+			extra["peers"] = float64(node.P2P.PeerCount())
+		}
+		if node.Syncer != nil {
+			stats := node.Syncer.Stats()
+			extra["sync_passes"] = float64(stats.Passes)
+			extra["sync_blocks_pulled"] = float64(stats.BlocksApplied)
+			extra["sync_failures"] = float64(stats.Failures)
+		}
+	}
+
+	var recorder *Metrics
+	if api.bc != nil {
+		recorder = api.bc.Metrics()
+	}
+
+	body := recorder.Prometheus("gbb", extra)
+
+	w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+	if _, err := w.Write([]byte(body)); err != nil {
+		LogVerbosef("Failed to write metrics response: %v", err)
 	}
 }
 

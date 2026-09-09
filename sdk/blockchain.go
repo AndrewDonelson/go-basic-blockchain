@@ -61,6 +61,12 @@ type Blockchain struct {
 	sidechainRouter    *sidechain.ProtocolRouter      // Sidechain protocol router
 	useHeliosMining    bool                           // Flag to enable/disable Helios mining
 
+	// metrics records what the node is doing. Nothing used to be measurable: the
+	// status struct reported a hardcoded `HashRate: 0` and there were no counters
+	// at all.
+	metrics     *Metrics
+	metricsOnce sync.Once
+
 	// Progress indicator
 	progressIndicator *progress.ProgressIndicator
 
@@ -222,7 +228,7 @@ func (bc *Blockchain) DisplayStatus() {
 				BlockCount:  len(bc.Blocks),
 				TxQueueSize: len(bc.TransactionQueue),
 				Difficulty:  bc.cfg.Difficulty,
-				HashRate:    0, // TODO: Calculate actual hash rate
+				HashRate:    bc.Metrics().HashRate(),
 				LastBlock:   "",
 				Peers:       peerCount,
 				IsSynced:    true,
@@ -583,6 +589,7 @@ func (bc *Blockchain) AddTransactionLocal(transaction Transaction) bool {
 	// A coinbase mints supply, so it can never be submitted -- by a user or a
 	// peer. Only the genesis block carries one.
 	if transaction.GetProtocol() == CoinbaseProtocolID {
+		bc.Metrics().Inc("tx_rejected")
 		LogVerbosef("Rejecting transaction %s: a coinbase cannot be submitted", transaction.GetID())
 		return false
 	}
@@ -591,6 +598,7 @@ func (bc *Blockchain) AddTransactionLocal(transaction Transaction) bool {
 	// transaction against unspent outputs, so the same funds could be committed
 	// any number of times.
 	if err := bc.ValidateTransactionFunds(transaction); err != nil {
+		bc.Metrics().Inc("tx_rejected")
 		LogVerbosef("Rejecting transaction %s: %v", transaction.GetID(), err)
 		return false
 	}
@@ -608,10 +616,13 @@ func (bc *Blockchain) AddTransactionLocal(transaction Transaction) bool {
 	// unbounded slice, so anyone could grow it until the node ran out of memory.
 	if err := bc.admitToMempoolLocked(transaction); err != nil {
 		bc.mux.Unlock()
+		bc.Metrics().Inc("tx_rejected")
 		LogVerbosef("Rejecting transaction %s: %v", id, err)
 		return false
 	}
 	bc.mux.Unlock()
+
+	bc.Metrics().Inc("tx_submitted")
 
 	if bc.progressIndicator != nil {
 		// "pending" is accurate here. Reporting "confirmed" immediately after
@@ -959,6 +970,10 @@ func (bc *Blockchain) commitMinedBlock(newBlock *Block, txCount int) {
 		LogInfof("Error saving blockchain state: %v", err)
 	}
 
+	bc.Metrics().Inc("blocks_mined")
+	bc.Metrics().RecordBlock(newBlock.Header.Timestamp, int(newBlock.Header.Difficulty))
+	bc.Metrics().Add("tx_mined", uint64(txCount))
+
 	LogVerbosef("New block created: [#%s] Hash: %s with %d transactions",
 		newBlock.Index.String(), newBlock.Hash, txCount)
 	LogVerbosef("Blockchain state updated: CurrentBlockIndex=%d, NextBlockIndex=%d",
@@ -1003,6 +1018,21 @@ func (bc *Blockchain) HasTransactionID(id string) bool {
 	return false
 }
 
+// Metrics returns the node's metrics recorder, creating it on first use.
+//
+// Lazily initialised because Blockchain is constructed directly in several
+// places, including tests, and a nil recorder would otherwise have to be checked
+// at every call site. Every Metrics method also tolerates a nil receiver, so this
+// is belt and braces.
+func (bc *Blockchain) Metrics() *Metrics {
+	bc.metricsOnce.Do(func() {
+		if bc.metrics == nil {
+			bc.metrics = NewMetrics()
+		}
+	})
+	return bc.metrics
+}
+
 // AcceptBlock validates a block received from a peer and adds it to the chain.
 //
 // Three outcomes:
@@ -1038,7 +1068,21 @@ func (bc *Blockchain) AcceptBlockWithResult(block *Block) (ReorgResult, error) {
 
 	result, disconnected, connected, err := bc.acceptBlockLocked(block)
 	if err != nil {
+		// A duplicate or a lighter branch is not a rejection; counting either
+		// would make the rejection rate meaningless on a network where every
+		// block arrives from several peers.
+		if !errors.Is(err, ErrKnownBlock) && !errors.Is(err, ErrWeakerBranch) {
+			bc.Metrics().Inc("blocks_rejected")
+		}
 		return result, err
+	}
+
+	bc.Metrics().Inc("blocks_accepted")
+	bc.Metrics().RecordBlock(block.Header.Timestamp, int(block.Header.Difficulty))
+	bc.Metrics().Add("tx_mined", uint64(len(block.Transactions)))
+	if result.Reorganised {
+		bc.Metrics().Inc("reorgs")
+		bc.Metrics().Add("reorg_blocks", uint64(result.Disconnected))
 	}
 
 	// Mempool restoration takes the lock itself, so it runs after acceptBlockLocked
