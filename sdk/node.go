@@ -71,6 +71,9 @@ type Node struct {
 	P2P               *P2P
 	Wallet            *Wallet
 	ProgressIndicator *progress.ProgressIndicator
+
+	// Syncer pulls blocks from peers with longer chains.
+	Syncer *Syncer
 }
 
 // (Node embeds sync.Mutex, so Lock/Unlock are already promoted; the hand-written
@@ -87,6 +90,23 @@ func GetNode() *Node {
 func NewNode(opts *NodeOptions) error {
 	if node != nil {
 		return errors.New("node already exists")
+	}
+	if opts == nil {
+		return errors.New("node options cannot be nil")
+	}
+	if opts.Config == nil {
+		opts.Config = NewConfig()
+	}
+
+	// Carry the seed settings onto the Config, which is what the running node
+	// actually reads. They used to be set on NodeOptions and then dropped, so
+	// --seed and --seed-address had no effect on a running node.
+	opts.Config.IsSeed = opts.IsSeed || opts.Config.IsSeed
+	if opts.SeedAddress != "" {
+		opts.Config.SeedAddress = opts.SeedAddress
+	}
+	if opts.DataPath != "" && opts.Config.DataPath == "" {
+		opts.Config.DataPath = opts.DataPath
 	}
 
 	node = &Node{
@@ -112,12 +132,34 @@ func NewNode(opts *NodeOptions) error {
 		node.API = api
 	}
 
-	// Initialize P2P
+	// Initialize P2P and connect it to the chain, so this node can both serve
+	// sync requests and apply what peers send it.
 	p2p := NewP2P()
 	if p2p == nil {
 		return errors.New("failed to create P2P")
 	}
 	node.P2P = p2p
+
+	p2p.SetChain(blockchain)
+	p2p.SetSelfInfo(node.ID, opts.Config.P2PHostName)
+	if opts.IsSeed {
+		p2p.SetAsSeedNode()
+	}
+
+	// Relay locally produced blocks and transactions. The chain calls these
+	// hooks; it does not import the P2P layer.
+	blockchain.SetBlockAnnouncer(p2p.AnnounceBlock)
+	blockchain.SetTransactionAnnouncer(p2p.AnnounceTransaction)
+
+	syncer, err := NewSyncer(SyncerOptions{
+		Chain:     blockchain,
+		Transport: p2p,
+		Peers:     p2p,
+	})
+	if err != nil {
+		return fmt.Errorf("failed to create chain syncer: %w", err)
+	}
+	node.Syncer = syncer
 
 	// Initialize the node wallet.
 	//
@@ -295,6 +337,20 @@ func (n *Node) RunContext(ctx context.Context) {
 		n.ProgressIndicator.ShowSuccess("Blockchain initialized successfully")
 	}
 	go n.Blockchain.RunContext(ctx, n.Config.Difficulty)
+
+	// Connect to the configured seed node, then start pulling from peers.
+	if n.Config.SeedAddress != "" && n.P2P != nil {
+		go func() {
+			if err := n.P2P.ConnectToSeedNode(n.Config.SeedAddress); err != nil {
+				LogInfof("Could not connect to seed node %s: %v", n.Config.SeedAddress, err)
+			}
+		}()
+	}
+
+	if n.Syncer != nil {
+		go n.Syncer.Run(ctx, defaultSyncInterval)
+		LogInfof("Chain sync started (every %s)", defaultSyncInterval)
+	}
 
 	if n.Config.EnableAPI && n.API != nil {
 		go func() {

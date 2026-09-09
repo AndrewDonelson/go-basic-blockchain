@@ -67,6 +67,12 @@ type Blockchain struct {
 	// Menu state
 	menuActive bool
 	menuMutex  sync.RWMutex
+
+	// Network announcement hooks. These let the P2P layer relay blocks and
+	// transactions without the chain package depending on it.
+	announceBlock func(*Block)
+	announceTx    func(Transaction)
+	announceMu    sync.RWMutex
 }
 
 // NewBlockchain creates a new instance of the Blockchain struct with the provided configuration.
@@ -530,11 +536,34 @@ func (bc *Blockchain) LoadExistingBlocks() error {
 // signature unverifiable. The router now observes transactions for its rollup
 // accounting while the mempool keeps the real thing.
 func (bc *Blockchain) AddTransaction(transaction Transaction) {
-	if transaction == nil {
+	if !bc.AddTransactionLocal(transaction) {
 		return
 	}
 
+	// Locally originated, so relay it to peers. Transactions that arrive *from* a
+	// peer use AddTransactionLocal directly: re-announcing one would bounce it
+	// back and forth between nodes indefinitely.
+	bc.announceTransaction(transaction)
+}
+
+// AddTransactionLocal queues a transaction without relaying it to peers.
+//
+// It reports whether the transaction was newly queued, so a relayed duplicate is
+// not counted or re-announced.
+func (bc *Blockchain) AddTransactionLocal(transaction Transaction) bool {
+	if transaction == nil {
+		return false
+	}
+
+	id := transaction.GetID()
+
 	bc.mux.Lock()
+	for _, queued := range bc.TransactionQueue {
+		if queued.GetID() == id {
+			bc.mux.Unlock()
+			return false
+		}
+	}
 	bc.TransactionQueue = append(bc.TransactionQueue, transaction)
 	bc.mux.Unlock()
 
@@ -542,10 +571,11 @@ func (bc *Blockchain) AddTransaction(transaction Transaction) {
 		// "pending" is accurate here. Reporting "confirmed" immediately after
 		// queueing, as this used to, told the caller a transaction was final while
 		// it was still sitting in the mempool.
-		bc.progressIndicator.ShowTransactionProgress(transaction.GetID(), "pending")
+		bc.progressIndicator.ShowTransactionProgress(id, "pending")
 	}
 
 	bc.routeToSidechain(transaction)
+	return true
 }
 
 // routeToSidechain mirrors a transaction into the protocol router for rollup
@@ -825,6 +855,21 @@ func (bc *Blockchain) createNewBlock(difficulty int) {
 		LogInfof("Error saving block: %v", err)
 	}
 
+	bc.commitMinedBlock(newBlock, len(queuedTransactions))
+
+	// Relay the block we just mined. This happens after the lock is released, so
+	// network I/O never blocks the chain.
+	//
+	// Only *mined* blocks are announced, never accepted ones. Re-announcing an
+	// accepted block would echo it straight back to the peer that sent it; peers
+	// that are further behind close the gap through the periodic Syncer, which
+	// fetches the intervening blocks too. One-hop announcement plus periodic sync
+	// is simpler than gossip with deduplication, and has no loop to get wrong.
+	bc.announce(newBlock)
+}
+
+// commitMinedBlock appends a freshly mined block and persists chain state.
+func (bc *Blockchain) commitMinedBlock(newBlock *Block, txCount int) {
 	bc.mux.Lock()
 	defer bc.mux.Unlock()
 
@@ -837,7 +882,7 @@ func (bc *Blockchain) createNewBlock(difficulty int) {
 	}
 
 	LogVerbosef("New block created: [#%s] Hash: %s with %d transactions",
-		newBlock.Index.String(), newBlock.Hash, len(queuedTransactions))
+		newBlock.Index.String(), newBlock.Hash, txCount)
 	LogVerbosef("Blockchain state updated: CurrentBlockIndex=%d, NextBlockIndex=%d",
 		bc.CurrentBlockIndex, bc.NextBlockIndex)
 }
@@ -1203,6 +1248,126 @@ func (bc *Blockchain) GetMempoolSize() int {
 	defer bc.mux.Unlock()
 
 	return len(bc.TransactionQueue)
+}
+
+// Height returns the index of the head block, or -1 for an empty chain.
+//
+// Height is the block's own Index, not its slice position, so it stays correct
+// if the two ever diverge.
+func (bc *Blockchain) Height() int {
+	bc.mux.Lock()
+	defer bc.mux.Unlock()
+	return bc.heightLocked()
+}
+
+func (bc *Blockchain) heightLocked() int {
+	if len(bc.Blocks) == 0 {
+		return -1
+	}
+	return int(bc.Blocks[len(bc.Blocks)-1].Index.Int64())
+}
+
+// HeadHash returns the hash of the head block, or "" for an empty chain.
+func (bc *Blockchain) HeadHash() string {
+	bc.mux.Lock()
+	defer bc.mux.Unlock()
+	if len(bc.Blocks) == 0 {
+		return ""
+	}
+	return bc.Blocks[len(bc.Blocks)-1].Hash
+}
+
+// GenesisHash returns the hash of block 0, or "" for an empty chain.
+//
+// Peers compare this before syncing: two nodes with different genesis blocks are
+// on different networks, and pulling blocks across that boundary would be
+// meaningless.
+func (bc *Blockchain) GenesisHash() string {
+	bc.mux.Lock()
+	defer bc.mux.Unlock()
+	if len(bc.Blocks) == 0 {
+		return ""
+	}
+	return bc.Blocks[0].Hash
+}
+
+// ChainStatus summarises this node's chain for a peer.
+func (bc *Blockchain) ChainStatus() ChainStatus {
+	bc.mux.Lock()
+	defer bc.mux.Unlock()
+
+	status := ChainStatus{Height: bc.heightLocked()}
+	if len(bc.Blocks) > 0 {
+		status.HeadHash = bc.Blocks[len(bc.Blocks)-1].Hash
+		status.GenesisHash = bc.Blocks[0].Hash
+	}
+	if n := GetNode(); n != nil {
+		status.NodeID = n.ID
+	}
+	return status
+}
+
+// GetBlocksFrom returns up to count blocks starting at block index startIndex.
+//
+// Selection is by the block's own Index rather than its slice position, so a
+// sync request for "everything from height N" means what it says.
+func (bc *Blockchain) GetBlocksFrom(startIndex, count int) []*Block {
+	bc.mux.Lock()
+	defer bc.mux.Unlock()
+
+	if count <= 0 {
+		return []*Block{}
+	}
+
+	out := make([]*Block, 0, count)
+	for _, block := range bc.Blocks {
+		if int(block.Index.Int64()) < startIndex {
+			continue
+		}
+		out = append(out, block)
+		if len(out) == count {
+			break
+		}
+	}
+	return out
+}
+
+// SetBlockAnnouncer registers a callback invoked after a block is added locally,
+// so the networking layer can relay it without the chain importing the P2P code.
+func (bc *Blockchain) SetBlockAnnouncer(fn func(*Block)) {
+	bc.announceMu.Lock()
+	defer bc.announceMu.Unlock()
+	bc.announceBlock = fn
+}
+
+// SetTransactionAnnouncer registers a callback invoked when a transaction enters
+// the local mempool.
+func (bc *Blockchain) SetTransactionAnnouncer(fn func(Transaction)) {
+	bc.announceMu.Lock()
+	defer bc.announceMu.Unlock()
+	bc.announceTx = fn
+}
+
+// announce relays a newly added block to the network, if an announcer is set.
+func (bc *Blockchain) announce(block *Block) {
+	bc.announceMu.RLock()
+	fn := bc.announceBlock
+	bc.announceMu.RUnlock()
+
+	if fn != nil {
+		fn(block)
+	}
+}
+
+// announceTransaction relays a newly queued transaction, if an announcer is set.
+func (bc *Blockchain) announceTransaction(tx Transaction) {
+	bc.announceMu.RLock()
+	fn := bc.announceTx
+	bc.announceMu.RUnlock()
+
+	if fn != nil {
+		fn(tx)
+	}
 }
 
 // GetBlockRange returns a copy of the blocks in [start, end).

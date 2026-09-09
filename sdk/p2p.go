@@ -115,6 +115,21 @@ type P2P struct {
 	running    bool
 	isSeedNode bool
 	listener   net.Listener
+
+	// chain is the local blockchain this node serves to, and accepts from, peers.
+	chain *Blockchain
+
+	// selfID/selfAddress are this node's own identity for the handshake. They used
+	// to be looked up from p.nodes via getSelfNodeID(), which returned "" when the
+	// node had not registered itself -- and the caller then dereferenced the nil
+	// map entry that produced.
+	selfID      string
+	selfAddress string
+}
+
+// newLimitedReader bounds how many bytes may be read from a connection.
+func newLimitedReader(conn net.Conn, limit int64) io.Reader {
+	return io.LimitReader(conn, limit)
 }
 
 // P2PTransaction represents a transaction to be processed.
@@ -359,7 +374,31 @@ func (p *P2P) PeerCount() int {
 	return len(p.nodes)
 }
 
+// getBindAddress returns the address this node listens on.
+//
+// The address set via SetSelfInfo takes priority over the global node, so a P2P
+// instance can be created and bound independently -- which is what makes more
+// than one node testable in a single process.
 func (p *P2P) getBindAddress() string {
+	p.mutex.RLock()
+	self := p.selfAddress
+	p.mutex.RUnlock()
+
+	return p.resolveBindAddress(self)
+}
+
+// bindAddressLocked is getBindAddress for callers that already hold p.mutex.
+// Calling getBindAddress from under the lock would re-enter it.
+func (p *P2P) bindAddressLocked() string {
+	return p.resolveBindAddress(p.selfAddress)
+}
+
+// resolveBindAddress applies the precedence: this node's own address, then the
+// global node's config, then the compiled-in default.
+func (p *P2P) resolveBindAddress(self string) string {
+	if self != "" {
+		return self
+	}
 	if n := GetNode(); n != nil && n.Config != nil && n.Config.P2PHostName != "" {
 		return n.Config.P2PHostName
 	}
@@ -375,7 +414,7 @@ func (p *P2P) Start() error {
 		return errors.New("P2P network is already running")
 	}
 
-	LogInfof("P2P network starting on %s", p.getBindAddress())
+	LogInfof("P2P network starting on %s", p.bindAddressLocked())
 	p.running = true
 
 	go p.runProcessQueue()
@@ -538,26 +577,58 @@ func (p *P2P) performHandshake(conn net.Conn) error {
 		return fmt.Errorf("failed to send confirmation: %w", err)
 	}
 
-	// Register the new node
-	newNode := &Node{
-		ID:     nodeInfo.ID,
-		Config: &Config{P2PHostName: nodeInfo.Address},
+	if nodeInfo.ID == "" {
+		return errors.New("peer did not identify itself")
 	}
-	err = p.RegisterNode(newNode)
-	if err != nil {
-		return fmt.Errorf("failed to register node: %w", err)
-	}
+
+	// Record the peer.
+	//
+	// This used to call RegisterNode and fail the handshake on its "node already
+	// registered" error, so a peer could connect exactly once and every
+	// subsequent request from it was refused before being served.
+	p.rememberPeer(nodeInfo)
 
 	return nil
 }
 
-func (p *P2P) processMessage(message string, conn net.Conn) error {
-	switch message {
-	case "GET_NODES":
-		return p.sendNodeList(conn)
-	default:
-		return p.processP2PTransaction(message)
+// rememberPeer records or refreshes a peer learned from a handshake.
+func (p *P2P) rememberPeer(info NodeInfo) {
+	p.mutex.Lock()
+	defer p.mutex.Unlock()
+
+	if existing, ok := p.nodes[info.ID]; ok && existing != nil {
+		existing.LastSeen = time.Now()
+		if info.Address != "" {
+			if existing.Config == nil {
+				existing.Config = &Config{}
+			}
+			existing.Config.P2PHostName = info.Address
+		}
+		return
 	}
+
+	p.nodes[info.ID] = &Node{
+		ID:       info.ID,
+		Config:   &Config{P2PHostName: info.Address},
+		Status:   "known",
+		LastSeen: time.Now(),
+	}
+	LogVerbosef("Registered peer from handshake: %s (%s)", info.ID, info.Address)
+}
+
+func (p *P2P) processMessage(message string, conn net.Conn) error {
+	if message == cmdGetNodes {
+		return p.sendNodeList(conn)
+	}
+
+	// Sync commands (GET_STATUS, GET_BLOCKS, ANNOUNCE_*) are handled first; a
+	// message that is not one of them falls through to the legacy envelope path.
+	handled, err := p.handleSyncCommand(message, conn)
+	if handled {
+		return err
+	}
+
+	return p.processP2PTransaction(message)
 }
 
 func (p *P2P) sendNodeList(conn net.Conn) error {
@@ -642,26 +713,27 @@ func (p *P2P) discoverNodes() {
 }
 
 func (p *P2P) requestNodeList(node *Node) ([]*Node, error) {
-	conn, err := net.Dial("tcp", node.Config.P2PHostName)
-	if err != nil {
-		return nil, fmt.Errorf("failed to connect to node: %w", err)
-	}
-	defer conn.Close()
-
-	_, err = conn.Write([]byte("GET_NODES\n"))
-	if err != nil {
-		return nil, fmt.Errorf("failed to send GET_NODES request: %w", err)
+	if node == nil || node.Config == nil {
+		return nil, errors.New("peer has no address")
 	}
 
-	reader := bufio.NewReader(conn)
-	response, err := reader.ReadString('\n')
+	// Goes through dialPeer so the handshake happens. This function used to dial
+	// and send GET_NODES immediately, while the server expected HELLO first -- the
+	// handshake failed and the connection was dropped every time, so node
+	// discovery could never have worked.
+	pc, err := p.dialPeer(node.Config.P2PHostName)
 	if err != nil {
-		return nil, fmt.Errorf("failed to receive node list: %w", err)
+		return nil, err
+	}
+	defer pc.close()
+
+	response, err := pc.request(cmdGetNodes)
+	if err != nil {
+		return nil, err
 	}
 
 	var nodeInfoList []NodeInfo
-	err = json.Unmarshal([]byte(response), &nodeInfoList)
-	if err != nil {
+	if err := json.Unmarshal([]byte(response), &nodeInfoList); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal node list: %w", err)
 	}
 

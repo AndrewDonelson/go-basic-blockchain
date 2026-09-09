@@ -213,39 +213,36 @@ type Blockchain struct {
 9. Network propagation
 ```
 
-### Network Synchronization — NOT IMPLEMENTED
+### Network Synchronization
 
-The flow below is the **intended** design. It is documented here as a roadmap,
-not as a description of the current code, because that distinction was previously
-unclear:
+Implemented -- see [Chain Synchronisation](sync.md) for the protocol and its
+limits.
 
 ```
 1. Node starts up
    ↓
-2. Load local blockchain            ← implemented (LoadExistingBlocks)
+2. Load local blockchain            ← LoadExistingBlocks
    ↓
-3. Connect to peers                 ← partially: peer lists are exchanged
+3. Connect to peers                 ← handshake, seed connection, GET_NODES
    ↓
-4. Request missing blocks           ← NOT implemented
+4. Request missing blocks           ← Syncer: GET_STATUS then GET_BLOCKS
    ↓
-5. Validate received blocks         ← implemented (AcceptBlock)
+5. Validate received blocks         ← AcceptBlock (structure, txs, proof of work)
    ↓
-6. Update local chain               ← implemented, head-extension only
+6. Update local chain               ← head-extension only; no reorg
    ↓
-7. Broadcast new blocks             ← NOT implemented
+7. Broadcast new blocks             ← ANNOUNCE_BLOCK on mining
    ↓
-8. Maintain network state           ← NOT implemented
+8. Maintain network state           ← peer refresh on every handshake
 ```
 
-**What actually happens today:** P2P discovers peers and exchanges peer lists.
-Blocks and transactions are **not** propagated. `AcceptBlock` will validate and
-append a block handed to it via `POST /consensus/block`, but only if that block
-extends the current head — there is no fork choice, no orphan pool and no
-rollback, so a block that does not extend the head is refused rather than
-compared by cumulative work.
+**Still missing: fork choice.** A block that does not extend the current head is
+refused rather than compared by cumulative work. There is no orphan pool and no
+rollback, so two nodes that mine simultaneously diverge permanently. Sync closes
+gaps; it does not resolve competing histories.
 
-Each node therefore mines its own independent chain. Chain sync and fork choice
-are the two largest pieces of outstanding work.
+**Also missing: peer authentication.** Any host may claim any node ID, and the
+transport is plaintext.
 
 ## 🔐 Security Architecture
 

@@ -70,8 +70,10 @@ specific about which is which.
 | Transaction signing | ✅ Working — signatures cover all protocol fields |
 | Wallets & key storage | ✅ Working — encrypted at rest, atomic writes |
 | REST API | ✅ Working — authenticated, rate limited, paginated |
-| P2P peer discovery | ⚠️ Partial — peers exchange node lists; no peer authentication |
-| Block/transaction propagation | ❌ Not implemented — nodes do not sync chains |
+| P2P peer discovery | ✅ Working — handshake, node lists, seed connection |
+| Chain synchronisation | ✅ Working — pull from longer peers, push mined blocks ([docs](docs/sync.md)) |
+| Transaction propagation | ✅ Working — relayed transactions are signature-verified |
+| Peer authentication | ❌ Not implemented — any host may claim any node ID; transport is plaintext |
 | Fork choice / reorganisation | ❌ Not implemented — a block that does not extend the head is refused |
 | UTXO / account state model | ❌ Not implemented — balances are derived by scanning the chain |
 
