@@ -397,18 +397,20 @@ func TestInputSelectionIsDeterministic(t *testing.T) {
 
 	// Build one chain of blocks: several coinbase outputs, then a spend that has
 	// real choices to make about which of them to consume.
-	var blocks []*Block
-	var previousHash string
-	for i := int64(0); i < 5; i++ {
-		b := utxoBlock(t, i, previousHash, mintTo(t, alice, alice, 10))
-		blocks = append(blocks, b)
-		previousHash = b.Hash
+	// All five mints go in block 0: minting is a genesis-only event, and what this
+	// test needs is several separate outputs to choose between, not several
+	// blocks.
+	var mints []Transaction
+	for i := 0; i < 5; i++ {
+		mints = append(mints, mintTo(t, alice, alice, 10))
 	}
+	genesis := utxoBlock(t, 0, "", mints...)
+
 	transfer, err := NewBankTransaction(alice, bob, 25)
 	if err != nil {
 		t.Fatalf("tx: %v", err)
 	}
-	blocks = append(blocks, utxoBlock(t, 5, previousHash, transfer))
+	blocks := []*Block{genesis, utxoBlock(t, 1, genesis.Hash, transfer)}
 
 	fingerprintOf := func(set *UTXOSet) []string {
 		var out []string
@@ -546,11 +548,22 @@ func TestRevertMustBeInReverseOrder(t *testing.T) {
 	set := NewUTXOSet()
 	split := utxoTestSplit()
 
+	if err := alice.SetData("balance", 10000.0); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
 	first := utxoBlock(t, 0, "", mintTo(t, alice, alice, 10))
 	if _, err := set.ApplyBlock(first, split); err != nil {
 		t.Fatalf("apply: %v", err)
 	}
-	second := utxoBlock(t, 1, first.Hash, mintTo(t, alice, alice, 10))
+	// The second block spends what the first minted, which is what makes the
+	// ordering rule matter: reverting the first while the second still depends on
+	// it would resurrect an output that is already gone.
+	spend, err := NewBankTransaction(alice, alice, 4)
+	if err != nil {
+		t.Fatalf("tx: %v", err)
+	}
+	second := utxoBlock(t, 1, first.Hash, spend)
 	if _, err := set.ApplyBlock(second, split); err != nil {
 		t.Fatalf("apply: %v", err)
 	}
@@ -737,24 +750,19 @@ func TestMempoolCountsAlreadyQueuedSpends(t *testing.T) {
 // the same set as applying blocks as they arrived. The set is derived state, and
 // this is what makes deriving it safe.
 func TestRebuildUTXOSetMatchesIncrementalApplication(t *testing.T) {
-	bc := forkTestChain(t, 0, 4)
 	alice, bob := utxoWallets(t)
 
 	if err := alice.SetData("balance", 10000.0); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
 
-	// Mint, then spend, through real blocks.
-	coinbase := mintTo(t, alice, alice, 500)
-	block1 := utxoBlock(t, 1, bc.HeadHash(), coinbase)
-	if _, err := bc.AcceptBlockWithResult(block1); err != nil {
-		t.Fatalf("accept block 1: %v", err)
-	}
+	// Mint in genesis, then spend through a real block.
+	bc := forkTestChainWithGenesisTxs(t, 0, 4, mintTo(t, alice, alice, 500))
 
 	transfer, _ := NewBankTransaction(alice, bob, 120)
-	block2 := utxoBlock(t, 2, bc.HeadHash(), transfer)
-	if _, err := bc.AcceptBlockWithResult(block2); err != nil {
-		t.Fatalf("accept block 2: %v", err)
+	block1 := utxoBlock(t, 1, bc.HeadHash(), transfer)
+	if _, err := bc.AcceptBlockWithResult(block1); err != nil {
+		t.Fatalf("accept block 1: %v", err)
 	}
 
 	incremental := map[string]int64{}
@@ -784,18 +792,15 @@ func TestRebuildUTXOSetMatchesIncrementalApplication(t *testing.T) {
 // TestReorgRebuildsTheUTXOSet: switching branches must move balances with the
 // chain, not leave the set describing the abandoned history.
 func TestReorgRebuildsTheUTXOSet(t *testing.T) {
-	bc := forkTestChain(t, 2, 4)
 	alice, bob := utxoWallets(t)
 
 	if err := alice.SetData("balance", 10000.0); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
 
-	// Fund Alice on the chain.
-	fundBlock := utxoBlock(t, 3, bc.HeadHash(), mintTo(t, alice, alice, 200))
-	if _, err := bc.AcceptBlockWithResult(fundBlock); err != nil {
-		t.Fatalf("accept fund block: %v", err)
-	}
+	// Fund Alice in genesis, which is the only block that may mint. Her funding is
+	// therefore before the fork and must survive the reorganisation.
+	bc := forkTestChainWithGenesisTxs(t, 3, 4, mintTo(t, alice, alice, 200))
 
 	// A block that pays Bob, on the branch that will be abandoned.
 	transfer, _ := NewBankTransaction(alice, bob, 75)
@@ -848,27 +853,23 @@ func TestReorgRebuildsTheUTXOSet(t *testing.T) {
 
 // TestBlockWithADoubleSpendIsRefusedByTheChain covers the chain-level guard.
 func TestBlockWithADoubleSpendIsRefusedByTheChain(t *testing.T) {
-	bc := forkTestChain(t, 0, 4)
 	alice, bob := utxoWallets(t)
 
 	if err := alice.SetData("balance", 10000.0); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
 
-	fundBlock := utxoBlock(t, 1, bc.HeadHash(), mintTo(t, alice, alice, 10))
-	if _, err := bc.AcceptBlockWithResult(fundBlock); err != nil {
-		t.Fatalf("accept: %v", err)
-	}
+	bc := forkTestChainWithGenesisTxs(t, 0, 4, mintTo(t, alice, alice, 10))
 
 	first, _ := NewBankTransaction(alice, bob, 8)
 	second, _ := NewBankTransaction(alice, bob, 8)
 
-	doubleSpend := utxoBlock(t, 2, bc.HeadHash(), first, second)
+	doubleSpend := utxoBlock(t, 1, bc.HeadHash(), first, second)
 	if _, err := bc.AcceptBlockWithResult(doubleSpend); err == nil {
 		t.Fatal("a block containing a double spend was accepted onto the chain")
 	}
 
-	if bc.Height() != 1 {
+	if bc.Height() != 0 {
 		t.Fatalf("the rejected block joined the chain; height is %d", bc.Height())
 	}
 	if bc.GetBalanceUnits(bob.GetAddress()) != 0 {
@@ -879,27 +880,24 @@ func TestBlockWithADoubleSpendIsRefusedByTheChain(t *testing.T) {
 // TestTotalSupplyReflectsCirculation: supply is the sum of unspent outputs, not
 // the sum of everything ever minted.
 func TestTotalSupplyReflectsCirculation(t *testing.T) {
-	bc := forkTestChain(t, 0, 4)
 	alice, bob := utxoWallets(t)
 
-	if got := bc.CalculateTotalSupply(); got != 0 {
-		t.Fatalf("expected zero supply on an empty chain, got %v", got)
+	if got := forkTestChain(t, 0, 4).CalculateTotalSupply(); got != 0 {
+		t.Fatalf("expected zero supply on a chain that has minted nothing, got %v", got)
 	}
 
 	if err := alice.SetData("balance", 10000.0); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
-	fundBlock := utxoBlock(t, 1, bc.HeadHash(), mintTo(t, alice, alice, 100))
-	if _, err := bc.AcceptBlockWithResult(fundBlock); err != nil {
-		t.Fatalf("accept: %v", err)
-	}
+	// Supply is minted in genesis and never again.
+	bc := forkTestChainWithGenesisTxs(t, 0, 4, mintTo(t, alice, alice, 100))
 	if got := bc.CalculateTotalSupply(); got != 100 {
 		t.Fatalf("supply = %v, want 100", got)
 	}
 
 	// A transfer moves value but must not change the supply.
 	transfer, _ := NewBankTransaction(alice, bob, 30)
-	spend := utxoBlock(t, 2, bc.HeadHash(), transfer)
+	spend := utxoBlock(t, 1, bc.HeadHash(), transfer)
 	if _, err := bc.AcceptBlockWithResult(spend); err != nil {
 		t.Fatalf("accept: %v", err)
 	}

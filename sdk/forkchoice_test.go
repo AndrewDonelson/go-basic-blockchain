@@ -22,6 +22,16 @@ import (
 // forkTestChain returns a chain of `height+1` blocks (indices 0..height).
 func forkTestChain(t *testing.T, height int, difficulty uint32) *Blockchain {
 	t.Helper()
+	return forkTestChainWithGenesisTxs(t, height, difficulty)
+}
+
+// forkTestChainWithGenesisTxs is forkTestChain with transactions in block 0.
+//
+// Minting is a genesis-only event, so a test that needs a funded address on a
+// real chain has to arrange it here rather than dropping a coinbase into a later
+// block -- which is exactly what Block.Validate now refuses.
+func forkTestChainWithGenesisTxs(t *testing.T, height int, difficulty uint32, genesisTxs ...Transaction) *Blockchain {
+	t.Helper()
 
 	cfg := NewConfig()
 	cfg.DataPath = t.TempDir()
@@ -44,6 +54,10 @@ func forkTestChain(t *testing.T, height int, difficulty uint32) *Blockchain {
 	previousHash := ""
 	for i := 0; i <= height; i++ {
 		b := forkTestBlock(i, previousHash, difficulty, "")
+		if i == 0 && len(genesisTxs) > 0 {
+			b.Transactions = genesisTxs
+			b.Header.MerkleRoot = b.CalculateMerkleRoot()
+		}
 		b.Header.Timestamp = base.Add(time.Duration(i) * time.Minute)
 		b.Hash = b.CalculateHash()
 		bc.Blocks = append(bc.Blocks, b)
@@ -51,6 +65,14 @@ func forkTestChain(t *testing.T, height int, difficulty uint32) *Blockchain {
 	}
 	bc.CurrentBlockIndex = height
 	bc.NextBlockIndex = height + 1
+
+	if len(genesisTxs) > 0 {
+		// Derive the set from the chain, so the funded balances come from a real
+		// block rather than being poked into the set behind its back.
+		if err := bc.RebuildUTXOSet(); err != nil {
+			t.Fatalf("rebuild utxo set: %v", err)
+		}
+	}
 	return bc
 }
 

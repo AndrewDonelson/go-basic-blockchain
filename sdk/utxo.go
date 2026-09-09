@@ -368,7 +368,13 @@ func (s *UTXOSet) applyTransactionLocked(tx Transaction, blockIndex int64, split
 
 	switch concrete := tx.(type) {
 	case *Coinbase:
-		// Newly minted supply. It consumes nothing.
+		// Newly minted supply. It consumes nothing, which is exactly why it must
+		// never be applied outside block 0 -- see Block.Validate. This is the
+		// second line of defence: any future path that reaches the set without
+		// going through block validation still cannot inflate the supply.
+		if blockIndex != 0 {
+			return fmt.Errorf("coinbase transaction %s is not permitted in block %d", txID, blockIndex)
+		}
 		if recipient == "" {
 			return errors.New("coinbase transaction has no recipient")
 		}

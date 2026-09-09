@@ -282,6 +282,20 @@ func (b *Block) Validate(previousBlock *Block) error {
 		if err := tx.Validate(); err != nil {
 			return fmt.Errorf("invalid transaction: %v", err)
 		}
+		// Newly minted supply is a genesis-only event.
+		//
+		// The UTXO set credits a coinbase's TokenCount to its recipient and
+		// consumes nothing, and nothing used to restrict which block a coinbase
+		// could appear in. A peer could therefore mine an ordinary block
+		// containing a coinbase for the entire TokenCount, have it accepted, and
+		// mint the whole supply to itself out of nothing -- repeatably, once per
+		// block. This chain's supply is fixed and minted in block 0; miners are
+		// paid from transaction fees.
+		if b.Index.Sign() != 0 && tx.GetProtocol() == CoinbaseProtocolID {
+			return fmt.Errorf(
+				"block %s contains a coinbase transaction (%s); supply is minted only in the genesis block",
+				b.Index.String(), tx.GetID())
+		}
 	}
 	if b.Hash != b.CalculateHash() {
 		return errors.New("invalid block hash")

@@ -580,6 +580,13 @@ func (bc *Blockchain) AddTransactionLocal(transaction Transaction) bool {
 		return false
 	}
 
+	// A coinbase mints supply, so it can never be submitted -- by a user or a
+	// peer. Only the genesis block carries one.
+	if transaction.GetProtocol() == CoinbaseProtocolID {
+		LogVerbosef("Rejecting transaction %s: a coinbase cannot be submitted", transaction.GetID())
+		return false
+	}
+
 	// Reject a transaction the sender cannot afford. Nothing used to check a
 	// transaction against unspent outputs, so the same funds could be committed
 	// any number of times.
