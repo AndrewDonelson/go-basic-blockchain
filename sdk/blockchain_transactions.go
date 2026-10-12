@@ -4,6 +4,18 @@ package sdk
 
 import (
 	"encoding/json"
+	"errors"
+	"fmt"
+)
+
+var (
+	// ErrTransactionAlreadyQueued is returned when a transaction with the same
+	// id is already waiting in the mempool.
+	ErrTransactionAlreadyQueued = errors.New("transaction is already queued")
+
+	// ErrCoinbaseSubmitted is returned when a coinbase is offered for
+	// submission. A coinbase mints supply; only the genesis block carries one.
+	ErrCoinbaseSubmitted = errors.New("a coinbase transaction cannot be submitted")
 )
 
 // AddTransaction adds a transaction to the blockchain's transaction queue.
@@ -17,14 +29,26 @@ import (
 // signature unverifiable. The router now observes transactions for its rollup
 // accounting while the mempool keeps the real thing.
 func (bc *Blockchain) AddTransaction(transaction Transaction) {
-	if !bc.AddTransactionLocal(transaction) {
-		return
+	_ = bc.SubmitTransaction(transaction)
+}
+
+// SubmitTransaction is AddTransaction, reporting why a transaction was not
+// queued.
+//
+// AddTransaction answers nothing, which is fine for a caller inside the node
+// and useless for one on the other side of an API: "your transaction was
+// dropped" with no reason is not something an application can act on. The two
+// share one path, so they cannot disagree about what is admitted.
+func (bc *Blockchain) SubmitTransaction(transaction Transaction) error {
+	if err := bc.admitTransactionLocal(transaction); err != nil {
+		return err
 	}
 
 	// Locally originated, so relay it to peers. Transactions that arrive *from* a
 	// peer use AddTransactionLocal directly: re-announcing one would bounce it
 	// back and forth between nodes indefinitely.
 	bc.announceTransaction(transaction)
+	return nil
 }
 
 // AddTransactionLocal queues a transaction without relaying it to peers.
@@ -32,8 +56,14 @@ func (bc *Blockchain) AddTransaction(transaction Transaction) {
 // It reports whether the transaction was newly queued, so a relayed duplicate is
 // not counted or re-announced.
 func (bc *Blockchain) AddTransactionLocal(transaction Transaction) bool {
+	return bc.admitTransactionLocal(transaction) == nil
+}
+
+// admitTransactionLocal queues a transaction without relaying it, returning
+// the reason when it is not queued.
+func (bc *Blockchain) admitTransactionLocal(transaction Transaction) error {
 	if transaction == nil {
-		return false
+		return errors.New("transaction is nil")
 	}
 
 	// A coinbase mints supply, so it can never be submitted -- by a user or a
@@ -41,7 +71,16 @@ func (bc *Blockchain) AddTransactionLocal(transaction Transaction) bool {
 	if transaction.GetProtocol() == CoinbaseProtocolID {
 		bc.Metrics().Inc("tx_rejected")
 		LogVerbosef("Rejecting transaction %s: a coinbase cannot be submitted", transaction.GetID())
-		return false
+		return ErrCoinbaseSubmitted
+	}
+
+	// Only what its sender authorised may wait to be mined: a block carrying anything else is
+	// refused by every peer (VerifyTransactionAuthority is a consensus rule), so a node that
+	// queued it would mine blocks nobody accepts.
+	if err := VerifyTransactionAuthority(transaction); err != nil {
+		bc.Metrics().Inc("tx_rejected")
+		LogVerbosef("Rejecting transaction %s: %v", transaction.GetID(), err)
+		return err
 	}
 
 	// Reject a transaction the sender cannot afford. Nothing used to check a
@@ -50,7 +89,7 @@ func (bc *Blockchain) AddTransactionLocal(transaction Transaction) bool {
 	if err := bc.ValidateTransactionFunds(transaction); err != nil {
 		bc.Metrics().Inc("tx_rejected")
 		LogVerbosef("Rejecting transaction %s: %v", transaction.GetID(), err)
-		return false
+		return err
 	}
 
 	// Fail fast on a nonce the chain has already confirmed. The UTXO set refuses
@@ -62,7 +101,8 @@ func (bc *Blockchain) AddTransactionLocal(transaction Transaction) bool {
 			bc.Metrics().Inc("tx_rejected")
 			LogVerbosef("Rejecting transaction %s: %v (sender %s is at nonce %d)",
 				transaction.GetID(), ErrNonceNotIncreasing, sender, last)
-			return false
+			return fmt.Errorf("%w: sender %s is at nonce %d, this transaction carries %d",
+				ErrNonceNotIncreasing, sender, last, transaction.GetNonce())
 		}
 	}
 
@@ -72,7 +112,7 @@ func (bc *Blockchain) AddTransactionLocal(transaction Transaction) bool {
 	for _, queued := range bc.TransactionQueue {
 		if queued.GetID() == id {
 			bc.mux.Unlock()
-			return false
+			return fmt.Errorf("%w: %s", ErrTransactionAlreadyQueued, id)
 		}
 	}
 	// The mempool is bounded and admission is fee-competitive. It used to be an
@@ -81,7 +121,7 @@ func (bc *Blockchain) AddTransactionLocal(transaction Transaction) bool {
 		bc.mux.Unlock()
 		bc.Metrics().Inc("tx_rejected")
 		LogVerbosef("Rejecting transaction %s: %v", id, err)
-		return false
+		return err
 	}
 	bc.mux.Unlock()
 
@@ -95,7 +135,7 @@ func (bc *Blockchain) AddTransactionLocal(transaction Transaction) bool {
 	}
 
 	bc.routeToSidechain(transaction)
-	return true
+	return nil
 }
 
 // routeToSidechain mirrors a transaction into the protocol router for rollup

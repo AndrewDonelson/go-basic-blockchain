@@ -127,8 +127,8 @@ func (m *Message) Send(bc *Blockchain) error {
 	if err := m.Validate(); err != nil {
 		return fmt.Errorf("invalid transaction: %w", err)
 	}
-	bc.AddTransaction(m)
-	return nil
+	// The mempool's verdict, not a silent drop: an unauthorised or unaffordable one is refused.
+	return bc.SubmitTransaction(m)
 }
 
 // Validate checks the base transaction plus Message-specific invariants.

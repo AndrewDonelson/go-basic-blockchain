@@ -21,8 +21,24 @@ const apiVersionPrefix = "/v1"
 func (api *API) registerRoutes() {
 	// The versioned mount comes first so that, where a path could match either,
 	// the explicit version wins.
-	api.registerInto(api.router.PathPrefix(apiVersionPrefix).Subrouter())
+	versioned := api.router.PathPrefix(apiVersionPrefix).Subrouter()
+	api.registerInto(versioned)
+	api.registerVersionedOnly(versioned)
 	api.registerInto(api.router)
+}
+
+// registerVersionedOnly attaches the endpoints that exist only under /v1.
+//
+// The unprefixed paths are a compatibility surface for clients that predate
+// versioning, and new endpoints have no such clients -- so these are not
+// mounted twice.
+func (api *API) registerVersionedOnly(r *mux.Router) {
+	// Application-facing: submit a signed transaction, then read back what
+	// consensus made of it. Same API-key authentication as everything else.
+	r.HandleFunc("/transactions", api.handleSubmitTransaction).Methods("POST")
+	r.HandleFunc("/publishers", api.handleFindPublisher).Methods("GET")
+	r.HandleFunc("/publishers/{id}", api.handleViewPublisher).Methods("GET")
+	r.HandleFunc("/sidechains/{publisherID}/{gameID}/anchors", api.handleSidechainAnchors).Methods("GET")
 }
 
 // registerInto attaches every route to a router, so the same table can be

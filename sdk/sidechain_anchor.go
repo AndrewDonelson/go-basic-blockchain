@@ -260,6 +260,12 @@ type anchorState struct {
 	// against the anchor that covers the height in question, which is usually
 	// not the latest one.
 	anchors []SidechainAnchor
+	// mainHeights[i] is the main-chain height of the block that recorded
+	// anchors[i]. It is kept beside the anchor rather than inside it because
+	// it is a fact about where the commitment landed, not part of what the
+	// publisher signed -- and it is what lets anyone holding an anchor go and
+	// find the mined block that makes it binding.
+	mainHeights []int64
 	// lastMainHeight is the main-chain height that recorded the latest anchor,
 	// which is what a gap is measured against.
 	lastMainHeight int64
@@ -326,6 +332,40 @@ func (l *AnchorLedger) AnchorCovering(id SidechainID, height uint64) (SidechainA
 		}
 	}
 	return SidechainAnchor{}, false
+}
+
+// AnchorRecord is one anchor as the main chain recorded it.
+type AnchorRecord struct {
+	Anchor SidechainAnchor
+	// MainHeight is the index of the main-chain block that carries the anchor.
+	MainHeight int64
+}
+
+// Anchors returns every anchor recorded for a sidechain, oldest first.
+//
+// The slice is a copy; the ledger keeps changing underneath as blocks are
+// applied and rolled back, and a caller iterating its own copy cannot observe
+// that half-way.
+func (l *AnchorLedger) Anchors(id SidechainID) []AnchorRecord {
+	l.mu.RLock()
+	defer l.mu.RUnlock()
+
+	state, ok := l.states[id.String()]
+	if !ok {
+		return nil
+	}
+
+	out := make([]AnchorRecord, 0, len(state.anchors))
+	for i, anchor := range state.anchors {
+		record := AnchorRecord{Anchor: anchor}
+		record.Anchor.TipHash = append([]byte{}, anchor.TipHash...)
+		record.Anchor.HeaderRoot = append([]byte{}, anchor.HeaderRoot...)
+		if i < len(state.mainHeights) {
+			record.MainHeight = state.mainHeights[i]
+		}
+		out = append(out, record)
+	}
+	return out
 }
 
 // IsDelinquent reports whether a sidechain has ever exceeded MaxAnchorGap.
@@ -537,6 +577,7 @@ func (l *AnchorLedger) recordForUndo(anchor SidechainAnchor, signature []byte, m
 	}
 
 	state.anchors = append(state.anchors, anchor)
+	state.mainHeights = append(state.mainHeights, mainHeight)
 	state.lastMainHeight = mainHeight
 
 	return restore, nil
@@ -558,6 +599,9 @@ func (l *AnchorLedger) restore(r anchorRestore) {
 	}
 	if r.AnchorCount <= len(state.anchors) {
 		state.anchors = state.anchors[:r.AnchorCount]
+	}
+	if r.AnchorCount <= len(state.mainHeights) {
+		state.mainHeights = state.mainHeights[:r.AnchorCount]
 	}
 	state.lastMainHeight = r.LastMainHeight
 	state.delinquent = r.Delinquent

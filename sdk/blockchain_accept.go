@@ -8,10 +8,11 @@ import (
 	"math/big"
 )
 
-// VerifySignature verifies the signature of the given transaction.
+// VerifySignature verifies that the given transaction was authorised by its sender (see
+// VerifyTransactionAuthority). It used to ignore the result of Verify, so an invalid signature
+// passed.
 func (bc *Blockchain) VerifySignature(tx Transaction) error {
-	_, err := tx.Verify([]byte(tx.GetSenderWallet().PublicPEM()), tx.GetSignature())
-	return err
+	return VerifyTransactionAuthority(tx)
 }
 
 // AcceptBlock validates a block received from a peer and adds it to the chain.
@@ -305,6 +306,11 @@ func (bc *Blockchain) validateStandalone(block *Block) error {
 		}
 		if err := tx.Validate(); err != nil {
 			return fmt.Errorf("invalid transaction %s: %w", tx.GetID(), err)
+		}
+		// Consensus rule: a block may only carry transactions their senders authorised. Without
+		// it a miner could include forged spends that every relay path would have refused.
+		if err := VerifyTransactionAuthority(tx); err != nil {
+			return fmt.Errorf("unauthorised transaction %s: %w", tx.GetID(), err)
 		}
 	}
 

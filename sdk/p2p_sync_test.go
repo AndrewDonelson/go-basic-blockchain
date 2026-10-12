@@ -463,6 +463,7 @@ func TestAnnouncedTransactionIsVerifiedBeforeAcceptance(t *testing.T) {
 		if err != nil {
 			t.Fatalf("create tx: %v", err)
 		}
+		signForTest(t, tx)
 		tx.Signature, err = tx.Sign([]byte(from.PrivatePEM()))
 		if err != nil {
 			t.Fatalf("sign: %v", err)
@@ -494,6 +495,7 @@ func TestAnnouncedTransactionIsVerifiedBeforeAcceptance(t *testing.T) {
 		if err != nil {
 			t.Fatalf("create tx: %v", err)
 		}
+		signForTest(t, tx)
 		tx.Signature, err = tx.Sign([]byte(from.PrivatePEM()))
 		if err != nil {
 			t.Fatalf("sign: %v", err)
@@ -546,6 +548,7 @@ func TestRelayedTransactionIsNotReAnnounced(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create tx: %v", err)
 	}
+	signForTest(t, tx)
 
 	// AddTransactionLocal is the relay path: queue it, do not announce.
 	if !chain.AddTransactionLocal(tx) {
@@ -560,6 +563,7 @@ func TestRelayedTransactionIsNotReAnnounced(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create tx: %v", err)
 	}
+	signForTest(t, tx2)
 	chain.AddTransaction(tx2)
 	if announced != 1 {
 		t.Fatalf("expected a locally originated transaction to be announced once, got %d", announced)
@@ -577,6 +581,7 @@ func TestAddTransactionLocalDeduplicates(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create tx: %v", err)
 	}
+	signForTest(t, tx)
 
 	if !chain.AddTransactionLocal(tx) {
 		t.Fatal("first add should succeed")

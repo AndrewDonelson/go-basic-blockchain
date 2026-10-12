@@ -51,10 +51,8 @@ func TestPersistTransaction(t *testing.T) {
 	// set, which Block.Validate (requiring StatusConfirmed) always rejected.
 	assert.Equal(t, StatusConfirmed, persist.Status)
 
-	// Create a new test chain with isolated data path
-	config := NewConfig()
-	config.DataPath = "./test_data_persist"
-	bc := NewBlockchain(config)
+	// A chain whose genesis funds the sender, so the fee can be paid from real outputs.
+	bc := forkTestChainWithGenesisTxs(t, 0, 4, mintTo(t, walletEven, walletEven, 100))
 
 	// sign the transaction
 	persist.Signature, err = persist.Sign([]byte(walletEven.PrivatePEM()))

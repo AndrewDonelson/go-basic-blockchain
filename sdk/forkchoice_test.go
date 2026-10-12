@@ -524,6 +524,7 @@ func TestReorgRestoresOrphanedTransactions(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create tx: %v", err)
 	}
+	signForTest(t, orphanedTx)
 	orphanedTx.Signature, err = orphanedTx.Sign([]byte(from.PrivatePEM()))
 	if err != nil {
 		t.Fatalf("sign: %v", err)
@@ -587,6 +588,7 @@ func TestReorgDoesNotRestoreTransactionsPresentInBothBranches(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create tx: %v", err)
 	}
+	signForTest(t, tx)
 	tx.Signature, _ = tx.Sign([]byte(from.PrivatePEM()))
 
 	shared := []Transaction{tx}

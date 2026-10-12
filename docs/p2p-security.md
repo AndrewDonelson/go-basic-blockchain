@@ -241,3 +241,26 @@ a flood of connections is a plausible denial-of-service vector.
 ```bash
 go test ./sdk/ -run 'Auth|Identity|Handshake|SecureConn|Allowlist|Nonce|HKDF' -v
 ```
+
+---
+
+## 🔏 Transaction authority (consensus rule)
+
+A transaction is checked against the public key it carries, so a valid signature alone proves
+nothing about the sender: anyone could name a victim's funded address, attach their own key and
+sign. **`VerifyTransactionAuthority`** closes that: the signature must verify AND the key must be
+the one the sending address belongs to (an address is the SHA-256 of the key's PKIX DER).
+
+It runs everywhere a transaction enters a node, and it is a **consensus rule**:
+
+| Path | Before | Now |
+|---|---|---|
+| `POST /v1/transactions`, `/consensus/tx` | signature only | authority |
+| P2P relay, node gossip | signature only | authority |
+| Mempool (`SubmitTransaction`, `AddTransactionLocal`) | none | authority |
+| Block acceptance (`validateStandalone`) | **none** | authority, per transaction |
+
+Before this, a miner could include forged spends in a block and every node would accept it.
+`Wallet.SendTransaction` now signs the wallet's own unsigned transactions (and refuses anyone
+else's), and every transaction type's `Send` returns the mempool's verdict instead of dropping a
+refusal silently. A coinbase has no signing sender; genesis and the subsidy schedule govern it.

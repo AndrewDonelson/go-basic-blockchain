@@ -560,13 +560,8 @@ func (n *Node) validateTransaction(tx P2PTransaction) error {
 		return errors.New("transaction has no sender wallet")
 	}
 
-	isValid, err := tx.Tx.Verify([]byte(tx.Tx.From.PublicPEM()), tx.Tx.GetSignature())
-	if err != nil {
-		return fmt.Errorf("error validating transaction: %w", err)
-	}
-
-	if !isValid {
-		LogEvent("Transaction %s is invalid", tx.GetID())
+	if err := VerifyTransactionAuthority(&tx.Tx); err != nil {
+		LogEvent("Transaction %s is invalid: %v", tx.GetID(), err)
 		return nil
 	}
 

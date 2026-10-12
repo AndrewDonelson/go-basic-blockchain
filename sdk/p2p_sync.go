@@ -426,19 +426,9 @@ func (p *P2P) serveAnnouncedTransaction(conn net.Conn, payload string) error {
 		return writeJSONLine(conn, announceResult{Accepted: false, Reason: err.Error()})
 	}
 
-	sender := tx.GetSenderWallet()
-	if sender == nil {
-		return writeJSONLine(conn, announceResult{Accepted: false, Reason: "transaction has no sender wallet"})
-	}
-
 	// Verify before accepting. A relayed transaction is attacker-controlled input.
-	valid, err := tx.Verify([]byte(sender.PublicPEM()), tx.GetSignature())
-	if err != nil || !valid {
-		reason := "signature verification failed"
-		if err != nil {
-			reason = err.Error()
-		}
-		return writeJSONLine(conn, announceResult{Accepted: false, Reason: reason})
+	if err := VerifyTransactionAuthority(tx); err != nil {
+		return writeJSONLine(conn, announceResult{Accepted: false, Reason: err.Error()})
 	}
 
 	if chain.HasTransactionID(tx.GetID()) {

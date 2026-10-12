@@ -37,6 +37,11 @@ tags:
   - name: Accounts
   - name: Consensus
     description: Node-to-node endpoints, authenticated as a peer
+  - name: Applications
+    description: |
+      Submit signed transactions and read back publisher registrations and
+      sidechain anchors. Served under /v1 only. See docs/sidechains.md, "Using
+      sidechains from an application".
 
 components:
   securitySchemes:
@@ -103,7 +108,7 @@ components:
         id: { type: string, description: "PUID, formatted organizationID:appID:userID:assetID" }
         protocol:
           type: string
-          enum: [COINBASE, BANK, MESSAGE, PERSIST, CHAIN, P2P]
+          enum: [COINBASE, BANK, MESSAGE, PERSIST, CHAIN, P2P, ANCHOR, REGISTER, AVAILABILITY]
           description: |
             The wire discriminator. Without it the Transaction interface cannot
             be decoded, and blocks carrying transactions cannot be reloaded.
@@ -137,6 +142,81 @@ components:
         page: { type: integer }
         limit: { type: integer }
         total: { type: integer }
+
+    TransactionSubmission:
+      type: object
+      description: |
+        The reply to POST /v1/transactions. Resubmitting a transaction the node
+        already knows is a success (`known: true`), so a client that timed out can
+        retry safely.
+      required: [status]
+      properties:
+        id: { type: string, description: The transaction id, whenever the body decoded }
+        status:
+          type: string
+          enum: [pending, confirmed, rejected]
+          description: |
+            `pending` -- in the mempool. `confirmed` -- a transaction with this id
+            is already in a block. `rejected` -- refused; see `reason`.
+        known: { type: boolean, description: True when the node already had this id }
+        reason: { type: string, description: Why the transaction was rejected }
+
+    GameInfo:
+      type: object
+      properties:
+        game_id: { type: integer, format: int64, minimum: 1 }
+        name: { type: string, description: Metadata only; not unique within a publisher }
+        registered_at_height: { type: integer, format: int64 }
+
+    PublisherInfo:
+      type: object
+      properties:
+        publisher_id: { type: integer, format: int64, minimum: 1 }
+        name: { type: string }
+        public_key_pem:
+          type: string
+          description: The P-256 identity key that signs anchors and game registrations
+        key_fingerprint:
+          type: string
+          description: |
+            Lowercase hex SHA-256 of the identity key's PKIX DER encoding -- the
+            value `GET /v1/publishers?key=` looks a publisher up by. It equals the
+            key's PeerIdentity NodeID.
+        bond_units: { type: integer, format: int64 }
+        registered_at_height: { type: integer, format: int64 }
+        games:
+          type: array
+          description: In game-id order
+          items: { $ref: '#/components/schemas/GameInfo' }
+
+    AnchorInfo:
+      type: object
+      properties:
+        publisher_id: { type: integer, format: int64 }
+        game_id: { type: integer, format: int64 }
+        from_height: { type: integer, format: int64, description: Inclusive }
+        to_height: { type: integer, format: int64, description: Inclusive }
+        tip_hash: { type: string, description: Hex hash of the sidechain block at to_height }
+        header_root: { type: string, description: Hex Merkle root over the block hashes in the range }
+        payload_count: { type: integer, format: int64, description: Advisory }
+        main_block_index: { type: integer, format: int64, description: The main-chain block carrying the anchor }
+        main_block_hash: { type: string }
+        transaction_id: { type: string, description: The ANCHOR transaction's id }
+
+    AnchorList:
+      allOf:
+        - $ref: '#/components/schemas/Paginated'
+        - type: object
+          properties:
+            publisher_id: { type: integer, format: int64 }
+            game_id: { type: integer, format: int64 }
+            delinquent:
+              type: boolean
+              description: Whether the sidechain has ever exceeded MaxAnchorGap
+            anchors:
+              type: array
+              description: Oldest first
+              items: { $ref: '#/components/schemas/AnchorInfo' }
 
   responses:
     Unauthorized:
@@ -562,3 +642,115 @@ paths:
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '422': { $ref: '#/components/responses/Unprocessable' }
+
+  /v1/transactions:
+    post:
+      tags: [Applications]
+      summary: Submit a signed transaction
+      description: |
+        Accepts a signed transaction in the same canonical wire format as
+        /consensus/tx (the JSON `EncodeTransaction` produces, discriminated by
+        `protocol`) and runs exactly the same validation and signature check.
+        A COINBASE is always refused. An accepted transaction is queued locally
+        and relayed to peers.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/Transaction' }
+      responses:
+        '202':
+          description: Queued and relayed
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TransactionSubmission' }
+        '200':
+          description: Already known -- an idempotent success
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TransactionSubmission' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '422':
+          description: Refused -- invalid, badly signed, unaffordable, a coinbase, or a stale nonce
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TransactionSubmission' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+
+  /v1/publishers:
+    get:
+      tags: [Applications]
+      summary: Find a publisher by its identity key
+      description: |
+        Publisher ids are allocated by consensus, so a registrant learns theirs
+        only after the REGISTER transaction confirms. This is how: look the
+        publisher up by the key it registered.
+      parameters:
+        - name: key
+          in: query
+          required: true
+          description: |
+            Lowercase hex SHA-256 of the identity key's PKIX DER encoding (64 hex
+            characters). Equal to the key's PeerIdentity NodeID.
+          schema: { type: string, pattern: '^[0-9a-fA-F]{64}$' }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PublisherInfo' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+
+  /v1/publishers/{id}:
+    get:
+      tags: [Applications]
+      summary: View a registered publisher and its games
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: integer, format: int64, minimum: 1 }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PublisherInfo' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+
+  /v1/sidechains/{publisherID}/{gameID}/anchors:
+    get:
+      tags: [Applications]
+      summary: List the anchors recorded on chain for a sidechain
+      description: |
+        Oldest first. Each anchor names the main-chain block that carries it.
+        An unregistered (publisher, game) pair is a 404; a registered one with
+        nothing anchored yet is a 200 with an empty list.
+      parameters:
+        - name: publisherID
+          in: path
+          required: true
+          schema: { type: integer, format: int64, minimum: 1 }
+        - name: gameID
+          in: path
+          required: true
+          schema: { type: integer, format: int64, minimum: 1 }
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AnchorList' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '429': { $ref: '#/components/responses/RateLimited' }

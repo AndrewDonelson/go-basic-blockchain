@@ -57,6 +57,7 @@ func TestSignatureCoversProtocolFields(t *testing.T) {
 		if err != nil {
 			t.Fatalf("create bank tx: %v", err)
 		}
+		signForTest(t, tx)
 		sig, err := tx.Sign([]byte(from.PrivatePEM()))
 		if err != nil {
 			t.Fatalf("sign: %v", err)
@@ -131,6 +132,7 @@ func TestVerifyAfterSignatureAssigned(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create tx: %v", err)
 	}
+	signForTest(t, tx)
 
 	sig, err := tx.Sign([]byte(from.PrivatePEM()))
 	if err != nil {
@@ -164,12 +166,14 @@ func TestTransactionIDsAreIndependent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create tx1: %v", err)
 	}
+	signForTest(t, tx1)
 	id1 := tx1.GetID()
 
 	tx2, err := NewTransaction(MessageProtocolID, from, to)
 	if err != nil {
 		t.Fatalf("create tx2: %v", err)
 	}
+	signForTest(t, tx2)
 
 	if tx1.ID == tx2.ID {
 		t.Fatal("two transactions share the same *PUID")
@@ -362,6 +366,7 @@ func TestBlockSurvivesJSONRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create bank tx: %v", err)
 	}
+	signForTest(t, bank)
 	bank.Signature, err = bank.Sign([]byte(from.PrivatePEM()))
 	if err != nil {
 		t.Fatalf("sign bank tx: %v", err)
@@ -696,6 +701,7 @@ func TestGetPendingTransactionsReturnsACopy(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create tx: %v", err)
 	}
+	signForTest(t, tx)
 	bc.TransactionQueue = []Transaction{tx}
 
 	pending := bc.GetPendingTransactions()
@@ -744,6 +750,7 @@ func TestBankProcessConservesValue(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create tx: %v", err)
 	}
+	signForTest(t, tx)
 
 	beforeFrom, beforeTo := from.GetBalance(), to.GetBalance()
 	result := tx.Process()
@@ -770,6 +777,7 @@ func TestBankSendPreservesAmount(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create tx: %v", err)
 	}
+	signForTest(t, tx)
 	if err := tx.Send(bc); err != nil {
 		t.Fatalf("send: %v", err)
 	}
@@ -797,6 +805,7 @@ func TestBankValidationRejectsNonPositiveAmounts(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create tx: %v", err)
 	}
+	signForTest(t, tx)
 
 	for _, amount := range []float64{0, -1, -0.0001} {
 		tx.Amount = amount
@@ -876,6 +885,7 @@ func TestTransactionNonceHasFullEntropy(t *testing.T) {
 		if err != nil {
 			t.Fatalf("create tx: %v", err)
 		}
+		signForTest(t, tx)
 		seen[tx.Nonce] = struct{}{}
 	}
 

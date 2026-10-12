@@ -151,7 +151,9 @@ func (b *Bank) Send(bc *Blockchain) error {
 	if err := b.Validate(); err != nil {
 		return fmt.Errorf("invalid transaction: %w", err)
 	}
-	bc.AddTransaction(b)
+	if err := bc.SubmitTransaction(b); err != nil { // the mempool's verdict, not a silent drop
+		return err
+	}
 	LogVerbosef("Bank transaction %s added to the transaction queue", b.GetID())
 	return nil
 }

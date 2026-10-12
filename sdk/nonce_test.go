@@ -41,6 +41,7 @@ func TestNoncesAreSequentialNotRandom(t *testing.T) {
 		if err != nil {
 			t.Fatalf("build: %v", err)
 		}
+		signForTest(t, tx)
 		if tx.GetNonce() != want {
 			t.Fatalf("transaction %d has nonce %d, want %d", want, tx.GetNonce(), want)
 		}
@@ -87,6 +88,7 @@ func TestNonceIsCoveredBySignature(t *testing.T) {
 	if err != nil {
 		t.Fatalf("build: %v", err)
 	}
+	signForTest(t, tx)
 
 	before, err := tx.SigningBytes()
 	if err != nil {
@@ -129,6 +131,7 @@ func TestUTXOSetRefusesARepeatedNonce(t *testing.T) {
 	if err != nil {
 		t.Fatalf("build: %v", err)
 	}
+	signForTest(t, first)
 	block1 := utxoBlock(t, 1, genesis.Hash, first)
 	if _, err := set.ApplyBlock(block1, split); err != nil {
 		t.Fatalf("apply: %v", err)
@@ -163,6 +166,7 @@ func TestNonceMustStrictlyIncrease(t *testing.T) {
 		t.Fatalf("build: %v", err)
 	}
 	high.SetNonce(10)
+	signForTest(t, high)
 
 	block1 := utxoBlock(t, 1, genesis.Hash, high)
 	if _, err := set.ApplyBlock(block1, split); err != nil {
@@ -175,6 +179,7 @@ func TestNonceMustStrictlyIncrease(t *testing.T) {
 		t.Fatalf("build: %v", err)
 	}
 	low.SetNonce(4)
+	signForTest(t, low)
 
 	block2 := utxoBlock(t, 2, block1.Hash, low)
 	if _, err := set.ApplyBlock(block2, split); !errors.Is(err, ErrNonceNotIncreasing) {
@@ -209,6 +214,7 @@ func TestNonceStateSurvivesAReorg(t *testing.T) {
 	if err != nil {
 		t.Fatalf("build: %v", err)
 	}
+	signForTest(t, spend)
 	block1 := utxoBlock(t, 1, genesis.Hash, spend)
 	if _, err := set.ApplyBlock(block1, split); err != nil {
 		t.Fatalf("apply: %v", err)
@@ -307,6 +313,7 @@ func TestMempoolRefusesAConfirmedNonce(t *testing.T) {
 	if err != nil {
 		t.Fatalf("build: %v", err)
 	}
+	signForTest(t, spend)
 	block := utxoBlock(t, 1, bc.HeadHash(), spend)
 	if _, err := bc.AcceptBlockWithResult(block); err != nil {
 		t.Fatalf("accept: %v", err)
@@ -336,6 +343,7 @@ func TestNextNonceForCountsQueuedTransactions(t *testing.T) {
 		t.Fatalf("build: %v", err)
 	}
 	first.Fee = 0
+	signForTest(t, first)
 	if !bc.AddTransactionLocal(first) {
 		t.Fatal("the first transaction was refused")
 	}
@@ -360,6 +368,7 @@ func TestSyncWalletNonceRecoversAfterReload(t *testing.T) {
 	if err != nil {
 		t.Fatalf("build: %v", err)
 	}
+	signForTest(t, spend)
 	block := utxoBlock(t, 1, bc.HeadHash(), spend)
 	if _, err := bc.AcceptBlockWithResult(block); err != nil {
 		t.Fatalf("accept: %v", err)
@@ -379,6 +388,7 @@ func TestSyncWalletNonceRecoversAfterReload(t *testing.T) {
 	if err != nil {
 		t.Fatalf("build: %v", err)
 	}
+	signForTest(t, next)
 	if !bc.AddTransactionLocal(next) {
 		t.Fatal("a transaction built after syncing the nonce was still refused")
 	}

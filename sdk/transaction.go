@@ -284,7 +284,9 @@ func (t *Tx) Send(bc *Blockchain) error {
 		return fmt.Errorf("invalid transaction: %w", err)
 	}
 
-	bc.AddTransaction(t)
+	if err := bc.SubmitTransaction(t); err != nil { // the mempool's verdict, not a silent drop
+		return err
+	}
 	LogInfof("Transaction %s added to the transaction queue\n", t.ID)
 	return nil
 }

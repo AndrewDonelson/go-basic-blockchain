@@ -149,6 +149,16 @@ func NewAPIWithError(bc *Blockchain) (*API, error) {
 	return api, nil
 }
 
+// Handler returns the API as an http.Handler, routes and middleware included.
+//
+// It is what an embedder serves when it runs its own http.Server -- or what a
+// test mounts on httptest.NewServer -- instead of calling Start. Authentication
+// and logging are installed by NewAPI, so the handler is exactly as protected as
+// the server Start would run.
+func (api *API) Handler() http.Handler {
+	return api.router
+}
+
 // IsRunning returns true if the API is running.
 func (api *API) IsRunning() bool {
 	api.runningMu.RLock()

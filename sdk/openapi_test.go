@@ -268,8 +268,13 @@ func TestOpenAPIProtectedPathsRequireAuth(t *testing.T) {
 // existing client the day it shipped, to buy nothing until there is a second
 // version to distinguish from. Each route is therefore served twice, and this
 // checks the compatibility surface has not drifted from the canonical one.
+//
+// Endpoints added after versioning (registerVersionedOnly) are the exception:
+// they have no existing clients to break, and the unprefixed surface is frozen,
+// so they exist under /v1 alone.
 func TestLegacyPathsMirrorTheVersionedMount(t *testing.T) {
 	all := registeredRoutes(t)
+	versionedOnly := versionedOnlyRoutes(t)
 
 	var missing []string
 	for route := range all {
@@ -279,6 +284,12 @@ func TestLegacyPathsMirrorTheVersionedMount(t *testing.T) {
 		legacy := strings.TrimPrefix(route, apiVersionPrefix)
 		if legacy == "" {
 			legacy = "/"
+		}
+		if versionedOnly[legacy] {
+			if all[legacy] {
+				t.Fatalf("%s is a /v1-only endpoint but is also served unprefixed", legacy)
+			}
+			continue
 		}
 		if !all[legacy] {
 			missing = append(missing, legacy)
@@ -290,6 +301,31 @@ func TestLegacyPathsMirrorTheVersionedMount(t *testing.T) {
 		t.Fatalf("these versioned routes have no unprefixed equivalent, so existing "+
 			"clients calling them would break: %v", missing)
 	}
+}
+
+// versionedOnlyRoutes returns the path templates registerVersionedOnly adds,
+// read from the function itself so the exemption cannot drift from the table.
+func versionedOnlyRoutes(t *testing.T) map[string]bool {
+	t.Helper()
+
+	api := &API{}
+	router := mux.NewRouter()
+	api.registerVersionedOnly(router)
+
+	routes := map[string]bool{}
+	err := router.Walk(func(route *mux.Route, _ *mux.Router, _ []*mux.Route) error {
+		if template, err := route.GetPathTemplate(); err == nil {
+			routes[template] = true
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("walk versioned-only routes: %v", err)
+	}
+	if len(routes) == 0 {
+		t.Fatal("registerVersionedOnly registered nothing")
+	}
+	return routes
 }
 
 // TestPublicPathsArePublicUnderBothMounts: matching the literal string alone

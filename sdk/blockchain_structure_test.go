@@ -58,6 +58,7 @@ func TestBlockchainStructure_BlockWithTransactions(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create bank transaction: %v", err)
 	}
+	signForTest(t, bankTx)
 	assert.NotNil(t, bankTx, "Bank transaction should not be nil")
 
 	transactions := []Transaction{bankTx}
@@ -107,6 +108,7 @@ func TestBlockchainStructure_BlockValidation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create bank transaction: %v", err)
 	}
+	signForTest(t, bankTx)
 
 	// Set transaction status to confirmed for validation
 	bankTx.SetStatus(StatusConfirmed)
@@ -222,6 +224,7 @@ func TestBlockchainStructure_MerkleRootCalculation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create bank transaction 1: %v", err)
 	}
+	signForTest(t, bankTx1)
 	// Wallets no longer self-fund at creation, so seed the sender.
 	if err := wallet2.SetData("balance", 5.0+100.0); err != nil {
 		t.Fatalf("failed to fund wallet2: %v", err)
@@ -230,6 +233,7 @@ func TestBlockchainStructure_MerkleRootCalculation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create bank transaction 2: %v", err)
 	}
+	signForTest(t, bankTx2)
 	transactions := []Transaction{bankTx1, bankTx2}
 
 	// Act
@@ -559,6 +563,7 @@ func TestBlockchainStructure_BloomFilter(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create bank transaction: %v", err)
 	}
+	signForTest(t, bankTx)
 	transactions := []Transaction{bankTx}
 	previousHash := "0000000000000000000000000000000000000000000000000000000000000000"
 
@@ -616,6 +621,7 @@ func TestBlockchainStructure_BlockGetTransactions(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create bank transaction: %v", err)
 	}
+	signForTest(t, bankTx)
 	transactions := []Transaction{bankTx}
 	previousHash := "0000000000000000000000000000000000000000000000000000000000000000"
 

@@ -329,8 +329,8 @@ func (r *RegistrationTx) Send(bc *Blockchain) error {
 	if err := r.Validate(); err != nil {
 		return fmt.Errorf("invalid transaction: %w", err)
 	}
-	bc.AddTransaction(r)
-	return nil
+	// The mempool's verdict, not a silent drop: an unauthorised or unaffordable one is refused.
+	return bc.SubmitTransaction(r)
 }
 
 // Validate checks the base transaction plus registration-specific invariants.
