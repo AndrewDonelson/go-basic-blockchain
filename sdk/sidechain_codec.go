@@ -97,7 +97,7 @@ type sidechainBlockWire struct {
 //	           "previous_hash":"","payload_root":"<hex>",
 //	           "timestamp_unix_nano":"1700000000000000000","payload_count":1},
 //	 "hash":"<hex>","payloads":["<hex>", ...]}
-func (b *SidechainBlock) MarshalJSON() ([]byte, error) {
+func (b SidechainBlock) MarshalJSON() ([]byte, error) {
 	payloads := make([]string, 0, len(b.Payloads))
 	for _, payload := range b.Payloads {
 		payloads = append(payloads, hex.EncodeToString(payload))

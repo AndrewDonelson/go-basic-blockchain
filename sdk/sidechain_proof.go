@@ -267,7 +267,7 @@ type recordProofWire struct {
 //	 "header":{...as in a SidechainBlock...},
 //	 "payload_proof":{"index":0,"count":3,"path":["<hex>", ...]},
 //	 "block_proof":{"height":7,"path":["<hex>", ...]}}
-func (p *RecordProof) MarshalJSON() ([]byte, error) {
+func (p RecordProof) MarshalJSON() ([]byte, error) {
 	return json.Marshal(recordProofWire{
 		Version: recordProofVersion,
 		Header:  headerToWire(p.Header),

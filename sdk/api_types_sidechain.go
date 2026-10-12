@@ -74,15 +74,16 @@ func (p PublisherInfo) GamesNamed(name string) []GameInfo {
 
 // newPublisherInfo projects a registry record onto the API shape.
 func newPublisherInfo(record PublisherRecord) PublisherInfo {
-	fingerprint, _ := PublisherKeyFingerprint(record.PublicKeyPEM)
+	// Registered keys were parsed on registration, so this cannot fail in
+	// practice; an unparseable one is reported with no fingerprint.
+	fingerprint, err := PublisherKeyFingerprint(record.PublicKeyPEM)
+	if err != nil {
+		fingerprint = ""
+	}
 
 	games := make([]GameInfo, 0)
 	for _, game := range record.Games() {
-		games = append(games, GameInfo{
-			GameID:             game.GameID,
-			Name:               game.Name,
-			RegisteredAtHeight: game.RegisteredAtHeight,
-		})
+		games = append(games, GameInfo(game))
 	}
 
 	return PublisherInfo{

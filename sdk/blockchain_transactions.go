@@ -29,7 +29,9 @@ var (
 // signature unverifiable. The router now observes transactions for its rollup
 // accounting while the mempool keeps the real thing.
 func (bc *Blockchain) AddTransaction(transaction Transaction) {
-	_ = bc.SubmitTransaction(transaction)
+	if err := bc.SubmitTransaction(transaction); err != nil {
+		LogVerbosef("transaction %s not queued: %v", transaction.GetID(), err)
+	}
 }
 
 // SubmitTransaction is AddTransaction, reporting why a transaction was not

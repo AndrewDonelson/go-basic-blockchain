@@ -12,6 +12,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -396,7 +397,9 @@ func (s *FileSidechainStore) appendLocked(id SidechainID, record sidechainLogRec
 	// A new file's directory entry must reach the disk too, or a crash can
 	// leave a synced file that no directory points to.
 	if created {
-		syncDir(s.dir)
+		if err = syncDir(s.dir); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -420,13 +423,20 @@ func truncateAndSync(path string, size int64) error {
 
 // syncDir fsyncs a directory so a newly created entry in it is durable.
 //
-// Some platforms (Windows among them) cannot open a directory for syncing; on
-// those the call is a best effort, since there is nothing further to be done.
-func syncDir(dir string) {
+// Windows cannot sync a directory (NTFS makes the entry durable with the file),
+// so there it is a no-op. Elsewhere a failure is reported: the file's entry may
+// not survive a crash, and the caller must not be told the write is stored.
+func syncDir(dir string) error {
+	if runtime.GOOS == "windows" {
+		return nil
+	}
 	handle, err := os.Open(dir) //nolint:gosec // the store's own directory
 	if err != nil {
-		return
+		return fmt.Errorf("open sidechain store directory: %w", err)
 	}
 	defer func() { _ = handle.Close() }()
-	_ = handle.Sync()
+	if err := handle.Sync(); err != nil {
+		return fmt.Errorf("sync sidechain store directory: %w", err)
+	}
+	return nil
 }
