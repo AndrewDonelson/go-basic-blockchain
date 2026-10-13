@@ -119,26 +119,38 @@ func (bc *Blockchain) createBlockchain() error {
 	bc.cfg.DevAddress = devWallet.GetAddress()
 	LogVerbosef("Dev wallet created: %s (password: %s)", bc.cfg.DevAddress, devWalletPW)
 
-	minerWalletPW, err := GenerateRandomPassword()
-	if err != nil {
-		return err
-	}
+	// Block subsidies go to MINER_ADDRESS when the operator configured a real
+	// address. It used to be overwritten here by a freshly generated wallet, so a
+	// node could never mine to an address its operator (or an application
+	// funding its own transactions) actually holds the key for.
+	var minerWallet *Wallet
+	if IsAddress(bc.cfg.MinerAddress) {
+		LogVerbosef("Mining to the configured miner address %s", bc.cfg.MinerAddress)
+		// Only its address is needed: it receives, and never signs, here.
+		minerWallet = &Wallet{Address: bc.cfg.MinerAddress,
+			ID: NewPUID(ThisBlockchainOrganizationID, ThisBlockchainAppID, ThisBlockchainAdminUserID, ThisBlockchainMinerID)}
+	} else {
+		minerWalletPW, err := GenerateRandomPassword()
+		if err != nil {
+			return err
+		}
 
-	minerWallet, err := NewWallet(NewWalletOptions(ThisBlockchainOrganizationID, ThisBlockchainAppID, ThisBlockchainAdminUserID, ThisBlockchainMinerID, "Miner", minerWalletPW, []string{"blockchain", "node", "miner"}))
-	if err != nil {
-		return fmt.Errorf("failed to create miner wallet: %w", err)
-	}
+		minerWallet, err = NewWallet(NewWalletOptions(ThisBlockchainOrganizationID, ThisBlockchainAppID, ThisBlockchainAdminUserID, ThisBlockchainMinerID, "Miner", minerWalletPW, []string{"blockchain", "node", "miner"}))
+		if err != nil {
+			return fmt.Errorf("failed to create miner wallet: %w", err)
+		}
 
-	if err = minerWallet.Close(minerWalletPW); err != nil {
-		return fmt.Errorf("failed to close miner wallet: %w", err)
-	}
+		if err = minerWallet.Close(minerWalletPW); err != nil {
+			return fmt.Errorf("failed to close miner wallet: %w", err)
+		}
 
-	if err = minerWallet.Open(minerWalletPW); err != nil {
-		return fmt.Errorf("failed to open miner wallet: %w", err)
-	}
+		if err = minerWallet.Open(minerWalletPW); err != nil {
+			return fmt.Errorf("failed to open miner wallet: %w", err)
+		}
 
-	bc.cfg.MinerAddress = minerWallet.GetAddress()
-	LogVerbosef("Miner wallet created: %s (password: %s)", bc.cfg.MinerAddress, minerWalletPW)
+		bc.cfg.MinerAddress = minerWallet.GetAddress()
+		LogVerbosef("Miner wallet created: %s (password: %s)", bc.cfg.MinerAddress, minerWalletPW)
+	}
 
 	// The supply is split at genesis between an emission reserve and the founder
 	// allocation. Every later block's subsidy is a transfer out of the reserve,

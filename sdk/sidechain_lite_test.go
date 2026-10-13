@@ -230,3 +230,33 @@ func TestLiteClientAgainstTheAPI(t *testing.T) {
 		t.Fatalf("%d %s", status, body)
 	}
 }
+
+// TestGenesisPaysTheConfiguredMinerAddress: a node started with MINER_ADDRESS funds and mines to
+// that address instead of replacing it with a generated wallet, so an operator (or an application
+// paying for its own transactions) can hold the key.
+func TestGenesisPaysTheConfiguredMinerAddress(t *testing.T) {
+	key, err := sidechain.GenerateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := NewConfig()
+	cfg.DataPath = t.TempDir()
+	cfg.MinerAddress = key.Address()
+	if err := NewLocalStorage(cfg.DataPath); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = NewLocalStorage("./test_data") })
+	bc := NewBlockchain(cfg)
+	if bc == nil {
+		t.Fatal("NewBlockchain failed")
+	}
+	if cfg.MinerAddress != key.Address() {
+		t.Fatalf("miner address replaced with %s", cfg.MinerAddress)
+	}
+	if bc.GetBalanceUnits(key.Address()) <= 0 {
+		t.Fatal("the configured miner address should be funded at genesis")
+	}
+	if IsAddress("MINER") || !IsAddress(key.Address()) {
+		t.Fatal("IsAddress")
+	}
+}
