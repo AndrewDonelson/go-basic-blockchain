@@ -1,6 +1,5 @@
-// Package sdk is a software development kit for building blockchain applications.
-// File sdk/sidechain_filestore.go - Durable storage for sidechains an application writes.
-package sdk
+// File sidechain/filestore.go - Durable storage for sidechains an application writes.
+package sidechain
 
 import (
 	"bufio"
@@ -20,7 +19,7 @@ import (
 
 // WHY A STORE AT ALL
 //
-// A Sidechain lives in memory, and the publisher's node is the only party that
+// A Chain lives in memory, and the publisher's node is the only party that
 // holds its blocks. Lose them and the anchors on the main chain still prove that
 // a history existed -- but nobody, the publisher included, can say what it was,
 // and every availability challenge against it will expire and slash the bond.
@@ -28,43 +27,43 @@ import (
 // publisher signed up for when they registered.
 //
 // Applications with a database should keep blocks there and use
-// RestoreSidechain on start-up. SidechainStore is for everyone else, and the
+// Restore on start-up. Store is for everyone else, and the
 // file implementation is deliberately the simplest thing that is durable.
 
-// ErrSidechainStoreCorrupt is returned when a store's contents cannot be read
+// ErrStoreCorrupt is returned when a store's contents cannot be read
 // back as a valid chain.
-var ErrSidechainStoreCorrupt = errors.New("sidechain store is corrupt")
+var ErrStoreCorrupt = errors.New("sidechain store is corrupt")
 
-// SidechainStore persists sidechain blocks and the anchored watermark.
+// Store persists sidechain blocks and the anchored watermark.
 //
 // Implementations must refuse a block that does not extend what they already
 // hold. A store that accepted anything would let the persisted history drift
 // from the in-memory one, and the drift would surface only at the next restart
-// -- as a chain that fails RestoreSidechain, long after the bad write.
-type SidechainStore interface {
+// -- as a chain that fails Restore, long after the bad write.
+type Store interface {
 	// AppendBlock durably records a block. It must follow the stored tip.
-	AppendBlock(block *SidechainBlock) error
+	AppendBlock(block *Block) error
 	// MarkAnchored durably records that a sidechain is anchored through height.
-	MarkAnchored(id SidechainID, height uint64) error
+	MarkAnchored(id ID, height uint64) error
 	// Load rebuilds a sidechain from storage, re-validating every block. A
 	// sidechain with nothing stored loads as an empty chain.
-	Load(id SidechainID) (*Sidechain, error)
+	Load(id ID) (*Chain, error)
 	// IDs lists the sidechains the store holds.
-	IDs() ([]SidechainID, error)
+	IDs() ([]ID, error)
 }
 
-// sidechainFileExtension names a sidechain's log file.
-const sidechainFileExtension = ".jsonl"
+// fileExtension names a sidechain's log file.
+const fileExtension = ".jsonl"
 
-// sidechainLogRecord is one line of a sidechain's log.
+// logRecord is one line of a sidechain's log.
 //
 // Exactly one field is set. A block line appends a block; an anchored line moves
 // the watermark. Keeping both in one append-only file means a single fsync
 // orders them, so a restart can never see a watermark above blocks it has not
 // got.
-type sidechainLogRecord struct {
-	Block           *SidechainBlock `json:"block,omitempty"`
-	AnchoredThrough *uint64         `json:"anchored_through,omitempty"`
+type logRecord struct {
+	Block           *Block  `json:"block,omitempty"`
+	AnchoredThrough *uint64 `json:"anchored_through,omitempty"`
 }
 
 // fileChainState is the store's cached view of one sidechain's file.
@@ -75,7 +74,7 @@ type fileChainState struct {
 	anchored *uint64
 }
 
-// FileSidechainStore keeps each sidechain in its own append-only JSON Lines file
+// FileStore keeps each sidechain in its own append-only JSON Lines file
 // under one directory, named by the sidechain's canonical hex id.
 //
 // Every write is followed by an fsync before it returns, so a block the caller
@@ -88,21 +87,21 @@ type fileChainState struct {
 // It is safe for concurrent use within one process. Two processes writing the
 // same directory are not supported -- a sidechain has one writer by design, and
 // that writer is one node.
-type FileSidechainStore struct {
+type FileStore struct {
 	mu     sync.Mutex
 	dir    string
 	states map[string]*fileChainState
 }
 
-// OpenFileSidechainStore opens (creating if needed) a store rooted at dir.
-func OpenFileSidechainStore(dir string) (*FileSidechainStore, error) {
+// OpenFileStore opens (creating if needed) a store rooted at dir.
+func OpenFileStore(dir string) (*FileStore, error) {
 	if strings.TrimSpace(dir) == "" {
 		return nil, errors.New("sidechain store directory is empty")
 	}
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, fmt.Errorf("create sidechain store directory: %w", err)
 	}
-	return &FileSidechainStore{dir: dir, states: map[string]*fileChainState{}}, nil
+	return &FileStore{dir: dir, states: map[string]*fileChainState{}}, nil
 }
 
 // path returns the file holding a sidechain.
@@ -110,13 +109,13 @@ func OpenFileSidechainStore(dir string) (*FileSidechainStore, error) {
 // The name is the id's fixed-width hex encoding, so it can contain nothing but
 // hex digits -- there is no input from which a path separator or ".." could
 // reach the filesystem.
-func (s *FileSidechainStore) path(id SidechainID) string {
-	return filepath.Join(s.dir, id.Hex()+sidechainFileExtension)
+func (s *FileStore) path(id ID) string {
+	return filepath.Join(s.dir, id.Hex()+fileExtension)
 }
 
 // AppendBlock validates a block, checks it follows the stored tip, and appends
 // it durably.
-func (s *FileSidechainStore) AppendBlock(block *SidechainBlock) error {
+func (s *FileStore) AppendBlock(block *Block) error {
 	if block == nil {
 		return fmt.Errorf("%w: block is nil", ErrInvalidSidechainBlock)
 	}
@@ -148,7 +147,7 @@ func (s *FileSidechainStore) AppendBlock(block *SidechainBlock) error {
 			ErrSidechainNotContiguous)
 	}
 
-	if err := s.appendLocked(id, sidechainLogRecord{Block: block}); err != nil {
+	if err := s.appendLocked(id, logRecord{Block: block}); err != nil {
 		return err
 	}
 
@@ -160,9 +159,9 @@ func (s *FileSidechainStore) AppendBlock(block *SidechainBlock) error {
 
 // MarkAnchored durably moves a sidechain's anchored watermark forward.
 //
-// The same rules as Sidechain.MarkAnchored apply: forward only, never past the
+// The same rules as Chain.MarkAnchored apply: forward only, never past the
 // stored tip, and repeating the current height is a no-op that writes nothing.
-func (s *FileSidechainStore) MarkAnchored(id SidechainID, height uint64) error {
+func (s *FileStore) MarkAnchored(id ID, height uint64) error {
 	if err := id.Validate(); err != nil {
 		return err
 	}
@@ -190,16 +189,16 @@ func (s *FileSidechainStore) MarkAnchored(id SidechainID, height uint64) error {
 	}
 
 	h := height
-	if err := s.appendLocked(id, sidechainLogRecord{AnchoredThrough: &h}); err != nil {
+	if err := s.appendLocked(id, logRecord{AnchoredThrough: &h}); err != nil {
 		return err
 	}
 	state.anchored = &h
 	return nil
 }
 
-// Load reads a sidechain back and rebuilds it through RestoreSidechain, so every
+// Load reads a sidechain back and rebuilds it through Restore, so every
 // block is re-validated exactly as if it had come from anywhere else.
-func (s *FileSidechainStore) Load(id SidechainID) (*Sidechain, error) {
+func (s *FileStore) Load(id ID) (*Chain, error) {
 	if err := id.Validate(); err != nil {
 		return nil, err
 	}
@@ -212,9 +211,9 @@ func (s *FileSidechainStore) Load(id SidechainID) (*Sidechain, error) {
 		return nil, err
 	}
 
-	chain, err := RestoreSidechain(id, blocks, anchored)
+	chain, err := Restore(id, blocks, anchored)
 	if err != nil {
-		return nil, fmt.Errorf("%w: %w", ErrSidechainStoreCorrupt, err)
+		return nil, fmt.Errorf("%w: %w", ErrStoreCorrupt, err)
 	}
 
 	s.states[id.String()] = stateFromBlocks(blocks, anchored)
@@ -222,23 +221,23 @@ func (s *FileSidechainStore) Load(id SidechainID) (*Sidechain, error) {
 }
 
 // IDs lists the sidechains with a file in the store, in ascending order.
-func (s *FileSidechainStore) IDs() ([]SidechainID, error) {
+func (s *FileStore) IDs() ([]ID, error) {
 	entries, err := os.ReadDir(s.dir)
 	if err != nil {
 		return nil, fmt.Errorf("list sidechain store: %w", err)
 	}
 
-	var ids []SidechainID
+	var ids []ID
 	for _, entry := range entries {
 		name := entry.Name()
-		if entry.IsDir() || !strings.HasSuffix(name, sidechainFileExtension) {
+		if entry.IsDir() || !strings.HasSuffix(name, fileExtension) {
 			continue
 		}
-		raw, err := hex.DecodeString(strings.TrimSuffix(name, sidechainFileExtension))
+		raw, err := hex.DecodeString(strings.TrimSuffix(name, fileExtension))
 		if err != nil {
 			continue // not a file this store wrote
 		}
-		id, err := SidechainIDFromBytes(raw)
+		id, err := IDFromBytes(raw)
 		if err != nil {
 			continue
 		}
@@ -260,7 +259,7 @@ func (s *FileSidechainStore) IDs() ([]SidechainID, error) {
 // Validating on first touch rather than trusting the last line is what makes
 // "follows the stored tip" mean something: the tip it compares against is the
 // tip of a chain that has been checked end to end.
-func (s *FileSidechainStore) stateLocked(id SidechainID) (*fileChainState, error) {
+func (s *FileStore) stateLocked(id ID) (*fileChainState, error) {
 	if state, ok := s.states[id.String()]; ok {
 		return state, nil
 	}
@@ -269,8 +268,8 @@ func (s *FileSidechainStore) stateLocked(id SidechainID) (*fileChainState, error
 	if err != nil {
 		return nil, err
 	}
-	if _, err := RestoreSidechain(id, blocks, anchored); err != nil {
-		return nil, fmt.Errorf("%w: %w", ErrSidechainStoreCorrupt, err)
+	if _, err := Restore(id, blocks, anchored); err != nil {
+		return nil, fmt.Errorf("%w: %w", ErrStoreCorrupt, err)
 	}
 
 	state := stateFromBlocks(blocks, anchored)
@@ -279,7 +278,7 @@ func (s *FileSidechainStore) stateLocked(id SidechainID) (*fileChainState, error
 }
 
 // stateFromBlocks summarises a validated chain for the cache.
-func stateFromBlocks(blocks []*SidechainBlock, anchored *uint64) *fileChainState {
+func stateFromBlocks(blocks []*Block, anchored *uint64) *fileChainState {
 	state := &fileChainState{anchored: anchored}
 	if len(blocks) > 0 {
 		tip := blocks[len(blocks)-1]
@@ -297,7 +296,7 @@ func stateFromBlocks(blocks []*SidechainBlock, anchored *uint64) *fileChainState
 // caller was never told succeeded, and it is truncated away. A complete line
 // that does not parse cannot be explained that way and is reported as
 // corruption.
-func (s *FileSidechainStore) readLocked(id SidechainID) ([]*SidechainBlock, *uint64, error) {
+func (s *FileStore) readLocked(id ID) ([]*Block, *uint64, error) {
 	path := s.path(id)
 
 	file, err := os.Open(path) //nolint:gosec // path is built from a hex id, see path()
@@ -310,7 +309,7 @@ func (s *FileSidechainStore) readLocked(id SidechainID) ([]*SidechainBlock, *uin
 	defer func() { _ = file.Close() }()
 
 	var (
-		blocks   []*SidechainBlock
+		blocks   []*Block
 		anchored *uint64
 		offset   int64
 		lineNo   int
@@ -333,10 +332,10 @@ func (s *FileSidechainStore) readLocked(id SidechainID) ([]*SidechainBlock, *uin
 
 		if len(line) > 0 {
 			lineNo++
-			var record sidechainLogRecord
+			var record logRecord
 			if err := json.Unmarshal(line, &record); err != nil {
 				return nil, nil, fmt.Errorf("%w: %s line %d: %w",
-					ErrSidechainStoreCorrupt, filepath.Base(path), lineNo, err)
+					ErrStoreCorrupt, filepath.Base(path), lineNo, err)
 			}
 			switch {
 			case record.Block != nil && record.AnchoredThrough == nil:
@@ -345,7 +344,7 @@ func (s *FileSidechainStore) readLocked(id SidechainID) ([]*SidechainBlock, *uin
 				anchored = record.AnchoredThrough
 			default:
 				return nil, nil, fmt.Errorf("%w: %s line %d is neither a block nor a watermark",
-					ErrSidechainStoreCorrupt, filepath.Base(path), lineNo)
+					ErrStoreCorrupt, filepath.Base(path), lineNo)
 			}
 			offset += int64(len(line))
 		}
@@ -363,7 +362,7 @@ func (s *FileSidechainStore) readLocked(id SidechainID) ([]*SidechainBlock, *uin
 // If anything goes wrong mid-write the cached state is dropped, so the next
 // operation re-reads the file -- and cuts off whatever partial line the failed
 // write left -- instead of trusting a tip that may not be on disk.
-func (s *FileSidechainStore) appendLocked(id SidechainID, record sidechainLogRecord) (err error) {
+func (s *FileStore) appendLocked(id ID, record logRecord) (err error) {
 	line, err := json.Marshal(record)
 	if err != nil {
 		return fmt.Errorf("encode sidechain store record: %w", err)

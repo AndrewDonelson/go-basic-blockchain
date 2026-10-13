@@ -192,7 +192,7 @@ func TestSubmitTransactionAgainstARealNode(t *testing.T) {
 
 func TestWrongAPIKeyIsReported(t *testing.T) {
 	_, good := newNode(t)
-	c, err := New(good.baseURL.String(), "00")
+	c, err := New(good.BaseURL(), "00")
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}

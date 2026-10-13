@@ -1,6 +1,5 @@
-// Package sdk is a software development kit for building blockchain applications.
-// File sdk/sidechain_proof_test.go - Tests for portable record proofs.
-package sdk
+// File sidechain/proof_test.go - Tests for portable record proofs.
+package sidechain
 
 import (
 	"bytes"
@@ -11,21 +10,21 @@ import (
 
 // buildRichChain returns a sidechain whose blocks carry several payloads each,
 // so payload proofs have real paths (a one-payload block has an empty one).
-func buildRichChain(t *testing.T, id SidechainID, blocks, payloadsPerBlock int) *Sidechain {
+func buildRichChain(t *testing.T, id ID, blocks, payloadsPerBlock int) *Chain {
 	t.Helper()
 
-	chain, err := NewSidechain(id)
+	chain, err := NewChain(id)
 	if err != nil {
-		t.Fatalf("NewSidechain: %v", err)
+		t.Fatalf("NewChain: %v", err)
 	}
 	for height := 0; height < blocks; height++ {
 		payloads := make([][]byte, 0, payloadsPerBlock)
 		for i := 0; i < payloadsPerBlock; i++ {
 			payloads = append(payloads, []byte{byte(id.GameID), byte(height), byte(i), 0xAB})
 		}
-		block, err := NewSidechainBlock(id, chain.Tip(), payloads, int64(1_700_000_000+height))
+		block, err := NewBlock(id, chain.Tip(), payloads, int64(1_700_000_000+height))
 		if err != nil {
-			t.Fatalf("NewSidechainBlock at %d: %v", height, err)
+			t.Fatalf("NewBlock at %d: %v", height, err)
 		}
 		if err := chain.Append(block); err != nil {
 			t.Fatalf("Append at %d: %v", height, err)
@@ -35,7 +34,7 @@ func buildRichChain(t *testing.T, id SidechainID, blocks, payloadsPerBlock int) 
 }
 
 func TestPayloadProofRoundTrip(t *testing.T) {
-	id := SidechainID{PublisherID: 3, GameID: 4}
+	id := ID{PublisherID: 3, GameID: 4}
 	chain := buildRichChain(t, id, 1, 5)
 	block, _ := chain.BlockAt(0)
 
@@ -55,7 +54,7 @@ func TestPayloadProofRoundTrip(t *testing.T) {
 }
 
 func TestPayloadProofRejectsTampering(t *testing.T) {
-	id := SidechainID{PublisherID: 3, GameID: 4}
+	id := ID{PublisherID: 3, GameID: 4}
 	chain := buildRichChain(t, id, 1, 5)
 	block, _ := chain.BlockAt(0)
 
@@ -87,7 +86,7 @@ func TestPayloadProofRejectsTampering(t *testing.T) {
 			return p
 		}, root},
 		{"another block's root", payload, func() PayloadProof { return proof },
-			mustBlockPayloadRoot(t, buildRichChain(t, SidechainID{PublisherID: 3, GameID: 5}, 1, 5))},
+			mustBlockPayloadRoot(t, buildRichChain(t, ID{PublisherID: 3, GameID: 5}, 1, 5))},
 	}
 
 	for _, tc := range cases {
@@ -100,7 +99,7 @@ func TestPayloadProofRejectsTampering(t *testing.T) {
 	}
 }
 
-func mustBlockPayloadRoot(t *testing.T, chain *Sidechain) []byte {
+func mustBlockPayloadRoot(t *testing.T, chain *Chain) []byte {
 	t.Helper()
 	block, ok := chain.BlockAt(0)
 	if !ok {
@@ -110,7 +109,7 @@ func mustBlockPayloadRoot(t *testing.T, chain *Sidechain) []byte {
 }
 
 func TestBlockProofRequiresTheAnchoredHistory(t *testing.T) {
-	id := SidechainID{PublisherID: 3, GameID: 4}
+	id := ID{PublisherID: 3, GameID: 4}
 	chain := buildRichChain(t, id, 6, 2)
 	anchor := anchorOver(t, chain, 0, 5)
 
@@ -148,8 +147,8 @@ func TestBlockProofRequiresTheAnchoredHistory(t *testing.T) {
 // anchoredRecordFixture is a chain, an anchor over part of it, and a proof for
 // one payload inside that anchor.
 type anchoredRecordFixture struct {
-	chain   *Sidechain
-	anchor  SidechainAnchor
+	chain   *Chain
+	anchor  Anchor
 	proof   *RecordProof
 	payload []byte
 }
@@ -157,7 +156,7 @@ type anchoredRecordFixture struct {
 func newAnchoredRecordFixture(t *testing.T) *anchoredRecordFixture {
 	t.Helper()
 
-	id := SidechainID{PublisherID: 9, GameID: 2}
+	id := ID{PublisherID: 9, GameID: 2}
 	chain := buildRichChain(t, id, 8, 4)
 	// Anchor a range that does not start at zero, so the block's index inside
 	// the anchor differs from its height.
@@ -203,7 +202,7 @@ func TestRecordProofRejectsTampering(t *testing.T) {
 	laterAnchor := anchorOver(t, f.chain, 6, 7)
 
 	// The same height in another publisher's sidechain.
-	foreignID := SidechainID{PublisherID: 10, GameID: 2}
+	foreignID := ID{PublisherID: 10, GameID: 2}
 	foreign := buildRichChain(t, foreignID, 8, 4)
 	foreignBlock, _ := foreign.BlockAt(5)
 
@@ -218,7 +217,7 @@ func TestRecordProofRejectsTampering(t *testing.T) {
 		name    string
 		payload []byte
 		proof   func() *RecordProof
-		anchor  SidechainAnchor
+		anchor  Anchor
 		want    error
 	}{
 		{

@@ -270,7 +270,7 @@ func (l *AvailabilityLedger) VerifyProof(proof AvailabilityProof) error {
 	block := &SidechainBlock{Header: proof.Header}
 	blockHash := block.ComputeHash()
 
-	headerIndex, headerCount, ok := anchor.offsetOf(challenge.Height)
+	headerIndex, headerCount, ok := anchor.Offset(challenge.Height)
 	if !ok {
 		return fmt.Errorf("%w: height %d is outside the anchored range %d..%d",
 			ErrProofRejected, challenge.Height, anchor.FromHeight, anchor.ToHeight)
@@ -321,7 +321,7 @@ func BuildProof(challenge AvailabilityChallenge, chain *Sidechain, anchor Sidech
 		hashes = append(hashes, ranged.Hash)
 	}
 
-	headerIndex, _, ok := anchor.offsetOf(challenge.Height)
+	headerIndex, _, ok := anchor.Offset(challenge.Height)
 	if !ok {
 		return nil, fmt.Errorf("%w: height %d is outside the anchored range %d..%d",
 			ErrProofRejected, challenge.Height, anchor.FromHeight, anchor.ToHeight)

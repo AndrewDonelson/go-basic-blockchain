@@ -364,26 +364,38 @@ application that wants an ordered, publicly committed record of its own events �
 takes through it, end to end. Nothing in it is specific to games: a "game" here
 is simply the unit a publisher registers a block space for.
 
-The application needs three things: the `sdk` package to build and sign, the
-[`client`](../client) package (or plain HTTP — see [api.md](api.md#-application-endpoints))
-to reach a node, and an API key for that node.
+An application needs two things: the dependency-free
+[`sidechain`](../sidechain) package — blocks, anchors, proofs, the file store,
+keys, the `REGISTER` / `ANCHOR` transactions and a client, built on the Go
+standard library alone, so importing it does **not** link the node (no HTTP
+router, terminal UI, p2p stack or wallet store) — and an API key for a node.
+The node's own `sdk` package uses the very same definitions
+(`sdk.SidechainBlock` is `sidechain.Block`, and so on), and
+`TestLiteTransactionsAreNodeTransactions` holds the transactions to the node's
+wire form and signatures. (The node-side [`client`](../client) package wraps
+`sidechain.Client` and adds submission of `sdk.Transaction` values.)
 
 ```go
-c, err := client.New("https://node.example:8100", apiKey)
+c, err := sidechain.NewClient("https://node.example:8100", apiKey)
 ```
 
 ### 1. Identity and wallet
 
-Two keys, deliberately separate (see "Reaching the main chain" above):
+Two roles, which may be two keys or one (see "Reaching the main chain" above).
+Both are `*sidechain.Key` (ECDSA P-256; `GenerateKey`, `ParseKeyPEM`,
+`PrivatePEM`):
 
 | Key | Signs | Keep it |
 |---|---|---|
-| **Identity** (`*sdk.PeerIdentity`, P-256) | Registrations and anchors — "this publisher vouches for this history" | Forever. It *is* the publisher; there is no rotation. |
-| **Wallet** (`*sdk.Wallet`) | Transactions and their fees — "this account pays" | Funded with at least `MinPublisherBondUnits` plus fees. |
+| **Identity** | Registrations and anchors — "this publisher vouches for this history" | Forever. It *is* the publisher; there is no rotation. |
+| **Wallet** | Transactions and their fees and bond — "this account pays" | Funded with at least `MinPublisherBondUnits` (100 coins) plus fees. |
+
+`wallet.Address()` is the account address; `identity.Address()` is the
+publisher key's fingerprint. Every transaction carries the sender's next nonce:
 
 ```go
-identity, err := sdk.LoadOrCreatePeerIdentity(dataDir) // persisted on first run
-wallet, err := sdk.NewWallet(sdk.NewWalletOptions(org, app, user, asset, "publisher", passphrase, nil))
+acct, err := c.Account(ctx, wallet.Address()) // GET /v1/accounts/{address}
+opts := sidechain.TxOptions{Nonce: acct.NextNonce(), Fee: sidechain.DefaultFee}
 ```
 
 ### 2. Register the publisher, then the game
@@ -392,37 +404,32 @@ Ids are allocated by consensus, so registration is two round trips: submit, then
 find out what you were given.
 
 ```go
-reg, err := sdk.NewPublisherRegistration(wallet, identity, "Example Studio", sdk.MinPublisherBondUnits)
-reg.Signature, err = reg.Sign([]byte(wallet.PrivatePEM()))
-_, err = c.SubmitTransaction(ctx, reg)
+reg, err := sidechain.NewPublisherRegistration(wallet, identity, "Example Studio", bondUnits, opts)
+_, err = c.Submit(ctx, reg)
+_, err = c.WaitConfirmed(ctx, reg.ID(), time.Second) // GET /v1/transactions/{id}
+publisher, err := c.FindPublisherByKey(ctx, identity.PublicPEM())
 
-// Poll until the registration is mined. ErrNotFound means "not yet".
-publisher, err := c.FindPublisherByKey(ctx, identity.PublicPEM)
-
-game, err := sdk.NewGameRegistration(wallet, identity, publisher.PublisherID, "Example Game")
-game.Signature, err = game.Sign([]byte(wallet.PrivatePEM()))
-_, err = c.SubmitTransaction(ctx, game)
-
-// Poll c.Publisher(ctx, publisher.PublisherID) until the game appears.
-// Names are not unique, so take the id from the registration you just made --
-// the newest match from GamesNamed -- rather than assuming the first.
-id := sdk.SidechainID{PublisherID: publisher.PublisherID, GameID: gameID}
+game, err := sidechain.NewGameRegistration(wallet, identity, publisher.PublisherID, "Example Game", opts2)
+_, err = c.Submit(ctx, game)
+_, err = c.WaitConfirmed(ctx, game.ID(), time.Second)
+// Names are not unique, so take the newest match from GamesNamed.
+id, err := sidechain.NewID(publisher.PublisherID, gameID)
 ```
 
 `FindPublisherByKey` looks the publisher up by the key's **fingerprint**, the
-SHA-256 of its DER encoding — the same value as `identity.NodeID`. One key holds
-at most one publisher, so the answer is never ambiguous.
+SHA-256 of its DER encoding. One key holds at most one publisher, so the answer
+is never ambiguous.
 
-`SubmitTransaction` is idempotent: if a reply is lost, submit the same
-transaction again and a known id comes back as success.
+`Submit` is idempotent: if a reply is lost, submit the same transaction again
+and a known id comes back as success.
 
 ### 3. Append blocks — and persist them first
 
 ```go
-store, err := sdk.OpenFileSidechainStore(filepath.Join(dataDir, "sidechains"))
+store, err := sidechain.OpenFileStore(filepath.Join(dataDir, "sidechains"))
 chain, err := store.Load(id) // re-validates every stored block; empty on first run
 
-block, err := sdk.NewSidechainBlock(id, chain.Tip(), payloads, time.Now().UnixNano())
+block, err := sidechain.NewBlock(id, chain.Tip(), payloads, time.Now().UnixNano())
 if err := store.AppendBlock(block); err != nil { /* not stored: do not use it */ }
 if err := chain.Append(block); err != nil { /* cannot happen if the store accepted it */ }
 ```
@@ -433,13 +440,13 @@ the only party holding these blocks — an anchor proves they existed, not what
 they said — so losing them means every availability challenge against that
 range expires and slashes the bond.
 
-`FileSidechainStore` keeps one append-only JSON Lines file per sidechain, fsyncs
+`FileStore` keeps one append-only JSON Lines file per sidechain, fsyncs
 every write, refuses a block that does not follow its stored tip, and on reopen
 cuts off a torn final line left by a crash while refusing any other damage as
-`ErrSidechainStoreCorrupt`. An application with its own database can store
-blocks there instead: `SidechainBlock` has a stable JSON encoding (hex bytes, a
+`ErrStoreCorrupt`. An application with its own database can store
+blocks there instead: `Block` has a stable JSON encoding (hex bytes, a
 string timestamp so non-Go readers cannot round it), and
-`sdk.RestoreSidechain(id, blocks, anchoredThrough)` rebuilds the chain,
+`sidechain.Restore(id, blocks, anchoredThrough)` rebuilds the chain,
 re-validating identity, contiguity, hash links and payload roots and refusing
 the whole history if any of it fails. Either way the store must hold the chain
 from height 0: an anchor has to follow on from everything before it.
@@ -447,14 +454,15 @@ from height 0: an anchor has to follow on from everything before it.
 ### 4. Anchor
 
 ```go
-anchor, err := sdk.BuildAnchor(chain) // nil when nothing is pending
-signature, err := sdk.SignAnchor(identity, *anchor)
-tx, err := sdk.NewAnchorTransaction(wallet, *anchor, signature)
-tx.Signature, err = tx.Sign([]byte(wallet.PrivatePEM()))
-_, err = c.SubmitTransaction(ctx, tx)
+anchor, err := sidechain.BuildAnchor(chain) // nil when nothing is pending
+signature, err := sidechain.SignAnchor(identity, *anchor)
+tx, err := sidechain.NewAnchorTransaction(wallet, *anchor, signature, opts)
+_, err = c.Submit(ctx, tx)
 
-// Poll c.Anchors(ctx, id) until an anchor with ToHeight == anchor.ToHeight
-// appears, then move the watermark -- durably first, then in memory:
+// Wait until it is mined (or poll c.Anchors(ctx, id) for ToHeight, which also
+// reports the main block and transaction id), then move the watermark --
+// durably first, then in memory:
+info, err := c.WaitConfirmed(ctx, tx.ID(), time.Second)
 err = store.MarkAnchored(id, anchor.ToHeight)
 err = chain.MarkAnchored(anchor.ToHeight)
 ```
@@ -474,14 +482,14 @@ publisher.
 
 ```go
 // Publisher side: the payload at index 2 of the block at height 57.
-proof, err := sdk.ProveRecord(chain, anchorCovering57, 57, 2)
+proof, err := sidechain.ProveRecord(chain, anchorCovering57, 57, 2)
 encoded, err := json.Marshal(proof) // hand this over with the payload
 
 // Verifier side: holds the payload, the proof, and a node to ask.
-var proof sdk.RecordProof
+var proof sidechain.RecordProof
 err = json.Unmarshal(encoded, &proof)
 anchor, err := c.AnchorCovering(ctx, id, proof.Block.Height)
-err = sdk.VerifyRecord(payload, &proof, anchor) // nil: it is in anchored history
+err = sidechain.VerifyRecord(payload, &proof, anchor) // nil: it is in anchored history
 ```
 
 `VerifyRecord` recomputes the block hash from the header in the proof, checks it
@@ -509,7 +517,7 @@ read from. `main_block_hash` in the anchors reply names the mined block carrying
 it; a verifier that does not trust one node can ask several and compare.
 
 The lower-level pieces are exported too, for verifiers that already hold part
-of the chain of evidence: `(*SidechainBlock).ProvePayload` /
+of the chain of evidence: `(*Block).ProvePayload` /
 `VerifyPayloadProof` against a `PayloadRoot`, and `ProveBlock` /
 `VerifyBlockProof` against an anchor's `HeaderRoot`.
 
@@ -519,22 +527,18 @@ of the chain of evidence: `(*SidechainBlock).ProvePayload` /
 
 | File | Contents |
 |---|---|
-| [`sdk/sidechain_id.go`](../sdk/sidechain_id.go) | `SidechainID`, encoding, zero-rejection |
-| [`sdk/sidechain_block.go`](../sdk/sidechain_block.go) | Headers, hashing, Merkle root, `Follows` |
-| [`sdk/sidechain_store.go`](../sdk/sidechain_store.go) | `Sidechain`, `SidechainSet`, anchored watermark |
-| [`sdk/sidechain_codec.go`](../sdk/sidechain_codec.go) | Stable JSON encoding of `SidechainBlock` |
-| [`sdk/sidechain_proof.go`](../sdk/sidechain_proof.go) | `PayloadProof`, `BlockProof`, `RecordProof`; prove and verify |
-| [`sdk/sidechain_filestore.go`](../sdk/sidechain_filestore.go) | `SidechainStore`, `FileSidechainStore` (JSON Lines, fsync'd) |
-| [`sdk/api_handlers_sidechain.go`](../sdk/api_handlers_sidechain.go) | `POST /v1/transactions`, publisher and anchor lookups |
-| [`client/`](../client) | Go client for those endpoints |
-| [`sdk/sidechain_anchor.go`](../sdk/sidechain_anchor.go) | `SidechainAnchor`, `PublisherRegistry`, `AnchorLedger` |
+| [`sidechain/`](../sidechain) | The dependency-free package: `ID`, `Block`, `Chain`, `Anchor`, proofs, codec, `FileStore`, `Key`, the `REGISTER`/`ANCHOR` transactions, `Client` |
+| [`sdk/sidechain_aliases.go`](../sdk/sidechain_aliases.go) | The node's names for those types (`SidechainBlock` = `sidechain.Block`, …) |
+| [`internal/merkle`](../internal/merkle) | Merkle trees with inclusion proofs, shared by both |
+| [`sdk/api_handlers_sidechain.go`](../sdk/api_handlers_sidechain.go) | `POST /v1/transactions`, `GET /v1/transactions/{id}`, `GET /v1/accounts/{address}`, publisher and anchor lookups |
+| [`client/`](../client) | `sidechain.Client` plus submission of `sdk.Transaction` values |
+| [`sdk/sidechain_anchor.go`](../sdk/sidechain_anchor.go) | `AnchorLedger`, `SignAnchor` with a `PeerIdentity` |
 | [`sdk/anchortx.go`](../sdk/anchortx.go) | The `ANCHOR` main-chain transaction |
 | [`sdk/publisher.go`](../sdk/publisher.go) | `PublisherRegistry`, id allocation, bonds |
 | [`sdk/registrationtx.go`](../sdk/registrationtx.go) | The `REGISTER` transaction |
 | [`sdk/availability.go`](../sdk/availability.go) | Challenges, proofs, expiry, slashing |
 | [`sdk/availabilitytx.go`](../sdk/availabilitytx.go) | The `AVAILABILITY` transaction |
-| [`sdk/merkle.go`](../sdk/merkle.go) | Merkle trees with inclusion proofs |
-| `sdk/sidechain_test.go`, `sdk/anchortx_test.go`, `sdk/availability_test.go`, `sdk/registrationtx_test.go`, `sdk/merkle_test.go`, `sdk/sidechain_proof_test.go`, `sdk/sidechain_filestore_test.go`, `sdk/api_sidechain_test.go` | The tests named above |
+| `sdk/sidechain_test.go`, `sdk/anchortx_test.go`, `sdk/availability_test.go`, `sdk/registrationtx_test.go`, `sdk/merkle_test.go`, `sdk/api_sidechain_test.go`, `sdk/sidechain_lite_test.go`, `sidechain/*_test.go` | The tests named above |
 
 Not to be confused with [`internal/helios/sidechain`](../internal/helios/sidechain),
 which is a protocol-keyed **rollup batcher** used for main-chain transaction

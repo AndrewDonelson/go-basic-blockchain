@@ -258,3 +258,56 @@ func parseRegistryID(raw string) (uint64, error) {
 	}
 	return id, nil
 }
+
+// handleTransactionStatus handles GET /v1/transactions/{id}: whether a submitted
+// transaction is still waiting or has been mined, and where.
+func (api *API) handleTransactionStatus(w http.ResponseWriter, r *http.Request) {
+	id := mux.Vars(r)["id"]
+	for _, pending := range api.bc.GetPendingTransactions() {
+		if pending != nil && pending.GetID() == id {
+			respondJSON(w, http.StatusOK, TransactionInfo{ID: id, Status: SubmissionPending})
+			return
+		}
+	}
+	index, ok := api.bc.TransactionBlockIndex(id)
+	if !ok {
+		RespondError(w, http.StatusNotFound, "no transaction with that id on this node")
+		return
+	}
+	confirmations := int64(api.bc.Height()) - index + 1
+	if confirmations < 1 {
+		confirmations = 1
+	}
+	respondJSON(w, http.StatusOK, TransactionInfo{
+		ID: id, Status: SubmissionConfirmed, BlockIndex: index, Confirmations: confirmations,
+	})
+}
+
+// handleAccount handles GET /v1/accounts/{address}: an address's spendable
+// balance and nonces, which is what an application needs to fund and sequence
+// transactions it builds itself.
+func (api *API) handleAccount(w http.ResponseWriter, r *http.Request) {
+	address := strings.ToLower(strings.TrimSpace(mux.Vars(r)["address"]))
+	if len(address) != 64 {
+		RespondError(w, http.StatusBadRequest, "address must be 64 hexadecimal characters")
+		return
+	}
+	if _, err := hex.DecodeString(address); err != nil {
+		RespondError(w, http.StatusBadRequest, "address must be 64 hexadecimal characters")
+		return
+	}
+	info := AccountInfo{Address: address, BalanceUnits: api.bc.GetBalanceUnits(address)}
+	info.LastNonce, info.HasNonce = api.bc.UTXOSet().LastNonce(address)
+	for _, pending := range api.bc.GetPendingTransactions() {
+		if pending == nil {
+			continue
+		}
+		if sender, _ := transactionParties(pending); sender != address {
+			continue
+		}
+		if !info.HasPending || pending.GetNonce() > info.PendingNonce {
+			info.PendingNonce, info.HasPending = pending.GetNonce(), true
+		}
+	}
+	respondJSON(w, http.StatusOK, info)
+}

@@ -75,7 +75,7 @@ type Blockchain struct {
 	// txIDIndex answers "have I seen this transaction?" without scanning every
 	// block. txIndexedBlocks and txIndexedTipHash track how much of the chain it
 	// covers, on the same basis as blockIndex above.
-	txIDIndex        map[string]struct{}
+	txIDIndex        map[string]int64 // transaction id → main-chain block index
 	txIndexedBlocks  int
 	txIndexedTipHash string
 

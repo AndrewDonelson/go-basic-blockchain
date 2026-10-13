@@ -59,7 +59,7 @@ func (bc *Blockchain) HasTransactionID(id string) bool {
 // The caller must hold bc.mux.
 func (bc *Blockchain) indexTransactionsLocked() {
 	if bc.txIDIndex == nil {
-		bc.txIDIndex = map[string]struct{}{}
+		bc.txIDIndex = map[string]int64{}
 		bc.txIndexedBlocks = 0
 	}
 
@@ -73,14 +73,14 @@ func (bc *Blockchain) indexTransactionsLocked() {
 		valid = bc.Blocks[bc.txIndexedBlocks-1].Hash == bc.txIndexedTipHash
 	}
 	if !valid {
-		bc.txIDIndex = map[string]struct{}{}
+		bc.txIDIndex = map[string]int64{}
 		bc.txIndexedBlocks = 0
 	}
 
 	for _, block := range bc.Blocks[bc.txIndexedBlocks:] {
 		for _, tx := range block.Transactions {
 			if tx != nil {
-				bc.txIDIndex[tx.GetID()] = struct{}{}
+				bc.txIDIndex[tx.GetID()] = block.Index.Int64()
 			}
 		}
 	}
@@ -89,6 +89,20 @@ func (bc *Blockchain) indexTransactionsLocked() {
 	if n := len(bc.Blocks); n > 0 {
 		bc.txIndexedTipHash = bc.Blocks[n-1].Hash
 	}
+}
+
+// TransactionBlockIndex returns the index of the block on this node's chain that
+// carries a mined transaction. A transaction still in the mempool, or unknown, is
+// not found.
+func (bc *Blockchain) TransactionBlockIndex(id string) (int64, bool) {
+	if id == "" {
+		return 0, false
+	}
+	bc.mux.Lock()
+	defer bc.mux.Unlock()
+	bc.indexTransactionsLocked()
+	index, ok := bc.txIDIndex[id]
+	return index, ok
 }
 
 // GetLatestBlock returns the latest block in the blockchain.
