@@ -359,3 +359,26 @@ func TestRetargetedWorkIsReflectedInChainWork(t *testing.T) {
 			"or fork choice cannot tell the branches apart")
 	}
 }
+
+// TestNewBlockchainRetargetsTowardsTheConfiguredBlockTime: a node built by NewBlockchain aims for
+// its configured BLOCK_TIME. Its adjuster used to get the package default, so a 1-second chain
+// treated 1.5-second blocks as too fast and raised difficulty until it could no longer mine.
+func TestNewBlockchainRetargetsTowardsTheConfiguredBlockTime(t *testing.T) {
+	cfg := NewConfig()
+	cfg.DataPath = t.TempDir()
+	cfg.BlockTime = 1
+	if err := NewLocalStorage(cfg.DataPath); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = NewLocalStorage("./test_data") })
+	bc := NewBlockchain(cfg)
+	if bc == nil {
+		t.Fatal("NewBlockchain failed")
+	}
+	if got := bc.retarget(9, 1500*time.Millisecond); got > 9 {
+		t.Fatalf("blocks slower than the 1 s target raised difficulty 9 -> %d", got)
+	}
+	if got := bc.retarget(9, 100*time.Millisecond); got <= 9 {
+		t.Fatalf("blocks far faster than the 1 s target should raise difficulty, got %d", got)
+	}
+}
