@@ -221,15 +221,15 @@ func (bc *Blockchain) pendingSpendUnits(address, excludeID string) int64 {
 // pendingSpendUnitsLocked is pendingSpendUnits for a caller holding bc.mux.
 func (bc *Blockchain) pendingSpendUnitsLocked(address, excludeID string) int64 {
 	var total int64
-	for _, tx := range bc.pendingLocked() {
+	bc.eachPendingLocked(func(tx Transaction) {
 		if tx == nil || tx.GetID() == excludeID {
-			continue
+			return
 		}
 		if sender, _ := transactionParties(tx); sender != address {
-			continue
+			return
 		}
 		total += spendUnits(tx)
-	}
+	})
 	return total
 }
 
@@ -260,17 +260,17 @@ func (bc *Blockchain) AccountSnapshot(address string) AccountInfo {
 	set := bc.ensureUTXOSetLocked()
 	info := AccountInfo{Address: address, BalanceUnits: set.BalanceUnits(address)}
 	info.LastNonce, info.HasNonce = set.LastNonce(address)
-	for _, tx := range bc.pendingLocked() {
+	bc.eachPendingLocked(func(tx Transaction) {
 		if tx == nil {
-			continue
+			return
 		}
 		if sender, _ := transactionParties(tx); sender != address {
-			continue
+			return
 		}
 		if !info.HasPending || tx.GetNonce() > info.PendingNonce {
 			info.PendingNonce, info.HasPending = tx.GetNonce(), true
 		}
-	}
+	})
 	info.AvailableUnits = info.BalanceUnits - bc.pendingSpendUnitsLocked(address, "")
 	if info.AvailableUnits < 0 {
 		info.AvailableUnits = 0

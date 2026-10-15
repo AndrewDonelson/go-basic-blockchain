@@ -507,6 +507,24 @@ func TestAnnouncedTransactionIsVerifiedBeforeAcceptance(t *testing.T) {
 			t.Fatal("a transaction whose amount was altered after signing was accepted")
 		}
 	})
+	t.Run("a transaction the mempool refuses is not acknowledged", func(t *testing.T) {
+		// The wallet's own advisory balance lets it build the transfer; the chain
+		// holds nothing for it, so the mempool refuses it.
+		poor := newTestWallet(t, "announce-poor", 1000)
+		tx, err := NewBankTransaction(poor, to, 500)
+		if err != nil {
+			t.Fatalf("create tx: %v", err)
+		}
+		signForTest(t, tx)
+		tx.Signature, err = tx.Sign([]byte(poor.PrivatePEM()))
+		if err != nil {
+			t.Fatalf("sign: %v", err)
+		}
+		result := announceTx(t, address, tx)
+		if result.Accepted || result.Reason == "" {
+			t.Fatalf("an unaffordable transaction was acknowledged: %+v", result)
+		}
+	})
 }
 
 // announceTx pushes one transaction and returns the peer's verdict.

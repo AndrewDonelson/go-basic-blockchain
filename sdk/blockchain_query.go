@@ -2,9 +2,10 @@
 // File sdk/blockchain_query.go - Read-only queries over blocks and transactions.
 package sdk
 
-// pendingLocked returns every transaction waiting to be in a block: the mempool
-// and the transactions in the block this node is mining. The caller must hold
-// bc.mux.
+// pendingLocked returns every transaction waiting to be in a block: the
+// transactions in the blocks this node is mining, then the mempool. It copies
+// only while something is being mined; callers that just scan use
+// eachPendingLocked. The caller must hold bc.mux.
 func (bc *Blockchain) pendingLocked() []Transaction {
 	if len(bc.mining) == 0 {
 		return bc.TransactionQueue
@@ -12,6 +13,46 @@ func (bc *Blockchain) pendingLocked() []Transaction {
 	out := make([]Transaction, 0, len(bc.mining)+len(bc.TransactionQueue))
 	out = append(out, bc.mining...)
 	return append(out, bc.TransactionQueue...)
+}
+
+// eachPendingLocked calls f for every pending transaction (see pendingLocked)
+// without copying. The caller must hold bc.mux.
+func (bc *Blockchain) eachPendingLocked(f func(Transaction)) {
+	for _, tx := range bc.mining {
+		f(tx)
+	}
+	for _, tx := range bc.TransactionQueue {
+		f(tx)
+	}
+}
+
+// withoutIDs returns txs minus those whose id is in ids, reusing txs'
+// backing array.
+func withoutIDs(txs []Transaction, ids map[string]struct{}) []Transaction {
+	kept := txs[:0]
+	for _, tx := range txs {
+		if tx == nil {
+			continue
+		}
+		if _, drop := ids[tx.GetID()]; !drop {
+			kept = append(kept, tx)
+		}
+	}
+	for i := len(kept); i < len(txs); i++ {
+		txs[i] = nil
+	}
+	return kept
+}
+
+// txIDSet collects the ids of txs.
+func txIDSet(txs []Transaction) map[string]struct{} {
+	ids := make(map[string]struct{}, len(txs))
+	for _, tx := range txs {
+		if tx != nil {
+			ids[tx.GetID()] = struct{}{}
+		}
+	}
+	return ids
 }
 
 // HasTransaction checks if a transaction with the given ID exists in the blockchain.
