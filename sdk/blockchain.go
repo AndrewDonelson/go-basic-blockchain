@@ -122,11 +122,17 @@ func NewBlockchain(cfg *Config) *Blockchain {
 	bc.heliosAlgorithm = algorithm.NewHeliosAlgorithm(heliosConfig)
 	bc.heliosValidator = validation.NewProofValidator(bc.heliosAlgorithm)
 
-	// The adjuster aims for the configured BLOCK_TIME and window. It used to get the
-	// package defaults, so a node configured for 1-second blocks retargeted towards
-	// the default interval: it saw blocks arriving "too fast", raised difficulty
-	// every window, and soon could not mine a block within its timeout.
-	bc.difficultyAdjuster = difficulty.NewDifficultyAdjuster(bc.difficultyConfig())
+	// With BLOCK_TIME configured, the adjuster aims for it (and the configured
+	// window). It used to get the package defaults whatever was configured, so a
+	// node set for 1-second blocks retargeted towards the default interval: it saw
+	// blocks arriving "too fast", raised difficulty every window, and soon could
+	// not mine a block within its timeout. Unset, the defaults stay, so existing
+	// nodes behave exactly as before.
+	if cfg.BlockTimeSet {
+		bc.difficultyAdjuster = difficulty.NewDifficultyAdjuster(bc.difficultyConfig())
+	} else {
+		bc.difficultyAdjuster = difficulty.NewDifficultyAdjuster(difficulty.DefaultDifficultyAdjustmentConfig())
+	}
 
 	bc.sidechainRouter = sidechain.NewProtocolRouter()
 

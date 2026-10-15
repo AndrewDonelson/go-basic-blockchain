@@ -23,15 +23,19 @@ type Config struct {
 	BlockchainName   string
 	BlockchainSymbol string
 	BlockTime        int
-	Difficulty       int
-	TransactionFee   float64
-	MinerRewardPCT   float64
-	MinerAddress     string
-	DevRewardPCT     float64
-	DevAddress       string
-	APIHostName      string
-	P2PHostName      string
-	EnableAPI        bool
+	// BlockTimeSet is true when BLOCK_TIME was configured. Only then does the
+	// difficulty adjuster aim for BlockTime; unset, it keeps its historical
+	// defaults, so existing nodes retarget exactly as before.
+	BlockTimeSet   bool
+	Difficulty     int
+	TransactionFee float64
+	MinerRewardPCT float64
+	MinerAddress   string
+	DevRewardPCT   float64
+	DevAddress     string
+	APIHostName    string
+	P2PHostName    string
+	EnableAPI      bool
 	// TLS for the REST API. The P2P layer has its own authenticated encryption
 	// and is unaffected by these.
 	APITLSEnabled     bool   // Serve HTTPS instead of HTTP
@@ -189,6 +193,9 @@ func (c *Config) loadFromEnv() {
 		c.BlockchainName = getEnv("BLOCKCHAIN_NAME", c.BlockchainName)
 		c.BlockchainSymbol = getEnv("BLOCKCHAIN_SYMBOL", c.BlockchainSymbol)
 		c.BlockTime = getEnvAsInt("BLOCK_TIME", c.BlockTime)
+		if _, ok := os.LookupEnv("BLOCK_TIME"); ok {
+			c.BlockTimeSet = true
+		}
 		c.Difficulty = getEnvAsInt("DIFFICULTY", c.Difficulty)
 		c.TransactionFee = getEnvAsFloat("TRANSACTION_FEE", c.TransactionFee)
 		c.MinerRewardPCT = getEnvAsFloat("MINER_REWARD_PCT", c.MinerRewardPCT)

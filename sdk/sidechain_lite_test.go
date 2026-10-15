@@ -260,3 +260,22 @@ func TestGenesisPaysTheConfiguredMinerAddress(t *testing.T) {
 		t.Fatal("IsAddress")
 	}
 }
+
+// TestUnsetMinerAddressKeepsTheGeneratedMinerWallet: with MINER_ADDRESS unset (the "MINER"
+// placeholder) a fresh chain generates and funds its own miner wallet, as it always has.
+func TestUnsetMinerAddressKeepsTheGeneratedMinerWallet(t *testing.T) {
+	cfg := NewConfig()
+	cfg.DataPath = t.TempDir()
+	if IsAddress(cfg.MinerAddress) {
+		t.Skip("MINER_ADDRESS is set in this environment")
+	}
+	if err := NewLocalStorage(cfg.DataPath); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = NewLocalStorage("./test_data") })
+	if bc := NewBlockchain(cfg); bc == nil {
+		t.Fatal("NewBlockchain failed")
+	} else if !IsAddress(cfg.MinerAddress) || bc.GetBalanceUnits(cfg.MinerAddress) <= 0 {
+		t.Fatalf("a generated, funded miner wallet was expected, got %q", cfg.MinerAddress)
+	}
+}
