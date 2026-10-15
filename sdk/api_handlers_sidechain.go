@@ -265,24 +265,27 @@ func parseRegistryID(raw string) (uint64, error) {
 // transaction is still waiting or has been mined, and where.
 func (api *API) handleTransactionStatus(w http.ResponseWriter, r *http.Request) {
 	id := mux.Vars(r)["id"]
+	// Mined first: a block from a peer can confirm a transaction this node is
+	// still mining itself.
+	if index, ok := api.bc.TransactionBlockIndex(id); ok {
+		confirmations := int64(api.bc.Height()) - index + 1
+		if confirmations < 1 {
+			confirmations = 1
+		}
+		respondJSON(w, http.StatusOK, TransactionInfo{
+			ID: id, Status: SubmissionConfirmed, BlockIndex: index, Confirmations: confirmations,
+		})
+		return
+	}
+	// Pending includes the block being mined: a transaction there is in neither
+	// the mempool nor the chain, and reporting it unknown made clients resubmit.
 	for _, pending := range api.bc.GetPendingTransactions() {
 		if pending != nil && pending.GetID() == id {
 			respondJSON(w, http.StatusOK, TransactionInfo{ID: id, Status: SubmissionPending})
 			return
 		}
 	}
-	index, ok := api.bc.TransactionBlockIndex(id)
-	if !ok {
-		RespondError(w, http.StatusNotFound, "no transaction with that id on this node")
-		return
-	}
-	confirmations := int64(api.bc.Height()) - index + 1
-	if confirmations < 1 {
-		confirmations = 1
-	}
-	respondJSON(w, http.StatusOK, TransactionInfo{
-		ID: id, Status: SubmissionConfirmed, BlockIndex: index, Confirmations: confirmations,
-	})
+	RespondError(w, http.StatusNotFound, "no transaction with that id on this node")
 }
 
 // handleAccount handles GET /v1/accounts/{address}: an address's spendable

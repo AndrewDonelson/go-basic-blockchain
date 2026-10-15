@@ -437,7 +437,11 @@ func (p *P2P) serveAnnouncedTransaction(conn net.Conn, payload string) error {
 
 	// AddTransactionLocal, not AddTransaction: relaying a transaction we were just
 	// given would bounce it back and forth between peers forever.
-	chain.AddTransactionLocal(tx)
+	// The admission verdict is the reply: the peer used to be told "accepted"
+	// for a transaction the mempool had refused (unaffordable, a used nonce...).
+	if err := chain.admitTransactionLocal(tx); err != nil {
+		return writeJSONLine(conn, announceResult{Accepted: false, Reason: err.Error()})
+	}
 
 	LogVerbosef("Accepted announced transaction %s", tx.GetID())
 	return writeJSONLine(conn, announceResult{Accepted: true})
