@@ -59,6 +59,9 @@ func RespondError(w http.ResponseWriter, statusCode int, message string) {
 }
 
 // parsePagination reads and clamps page/limit query parameters.
+// maxPage is the highest page number parsePagination returns.
+const maxPage = 1 << 30
+
 func parsePagination(r *http.Request) (page, limit int) {
 	page, err := strconv.Atoi(r.URL.Query().Get("page"))
 	if err != nil || page < 1 {
@@ -70,6 +73,11 @@ func parsePagination(r *http.Request) (page, limit int) {
 	}
 	if limit > maxPageLimit {
 		limit = maxPageLimit
+	}
+	// Bound the page so (page-1)*limit can't overflow into a negative offset;
+	// no collection here is anywhere near a billion pages.
+	if page > maxPage {
+		page = maxPage
 	}
 	return page, limit
 }

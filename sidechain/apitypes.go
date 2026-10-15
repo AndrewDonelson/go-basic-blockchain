@@ -137,8 +137,12 @@ type AnchorList struct {
 // needs to fund and sequence its own transactions.
 type AccountInfo struct {
 	Address string `json:"address"`
-	// BalanceUnits is the spendable balance in base units.
+	// BalanceUnits is the confirmed balance in base units.
 	BalanceUnits int64 `json:"balance_units"`
+	// AvailableUnits is BalanceUnits less what this sender's transactions
+	// waiting in the mempool will spend (fees, transfers, publisher bonds): what
+	// a new transaction can still use.
+	AvailableUnits int64 `json:"available_units"`
 	// LastNonce is the highest nonce the chain has confirmed for this sender;
 	// HasNonce is false when it has confirmed none (the first nonce may be 0).
 	LastNonce uint64 `json:"last_nonce"`

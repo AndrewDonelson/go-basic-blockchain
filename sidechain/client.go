@@ -329,9 +329,17 @@ func (c *Client) getPublisher(ctx context.Context, path string, query url.Values
 }
 
 // do performs one request and returns the status and body.
+//
+// path is already escaped (callers url.PathEscape each segment); it is set as the
+// raw path so it is escaped exactly once.
 func (c *Client) do(ctx context.Context, method, path string, query url.Values, body []byte) (int, []byte, error) {
 	target := *c.baseURL
-	target.Path = strings.TrimRight(target.Path, "/") + path
+	rawPath := strings.TrimRight(c.baseURL.EscapedPath(), "/") + path
+	unescaped, err := url.PathUnescape(rawPath)
+	if err != nil {
+		return 0, nil, fmt.Errorf("invalid request path %q: %w", rawPath, err)
+	}
+	target.Path, target.RawPath = unescaped, rawPath
 	target.RawQuery = query.Encode()
 
 	var reader io.Reader

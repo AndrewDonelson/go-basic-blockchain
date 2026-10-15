@@ -10,6 +10,8 @@ import (
 	"sort"
 	"strings"
 	"sync"
+
+	"github.com/AndrewDonelson/go-basic-blockchain/sidechain"
 )
 
 // WHY IDS ARE ALLOCATED RATHER THAN CHOSEN
@@ -30,7 +32,7 @@ import (
 
 const (
 	// MaxPublisherNameLength bounds the metadata a registration may carry.
-	MaxPublisherNameLength = 128
+	MaxPublisherNameLength = sidechain.MaxPublisherNameLength
 
 	// MinPublisherBondUnits is what a publisher must lock to register.
 	//
@@ -38,7 +40,7 @@ const (
 	// so that the availability obligations in docs/sidechains.md have something
 	// behind them: a publisher who cannot produce data they committed to has
 	// something to lose, and without that an availability rule is a request.
-	MinPublisherBondUnits int64 = 100 * UnitsPerToken
+	MinPublisherBondUnits = sidechain.MinPublisherBondUnits
 )
 
 var (

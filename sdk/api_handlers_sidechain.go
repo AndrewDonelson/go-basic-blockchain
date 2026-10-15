@@ -182,9 +182,11 @@ func (api *API) handleSidechainAnchors(w http.ResponseWriter, r *http.Request) {
 	page, limit := parsePagination(r)
 
 	total := len(records)
-	start := (page - 1) * limit
-	if start > total {
-		start = total
+	// Compare pages before multiplying: a huge page number would overflow the
+	// offset into a negative index.
+	start := total
+	if limit > 0 && page-1 <= total/limit {
+		start = min((page-1)*limit, total)
 	}
 	end := start + limit
 	if end > total {
@@ -296,18 +298,6 @@ func (api *API) handleAccount(w http.ResponseWriter, r *http.Request) {
 		RespondError(w, http.StatusBadRequest, "address must be 64 hexadecimal characters")
 		return
 	}
-	info := AccountInfo{Address: address, BalanceUnits: api.bc.GetBalanceUnits(address)}
-	info.LastNonce, info.HasNonce = api.bc.UTXOSet().LastNonce(address)
-	for _, pending := range api.bc.GetPendingTransactions() {
-		if pending == nil {
-			continue
-		}
-		if sender, _ := transactionParties(pending); sender != address {
-			continue
-		}
-		if !info.HasPending || pending.GetNonce() > info.PendingNonce {
-			info.PendingNonce, info.HasPending = pending.GetNonce(), true
-		}
-	}
+	info := api.bc.AccountSnapshot(address)
 	respondJSON(w, http.StatusOK, info)
 }
