@@ -70,6 +70,7 @@ func TestBlockchain(t *testing.T) {
 				t.Logf("Skipping bank transaction due to insufficient balance: %v", err)
 				continue // Skip this transaction if insufficient balance
 			}
+			signForTest(t, bankTx)
 
 			// Sign the transaction
 			signature, err := bankTx.Sign([]byte(fromWallet.PrivatePEM()))

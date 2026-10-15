@@ -25,6 +25,9 @@ func utxoTestSplit() feeSplit {
 // utxoBlock wraps transactions in a block at the given index.
 func utxoBlock(t *testing.T, index int64, previousHash string, txs ...Transaction) *Block {
 	t.Helper()
+	for _, tx := range txs {
+		signForTest(t, tx)
+	}
 	b := NewBlock(txs, previousHash)
 	b.Index = *big.NewInt(index)
 	b.Header.Difficulty = 4
@@ -32,6 +35,24 @@ func utxoBlock(t *testing.T, index int64, previousHash string, txs ...Transactio
 	b.Header.MerkleRoot = b.CalculateMerkleRoot()
 	b.Hash = b.CalculateHash()
 	return b
+}
+
+// signForTest signs an unsigned spend with its sender's key, as a wallet does before submitting:
+// blocks may only carry transactions their senders authorised (VerifyTransactionAuthority).
+func signForTest(t *testing.T, tx Transaction) {
+	t.Helper()
+	if tx.GetProtocol() == CoinbaseProtocolID || tx.GetSignature() != "" {
+		return
+	}
+	sender := tx.GetSenderWallet()
+	if sender == nil {
+		return
+	}
+	sig, err := tx.Sign([]byte(sender.PrivatePEM()))
+	if err != nil {
+		t.Fatalf("sign: %v", err)
+	}
+	setTransactionSignature(tx, sig)
 }
 
 // utxoWallets returns two unlocked wallets for spending tests.
@@ -162,6 +183,7 @@ func TestBankTransferMovesValueAndPaysFees(t *testing.T) {
 	if err != nil {
 		t.Fatalf("bank tx: %v", err)
 	}
+	signForTest(t, transfer)
 
 	block := utxoBlock(t, 1, genesis.Hash, transfer)
 	if _, err := set.ApplyBlock(block, split); err != nil {
@@ -213,10 +235,12 @@ func TestDoubleSpendIsRejected(t *testing.T) {
 	if err != nil {
 		t.Fatalf("tx: %v", err)
 	}
+	signForTest(t, first)
 	second, err := NewBankTransaction(alice, bob, 8)
 	if err != nil {
 		t.Fatalf("tx: %v", err)
 	}
+	signForTest(t, second)
 
 	block := utxoBlock(t, 1, genesis.Hash, first, second)
 	_, err = set.ApplyBlock(block, split)
@@ -277,6 +301,7 @@ func TestSpendingAnOutputCreatedInTheSameBlock(t *testing.T) {
 	if err != nil {
 		t.Fatalf("tx: %v", err)
 	}
+	signForTest(t, transfer)
 
 	// Both in one block, coinbase first.
 	block := utxoBlock(t, 0, "", coinbase, transfer)
@@ -410,6 +435,7 @@ func TestInputSelectionIsDeterministic(t *testing.T) {
 	if err != nil {
 		t.Fatalf("tx: %v", err)
 	}
+	signForTest(t, transfer)
 	blocks := []*Block{genesis, utxoBlock(t, 1, genesis.Hash, transfer)}
 
 	fingerprintOf := func(set *UTXOSet) []string {
@@ -563,6 +589,7 @@ func TestRevertMustBeInReverseOrder(t *testing.T) {
 	if err != nil {
 		t.Fatalf("tx: %v", err)
 	}
+	signForTest(t, spend)
 	second := utxoBlock(t, 1, first.Hash, spend)
 	if _, err := set.ApplyBlock(second, split); err != nil {
 		t.Fatalf("apply: %v", err)
@@ -700,6 +727,7 @@ func TestMempoolRejectsUnfundedTransactions(t *testing.T) {
 	if err != nil {
 		t.Fatalf("tx: %v", err)
 	}
+	signForTest(t, tx)
 
 	if bc.AddTransactionLocal(tx) {
 		t.Fatal("a transaction with no chain funds was accepted; the wallet's own " +
@@ -731,6 +759,7 @@ func TestMempoolCountsAlreadyQueuedSpends(t *testing.T) {
 	if err != nil {
 		t.Fatalf("tx: %v", err)
 	}
+	signForTest(t, first)
 	if !bc.AddTransactionLocal(first) {
 		t.Fatal("the first transaction should have been accepted")
 	}
@@ -740,6 +769,7 @@ func TestMempoolCountsAlreadyQueuedSpends(t *testing.T) {
 	if err != nil {
 		t.Fatalf("tx: %v", err)
 	}
+	signForTest(t, second)
 	if bc.AddTransactionLocal(second) {
 		t.Fatal("a second transaction spending funds already committed in the " +
 			"mempool was accepted")

@@ -21,6 +21,7 @@ func TestTransactionCodecRoundTripsEveryProtocol(t *testing.T) {
 	if err != nil {
 		t.Fatalf("bank: %v", err)
 	}
+	signForTest(t, bank)
 	message, err := NewMessageTransaction(from, to, "a message that must survive")
 	if err != nil {
 		t.Fatalf("message: %v", err)
@@ -190,6 +191,7 @@ func TestBlockPersistenceRoundTrip(t *testing.T) {
 		if err != nil {
 			t.Fatalf("bank tx %d: %v", i, err)
 		}
+		signForTest(t, bank)
 		bank.Signature, err = bank.Sign([]byte(from.PrivatePEM()))
 		if err != nil {
 			t.Fatalf("sign %d: %v", i, err)

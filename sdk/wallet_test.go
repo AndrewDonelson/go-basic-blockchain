@@ -164,11 +164,10 @@ func TestWallet(t *testing.T) {
 
 	// Test sending a transaction
 	// Use isolated config to avoid conflicts
-	config := NewConfig()
-	config.DataPath = "./test_data_wallet"
-	bc := NewBlockchain(config)
-	// Wallets are no longer created pre-funded (that minted tokens from nothing),
-	// so fund the sender explicitly for this test.
+	// Wallets are no longer created pre-funded (that minted tokens from nothing): fund the
+	// sender with a real output in genesis. The balance metadata is what SendTransaction checks
+	// first.
+	bc := forkTestChainWithGenesisTxs(t, 0, 4, mintTo(t, wallet1, wallet1, 100))
 	assert.NoError(t, wallet1.SetData("balance", 100.0))
 
 	tx, err := NewBankTransaction(wallet1, wallet2, 1.0)

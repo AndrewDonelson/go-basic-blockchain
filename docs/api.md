@@ -364,6 +364,113 @@ or storing anything.
 
 ---
 
+## 🧩 Application Endpoints
+
+These exist **only under `/v1`** and require the same API key as everything else
+(they are not public paths, and failed attempts count against the same rate
+limit). They are what an application uses to put its own transactions on chain
+and read back what consensus made of them — see
+[Using sidechains from an application](sidechains.md#-using-sidechains-from-an-application)
+for the end-to-end walk-through, and the [`client`](../client) package for a Go
+client.
+
+### `POST /v1/transactions` — submit a signed transaction
+
+Body: a signed transaction in the canonical wire encoding — exactly what
+`sdk.EncodeTransaction` produces and what `/consensus/tx` accepts. Any protocol
+except `COINBASE`: `BANK`, `MESSAGE`, `PERSIST`, `REGISTER`, `ANCHOR`,
+`AVAILABILITY`, …
+
+The checks are **the same function** `/consensus/tx` runs
+(`verifyIncomingTransaction`: `Validate`, a sender wallet, the sender's address
+must be the SHA-256 of the public key the transaction carries, and the signature
+must verify against that key), so the two endpoints cannot drift apart. An accepted transaction is queued locally and relayed to peers.
+
+```json
+{ "id": "1:1:1:4711", "status": "pending" }
+```
+
+| Outcome | Status | Body |
+|---|---|---|
+| Queued and relayed | `202` | `{"id":…,"status":"pending"}` |
+| Id already known (mempool or chain) | `200` | `{"id":…,"status":"pending"\|"confirmed","known":true}` |
+| A coinbase, invalid, badly signed, unaffordable, stale nonce, mempool full | `422` | `{"id":…,"status":"rejected","reason":"…"}` |
+| Undecodable or unknown protocol | `400` | error envelope |
+
+**Resubmitting is safe.** An application that timed out cannot tell whether its
+first attempt arrived, so a known id is a success rather than an error.
+
+`pending` means queued, not mined. Follow the transaction with
+`GET /v1/blockchain/transactions/{id}`.
+
+### `GET /v1/publishers/{id}`
+
+A registered publisher, with its games (in id order) and its identity key.
+
+```json
+{
+  "publisher_id": 1,
+  "name": "Example Studio",
+  "public_key_pem": "-----BEGIN PUBLIC KEY-----\n…",
+  "key_fingerprint": "3f1c…",
+  "bond_units": 10000000000,
+  "registered_at_height": 12,
+  "games": [ { "game_id": 1, "name": "Example Game", "registered_at_height": 14 } ]
+}
+```
+
+`404` if no such publisher; `400` for an id that is not a positive integer.
+
+### `GET /v1/publishers?key={fingerprint}`
+
+The same reply, found by the publisher's **identity key** instead of its id.
+
+Publisher ids are allocated by consensus, so a registrant does not learn theirs
+until the `REGISTER` transaction is mined. This lookup is how they find out: poll
+it with their own key until it answers `200`.
+
+`key` is the key's **fingerprint**: the lowercase hex SHA-256 of the public key's
+PKIX DER encoding (64 hex characters; case-insensitive on input). It is the same
+value as a `PeerIdentity`'s `NodeID`, and `sdk.PublisherKeyFingerprint(pem)`
+computes it. The PEM itself is not accepted: it would have to be URL-escaped, and
+it is not canonical — line endings or wrapping change the text without changing
+the key.
+
+`404` if no publisher holds that key; `400` if `key` is missing or not 64 hex
+characters.
+
+### `GET /v1/sidechains/{publisherID}/{gameID}/anchors?page=1&limit=10`
+
+The anchors the main chain has recorded for one sidechain, oldest first,
+paginated like the other collections.
+
+```json
+{
+  "publisher_id": 1, "game_id": 1, "delinquent": false,
+  "page": 1, "limit": 10, "total": 1,
+  "anchors": [
+    {
+      "publisher_id": 1, "game_id": 1,
+      "from_height": 0, "to_height": 41,
+      "tip_hash": "9d0e…", "header_root": "51aa…", "payload_count": 812,
+      "main_block_index": 87, "main_block_hash": "0000…",
+      "transaction_id": "1:1:1:4712"
+    }
+  ]
+}
+```
+
+`main_block_index` is where the commitment landed; `main_block_hash` and
+`transaction_id` are filled in when this node holds that block. `delinquent`
+reports whether the sidechain has ever exceeded `MaxAnchorGap`.
+
+An unregistered `(publisher, game)` pair is a `404`; a registered one with
+nothing anchored yet is a `200` with `"anchors": []` — "no such sidechain" and
+"not anchored yet" are different answers. `sdk.AnchorInfo.Anchor()` converts an
+entry back into the `SidechainAnchor` that `sdk.VerifyRecord` checks against.
+
+---
+
 ## 🤝 Consensus Endpoints
 
 Node-to-node. Guarded by a separate check that also fails closed: with no API key
@@ -382,10 +489,14 @@ Body: a transaction in the canonical wire encoding (what `GET /blockchain/transa
 | Signature verifies, transaction enqueued | `202` |
 | Already known | `200` with `"status":"duplicate"` |
 | Undecodable or unknown protocol | `400` |
-| Invalid, unsigned, or signature mismatch | `422` with a `reason` |
+| Invalid, unsigned, signature mismatch, or a sender address the key does not own | `422` with a `reason` |
 
 The signature is verified against the sender's public key, which travels with the
-transaction. This endpoint previously parsed the body into a discarded map and
+transaction — and that key must be the one the sender's address is derived from.
+Before that check existed, a transaction could name any address as its sender,
+carry the forger's own key, and verify. The checks are shared with
+`POST /v1/transactions`, so a transaction one endpoint refuses the other refuses
+for the same reason. This endpoint previously parsed the body into a discarded map and
 answered `{"accepted": true}` for any payload at all.
 
 ### `POST /consensus/block`

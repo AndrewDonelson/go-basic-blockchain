@@ -128,6 +128,7 @@ func TestOpenWalletSynchronisesTheNonce(t *testing.T) {
 	if err != nil {
 		t.Fatalf("build: %v", err)
 	}
+	signForTest(t, spend)
 	block := utxoBlock(t, 1, bc.HeadHash(), spend)
 	if _, err := bc.AcceptBlockWithResult(block); err != nil {
 		t.Fatalf("accept: %v", err)
@@ -149,6 +150,7 @@ func TestOpenWalletSynchronisesTheNonce(t *testing.T) {
 	if err != nil {
 		t.Fatalf("build: %v", err)
 	}
+	signForTest(t, next)
 	if !bc.AddTransactionLocal(next) {
 		t.Fatal("a transaction from a chain-opened wallet was refused")
 	}
@@ -189,6 +191,7 @@ func TestAPILoadedWalletsCanSpend(t *testing.T) {
 	if err != nil {
 		t.Fatalf("build: %v", err)
 	}
+	signForTest(t, spend)
 	block := utxoBlock(t, 1, bc.HeadHash(), spend)
 	if _, err := bc.AcceptBlockWithResult(block); err != nil {
 		t.Fatalf("accept: %v", err)

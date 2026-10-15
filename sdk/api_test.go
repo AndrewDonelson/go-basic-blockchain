@@ -1225,6 +1225,7 @@ func testWalletTransactionEndpoints(t *testing.T) {
 		if err != nil {
 			t.Fatalf("failed to create fixture bank transaction: %v", err)
 		}
+		signForTest(t, fixtureTx)
 
 		testNode.Blockchain.Blocks[0].Transactions = append(testNode.Blockchain.Blocks[0].Transactions, fixtureTx)
 	}
@@ -1367,6 +1368,7 @@ func testGlobalTransactionEndpoints(t *testing.T) {
 		if err != nil {
 			t.Fatalf("failed to create fixture bank transaction: %v", err)
 		}
+		signForTest(t, fixtureTx)
 
 		testNode.Blockchain.Blocks[0].Transactions = append(testNode.Blockchain.Blocks[0].Transactions, fixtureTx)
 	}
@@ -1701,6 +1703,7 @@ func TestBankTransaction(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create bank transaction: %v", err)
 	}
+	signForTest(t, bankTx)
 
 	// Sign the transaction
 	signature, err := bankTx.Sign([]byte(wallet1.PrivatePEM()))
@@ -1709,48 +1712,16 @@ func TestBankTransaction(t *testing.T) {
 	}
 	bankTx.Signature = signature
 
-	// Send the transaction to the blockchain
+	// The sender's balance here is wallet metadata, not unspent outputs: the chain has nothing to
+	// spend. Send must say so -- it used to drop the refusal and report success, and this test
+	// counted a transaction that never existed as "processed".
 	err = bankTx.Send(testNode.Blockchain)
-	if err != nil {
-		t.Fatalf("Failed to send transaction: %v", err)
+	if err == nil || !strings.Contains(err.Error(), "insufficient unspent outputs") {
+		t.Fatalf("an unfunded spend was accepted, or refused for the wrong reason: %v", err)
 	}
-
-	// Wait a bit for the transaction to be processed
-	time.Sleep(2 * time.Second)
-
-	// Verify the transaction was added to the blockchain (either in queue or in a block)
-	foundTx := testNode.Blockchain.GetTransactionByID(bankTx.GetID())
-	if foundTx == nil {
-		// Try to find the transaction by checking all pending transactions
-		pendingTxs := testNode.Blockchain.GetPendingTransactions()
-		found := false
-		for _, tx := range pendingTxs {
-			if tx.GetID() == bankTx.GetID() {
-				found = true
-				t.Logf("Transaction found in pending queue with status: %s", tx.GetStatus())
-				break
-			}
-		}
-		if !found {
-			// Check if the transaction was processed through sidechain
-			// The transaction might be in validated transactions or already in a block
-			t.Logf("Transaction ID being searched: %s", bankTx.GetID())
-			t.Logf("Number of pending transactions: %d", len(pendingTxs))
-			for i, tx := range pendingTxs {
-				t.Logf("Pending transaction %d: ID=%s, Status=%s", i, tx.GetID(), tx.GetStatus())
-			}
-
-			// Since the transaction was validated, consider this a success
-			t.Logf("Transaction was validated and processed through sidechain system")
-			t.Logf("This is expected behavior for the sidechain architecture")
-		}
-	} else {
-		t.Logf("Transaction found with status: %s", foundTx.GetStatus())
+	if testNode.Blockchain.HasTransactionID(bankTx.GetID()) {
+		t.Fatal("a refused transaction reached the mempool")
 	}
-
-	// Optional: Verify wallet balances after transaction
-	t.Logf("Wallet 1 Balance After Tx: %.2f", wallet1.GetBalance())
-	t.Logf("Wallet 2 Balance After Tx: %.2f", wallet2.GetBalance())
 }
 
 // buildSignedBankTransaction creates a funded, signed Bank transaction suitable for
@@ -1784,6 +1755,7 @@ func buildSignedBankTransaction(t *testing.T, amount float64) *Bank {
 	if err != nil {
 		t.Fatalf("create bank transaction: %v", err)
 	}
+	signForTest(t, tx)
 
 	tx.Signature, err = tx.Sign([]byte(from.PrivatePEM()))
 	if err != nil {

@@ -548,6 +548,20 @@ func (w *Wallet) SendTransaction(tx Transaction, bc *Blockchain) (*Transaction, 
 
 	LogVerbosef("Sending TX (%s): %s", tx.GetProtocol(), tx.GetID())
 
+	// The wallet authorises its own transactions: sign one it sends that isn't signed yet.
+	// Unsigned, the mempool would refuse it (VerifyTransactionAuthority).
+	if tx.GetSignature() == "" {
+		sender := tx.GetSenderWallet()
+		if sender == nil || sender.GetAddress() != w.GetAddress() {
+			return nil, errors.New("a wallet can only send its own transactions")
+		}
+		sig, err := tx.Sign([]byte(w.PrivatePEM()))
+		if err != nil {
+			return nil, fmt.Errorf("sign: %w", err)
+		}
+		setTransactionSignature(tx, sig)
+	}
+
 	// Send the transaction to the network.
 	err := tx.Send(bc)
 	if err != nil {

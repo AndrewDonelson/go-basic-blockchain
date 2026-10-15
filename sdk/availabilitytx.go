@@ -215,8 +215,8 @@ func (a *AvailabilityTx) Send(bc *Blockchain) error {
 	if err := a.Validate(); err != nil {
 		return fmt.Errorf("invalid transaction: %w", err)
 	}
-	bc.AddTransaction(a)
-	return nil
+	// The mempool's verdict, not a silent drop: an unauthorised or unaffordable one is refused.
+	return bc.SubmitTransaction(a)
 }
 
 // Validate checks the base transaction plus availability-specific invariants.

@@ -68,6 +68,7 @@ func TestTransactionIndexIsInvalidatedByAReorg(t *testing.T) {
 	if err != nil {
 		t.Fatalf("build: %v", err)
 	}
+	signForTest(t, spend)
 
 	block := utxoBlock(t, 1, bc.HeadHash(), spend)
 	if _, err := bc.AcceptBlockWithResult(block); err != nil {

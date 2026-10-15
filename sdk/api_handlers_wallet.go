@@ -321,21 +321,17 @@ func (api *API) buildWalletTransaction(protocol string, from, to *Wallet, amount
 	}
 }
 
-// setTransactionSignature stores a signature on a concrete transaction.
+// setTransactionSignature stores a signature on a concrete transaction. Every
+// protocol embeds Tx, so every one (ANCHOR, REGISTER, AVAILABILITY included)
+// takes it through the promoted setter.
 func setTransactionSignature(tx Transaction, signature string) {
-	switch concrete := tx.(type) {
-	case *Bank:
-		concrete.Signature = signature
-	case *Message:
-		concrete.Signature = signature
-	case *Coinbase:
-		concrete.Signature = signature
-	case *Persist:
-		concrete.Signature = signature
-	case *Tx:
-		concrete.Signature = signature
+	if s, ok := tx.(interface{ setSignature(string) }); ok {
+		s.setSignature(signature)
 	}
 }
+
+// setSignature stores the transaction signature.
+func (t *Tx) setSignature(signature string) { t.Signature = signature }
 
 // handleViewWallet handles the /blockchain/wallets/{id} endpoint.
 func (api *API) handleViewWallet(w http.ResponseWriter, r *http.Request) {

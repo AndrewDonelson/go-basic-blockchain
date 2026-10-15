@@ -7,6 +7,8 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"sort"
+	"strings"
 	"sync"
 )
 
@@ -73,13 +75,48 @@ type PublisherRecord struct {
 	nextGameID uint64
 }
 
-// Games returns the publisher's registered games.
+// Games returns the publisher's registered games, in id order.
+//
+// Ordered so that two calls, or two nodes, describe the same registry the same
+// way -- a map's iteration order would make every listing a different one.
 func (p *PublisherRecord) Games() []GameRecord {
 	out := make([]GameRecord, 0, len(p.games))
 	for _, game := range p.games {
 		out = append(out, *game)
 	}
+	sort.Slice(out, func(i, j int) bool { return out[i].GameID < out[j].GameID })
 	return out
+}
+
+// GamesNamed returns the publisher's games registered under name, in id order.
+//
+// Names are metadata, not identity: nothing stops a publisher registering two
+// games with the same name, so this returns every match rather than pretending
+// there can be only one.
+func (p *PublisherRecord) GamesNamed(name string) []GameRecord {
+	var out []GameRecord
+	for _, game := range p.Games() {
+		if game.Name == name {
+			out = append(out, game)
+		}
+	}
+	return out
+}
+
+// PublisherKeyFingerprint returns the fingerprint a publisher's identity key is
+// looked up by: the lowercase hex SHA-256 of the key's PKIX DER encoding.
+//
+// The DER encoding rather than the PEM text, because PEM is not canonical: line
+// lengths, a trailing newline or CRLF endings change the text without changing
+// the key, and a lookup keyed on the text would miss. This is the same value
+// as a PeerIdentity's NodeID, so an application that holds its identity already
+// has its fingerprint.
+func PublisherKeyFingerprint(publicKeyPEM string) (string, error) {
+	fingerprint, err := PeerIDFromPublicPEM(publicKeyPEM)
+	if err != nil {
+		return "", fmt.Errorf("%w: %w", ErrRegistrationInvalid, err)
+	}
+	return fingerprint, nil
 }
 
 // PublisherRegistry is the chain's record of who may write which block space.
@@ -93,7 +130,13 @@ type PublisherRegistry struct {
 	// byKey stops one key holding two publisher identities. Sharing a key across
 	// identities would mean compromising it compromises both, and it would make
 	// "which publisher signed this" ambiguous at exactly the moment it matters.
-	byKey           map[string]uint64
+	byKey map[string]uint64
+	// byFingerprint indexes the same keys by their canonical fingerprint. It is
+	// what an application looks itself up by after its registration confirms,
+	// and it closes a gap byKey leaves open: two PEM texts for one key (a
+	// different line ending is enough) are different strings but the same key,
+	// and must not hold two identities.
+	byFingerprint   map[string]uint64
 	nextPublisherID uint64
 }
 
@@ -102,6 +145,7 @@ func NewPublisherRegistry() *PublisherRegistry {
 	return &PublisherRegistry{
 		publishers:      map[uint64]*PublisherRecord{},
 		byKey:           map[string]uint64{},
+		byFingerprint:   map[string]uint64{},
 		nextPublisherID: 1,
 	}
 }
@@ -145,11 +189,18 @@ func (r *PublisherRegistry) RegisterPublisher(publicKeyPEM, name string, bondUni
 		return 0, fmt.Errorf("%w: bond of %d units is below the %d minimum",
 			ErrRegistrationInvalid, bondUnits, MinPublisherBondUnits)
 	}
+	fingerprint, err := PublisherKeyFingerprint(publicKeyPEM)
+	if err != nil {
+		return 0, err
+	}
 
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
 	if existing, taken := r.byKey[publicKeyPEM]; taken {
+		return 0, fmt.Errorf("%w: it holds publisher %d", ErrKeyAlreadyRegistered, existing)
+	}
+	if existing, taken := r.byFingerprint[fingerprint]; taken {
 		return 0, fmt.Errorf("%w: it holds publisher %d", ErrKeyAlreadyRegistered, existing)
 	}
 
@@ -164,6 +215,7 @@ func (r *PublisherRegistry) RegisterPublisher(publicKeyPEM, name string, bondUni
 		nextGameID:         1,
 	}
 	r.byKey[publicKeyPEM] = id
+	r.byFingerprint[fingerprint] = id
 	r.nextPublisherID++
 
 	return id, nil
@@ -215,6 +267,9 @@ func (r *PublisherRegistry) unregisterPublisher(publisherID uint64) error {
 	}
 
 	delete(r.byKey, publisher.PublicKeyPEM)
+	if fingerprint, err := PublisherKeyFingerprint(publisher.PublicKeyPEM); err == nil {
+		delete(r.byFingerprint, fingerprint)
+	}
 	delete(r.publishers, publisherID)
 	r.nextPublisherID--
 	return nil
@@ -248,7 +303,42 @@ func (r *PublisherRegistry) Publisher(publisherID uint64) (PublisherRecord, bool
 	if !ok {
 		return PublisherRecord{}, false
 	}
-	return *publisher, true
+	return publisher.snapshot(), true
+}
+
+// PublisherByKeyFingerprint returns the publisher whose identity key has the
+// given fingerprint (see PublisherKeyFingerprint).
+//
+// Ids are allocated by consensus, so a registrant does not know theirs until the
+// registration confirms. This is how they find out: by the one thing they chose
+// themselves, the key.
+func (r *PublisherRegistry) PublisherByKeyFingerprint(fingerprint string) (PublisherRecord, bool) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	id, ok := r.byFingerprint[strings.ToLower(strings.TrimSpace(fingerprint))]
+	if !ok {
+		return PublisherRecord{}, false
+	}
+	publisher, ok := r.publishers[id]
+	if !ok {
+		return PublisherRecord{}, false
+	}
+	return publisher.snapshot(), true
+}
+
+// snapshot copies a record, games included, for use outside the lock.
+//
+// Returning *publisher by value used to share its games map with the registry,
+// so a caller reading Games() raced every later game registration.
+func (p *PublisherRecord) snapshot() PublisherRecord {
+	out := *p
+	out.games = make(map[uint64]*GameRecord, len(p.games))
+	for id, game := range p.games {
+		copied := *game
+		out.games[id] = &copied
+	}
+	return out
 }
 
 // PublicKey returns a publisher's registered key.

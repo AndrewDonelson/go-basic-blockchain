@@ -137,6 +137,39 @@ func (s *Sidechain) PendingAnchor() (from, to uint64, ok bool) {
 	return s.anchoredHeight + 1, tip.Header.Height, true
 }
 
+// MarkAnchored records that the chain is committed to the main chain up to and
+// including height.
+//
+// AnchorSidechain does this itself when it records against a local ledger. An
+// application that anchors through the network instead -- building the anchor,
+// submitting an ANCHOR transaction, and waiting for it to be mined -- calls this
+// once the anchor has confirmed, so PendingAnchor starts the next range in the
+// right place.
+//
+// The watermark only moves forward, and only onto a block the chain holds.
+// Moving it backwards would make the next anchor overlap one already on chain,
+// and consensus refuses overlaps; moving it past the tip would claim history is
+// committed that does not exist yet. Repeating the current height is a no-op,
+// so a confirmation handled twice is harmless.
+func (s *Sidechain) MarkAnchored(height uint64) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	tip := s.tipLocked()
+	if tip == nil || height > tip.Header.Height {
+		return fmt.Errorf("%w: cannot mark height %d anchored; the chain does not reach it",
+			ErrAnchorNotContiguous, height)
+	}
+	if s.anchored && height < s.anchoredHeight {
+		return fmt.Errorf("%w: height %d is below the anchored height %d",
+			ErrAnchorNotContiguous, height, s.anchoredHeight)
+	}
+
+	s.anchoredHeight = height
+	s.anchored = true
+	return nil
+}
+
 // markAnchored records that a range has been committed to the main chain.
 func (s *Sidechain) markAnchored(height uint64) {
 	s.mu.Lock()
@@ -154,6 +187,42 @@ func (s *Sidechain) Len() int {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return len(s.blocks)
+}
+
+// RestoreSidechain rebuilds a sidechain from blocks an application persisted
+// itself.
+//
+// Nothing read back from storage is trusted. Every block goes through Append, so
+// each one is re-validated -- its identity, its payload root against its own
+// payloads, its hash against its own header -- and each must follow the one
+// before it by height and hash. The first block must be height 0: a chain
+// restored from the middle would have no way to show its first block follows
+// anything, and an anchor built from it would fail contiguity on chain.
+//
+// anchoredThrough is the highest height the application knows to be anchored,
+// or nil when nothing has been. It must name a height the restored chain holds.
+//
+// A chain that does not check out is refused whole. Handing back the valid
+// prefix would quietly lose the rest, and the application -- which is the only
+// party holding this data -- is the one that needs to know.
+func RestoreSidechain(id SidechainID, blocks []*SidechainBlock, anchoredThrough *uint64) (*Sidechain, error) {
+	chain, err := NewSidechain(id)
+	if err != nil {
+		return nil, err
+	}
+
+	for i, block := range blocks {
+		if err := chain.Append(block); err != nil {
+			return nil, fmt.Errorf("restore %s: block %d: %w", id, i, err)
+		}
+	}
+
+	if anchoredThrough != nil {
+		if err := chain.MarkAnchored(*anchoredThrough); err != nil {
+			return nil, fmt.Errorf("restore %s: %w", id, err)
+		}
+	}
+	return chain, nil
 }
 
 // SidechainSet holds the block spaces a node is serving.

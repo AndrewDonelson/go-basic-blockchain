@@ -59,29 +59,9 @@ func (api *API) handleConsensusTx(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := tx.Validate(); err != nil {
+	if err := verifyIncomingTransaction(tx); err != nil {
 		respondJSON(w, http.StatusUnprocessableEntity, consensusResult{
 			Status: "rejected", Accepted: false, Reason: err.Error(),
-		})
-		return
-	}
-
-	sender := tx.GetSenderWallet()
-	if sender == nil {
-		respondJSON(w, http.StatusUnprocessableEntity, consensusResult{
-			Status: "rejected", Accepted: false, Reason: "transaction has no sender wallet",
-		})
-		return
-	}
-
-	valid, err := tx.Verify([]byte(sender.PublicPEM()), tx.GetSignature())
-	if err != nil || !valid {
-		reason := "signature verification failed"
-		if err != nil {
-			reason = err.Error()
-		}
-		respondJSON(w, http.StatusUnprocessableEntity, consensusResult{
-			Status: "rejected", Accepted: false, Reason: reason,
 		})
 		return
 	}
@@ -98,6 +78,28 @@ func (api *API) handleConsensusTx(w http.ResponseWriter, r *http.Request) {
 	respondJSON(w, http.StatusAccepted, consensusResult{
 		Status: "ok", Accepted: true, ID: tx.GetID(),
 	})
+}
+
+// verifyIncomingTransaction is the check every transaction arriving over the API
+// passes before it is queued, whether it comes from a peer (/consensus/tx) or
+// from an application (/v1/transactions).
+//
+// It is one function on purpose. Two copies of "validate, find the sender, check
+// the signature" would drift, and the endpoint that drifted looser would become
+// the way to get past the other one. The error text is the reason reported to
+// the caller, unchanged from what /consensus/tx has always said -- with one
+// added check, that the sender's address belongs to the key the signature is
+// verified against, without which the signature proves nothing about who may
+// spend from that address.
+func verifyIncomingTransaction(tx Transaction) error {
+	if err := tx.Validate(); err != nil {
+		return err
+	}
+
+	if err := VerifyTransactionAuthority(tx); err != nil {
+		return err
+	}
+	return nil
 }
 
 // consensusResult is the reply shape for the consensus endpoints.

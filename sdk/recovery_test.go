@@ -302,6 +302,7 @@ func TestRecoveredWalletCanSign(t *testing.T) {
 	if err != nil {
 		t.Fatalf("tx: %v", err)
 	}
+	signForTest(t, tx)
 	signature, err := tx.Sign([]byte(recovered.PrivatePEM()))
 	if err != nil {
 		t.Fatalf("sign with the recovered key: %v", err)

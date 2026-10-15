@@ -185,6 +185,7 @@ func TestEndToEndTransferMovesBalance(t *testing.T) {
 	if err != nil {
 		t.Fatalf("build: %v", err)
 	}
+	signForTest(t, transfer)
 	signature, err := transfer.Sign([]byte(alice.PrivatePEM()))
 	if err != nil {
 		t.Fatalf("sign: %v", err)
@@ -225,6 +226,7 @@ func TestEndToEndDoubleSpendIsRefusedAcrossBlocks(t *testing.T) {
 	if err != nil {
 		t.Fatalf("build: %v", err)
 	}
+	signForTest(t, first)
 	if !bc.AddTransactionLocal(first) {
 		t.Fatal("the first transaction was refused")
 	}
@@ -235,6 +237,7 @@ func TestEndToEndDoubleSpendIsRefusedAcrossBlocks(t *testing.T) {
 	if err != nil {
 		t.Fatalf("build: %v", err)
 	}
+	signForTest(t, second)
 	if bc.AddTransactionLocal(second) {
 		t.Fatal("a double spend was admitted to the mempool")
 	}
@@ -246,6 +249,7 @@ func TestEndToEndDoubleSpendIsRefusedAcrossBlocks(t *testing.T) {
 	if err != nil {
 		t.Fatalf("build: %v", err)
 	}
+	signForTest(t, third)
 	if bc.AddTransactionLocal(third) {
 		t.Fatal("a spend of already-spent funds was admitted")
 	}
@@ -352,6 +356,7 @@ func TestEndToEndSupplyIsConserved(t *testing.T) {
 		if err != nil {
 			t.Fatalf("build: %v", err)
 		}
+		signForTest(t, tx)
 		if !bc.AddTransactionLocal(tx) {
 			t.Fatalf("transaction %d refused", i)
 		}
