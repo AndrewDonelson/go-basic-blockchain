@@ -409,10 +409,20 @@ _, err = c.Submit(ctx, reg)
 _, err = c.WaitConfirmed(ctx, reg.ID(), time.Second) // GET /v1/transactions/{id}
 publisher, err := c.FindPublisherByKey(ctx, identity.PublicPEM())
 
-game, err := sidechain.NewGameRegistration(wallet, identity, publisher.PublisherID, "Example Game", opts2)
+acct, err = c.Account(ctx, wallet.Address()) // the next nonce has moved on
+game, err := sidechain.NewGameRegistration(wallet, identity, publisher.PublisherID, "Example Game",
+	sidechain.TxOptions{Nonce: acct.NextNonce(), Fee: sidechain.DefaultFee})
 _, err = c.Submit(ctx, game)
-_, err = c.WaitConfirmed(ctx, game.ID(), time.Second)
-// Names are not unique, so take the newest match from GamesNamed.
+mined, err := c.WaitConfirmed(ctx, game.ID(), time.Second)
+
+// Names are not unique: take the game registered in the block that mined ours.
+publisher, err = c.Publisher(ctx, publisher.PublisherID)
+var gameID uint64
+for _, g := range publisher.GamesNamed("Example Game") {
+	if g.RegisteredAtHeight == mined.BlockIndex {
+		gameID = g.GameID
+	}
+}
 id, err := sidechain.NewID(publisher.PublisherID, gameID)
 ```
 

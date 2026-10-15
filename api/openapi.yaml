@@ -229,10 +229,11 @@ components:
 
     AccountInfo:
       type: object
-      required: [address, balance_units, last_nonce, has_nonce, pending_nonce, has_pending]
+      required: [address, balance_units, available_units, last_nonce, has_nonce, pending_nonce, has_pending]
       properties:
         address: { type: string }
-        balance_units: { type: integer, format: int64, description: Spendable balance in base units }
+        balance_units: { type: integer, format: int64, description: Confirmed balance in base units }
+        available_units: { type: integer, format: int64, description: "balance_units less what this sender's queued transactions will spend (fees, transfers, publisher bonds)" }
         last_nonce: { type: integer, format: int64, description: Highest nonce the chain has confirmed for this sender }
         has_nonce: { type: boolean, description: False when the chain has confirmed none (the first nonce may be 0) }
         pending_nonce: { type: integer, format: int64, description: Highest nonce waiting in this node's mempool }
@@ -773,8 +774,10 @@ paths:
       summary: An address's spendable balance and nonces
       description: |
         What an application needs to fund and sequence transactions it builds
-        itself: the next transaction carries one more than the larger of
-        last_nonce and pending_nonce.
+        itself. Fund new transactions from available_units. The has_ flags
+        decide the next nonce: it is 0 when neither has_nonce nor has_pending
+        is set; otherwise one more than the larger of last_nonce (counted only
+        when has_nonce) and pending_nonce (counted only when has_pending).
       parameters:
         - name: address
           in: path

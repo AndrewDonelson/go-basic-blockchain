@@ -30,7 +30,11 @@ var (
 // accounting while the mempool keeps the real thing.
 func (bc *Blockchain) AddTransaction(transaction Transaction) {
 	if err := bc.SubmitTransaction(transaction); err != nil {
-		LogVerbosef("transaction %s not queued: %v", transaction.GetID(), err)
+		id := ""
+		if transaction != nil {
+			id = transaction.GetID()
+		}
+		LogVerbosef("transaction %s not queued: %v", id, err)
 	}
 }
 

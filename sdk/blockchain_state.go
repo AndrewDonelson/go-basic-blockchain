@@ -193,10 +193,7 @@ func (bc *Blockchain) ValidateTransactionFunds(tx Transaction) error {
 		return errors.New("transaction has no sender")
 	}
 
-	need := AmountToUnits(tx.GetFee())
-	if bank, ok := tx.(*Bank); ok {
-		need += AmountToUnits(bank.Amount)
-	}
+	need := spendUnits(tx)
 	if need <= 0 {
 		return nil
 	}
@@ -218,22 +215,67 @@ func (bc *Blockchain) ValidateTransactionFunds(tx Transaction) error {
 func (bc *Blockchain) pendingSpendUnits(address, excludeID string) int64 {
 	bc.mux.Lock()
 	defer bc.mux.Unlock()
+	return bc.pendingSpendUnitsLocked(address, excludeID)
+}
 
+// pendingSpendUnitsLocked is pendingSpendUnits for a caller holding bc.mux.
+func (bc *Blockchain) pendingSpendUnitsLocked(address, excludeID string) int64 {
 	var total int64
 	for _, tx := range bc.TransactionQueue {
-		if tx.GetID() == excludeID {
+		if tx == nil || tx.GetID() == excludeID {
 			continue
 		}
-		sender, _ := transactionParties(tx)
-		if sender != address {
+		if sender, _ := transactionParties(tx); sender != address {
 			continue
 		}
-		total += AmountToUnits(tx.GetFee())
-		if bank, ok := tx.(*Bank); ok {
-			total += AmountToUnits(bank.Amount)
-		}
+		total += spendUnits(tx)
 	}
 	return total
+}
+
+// spendUnits is what a transaction takes from its sender's unspent outputs: its
+// fee, plus a transfer's amount or a publisher registration's bond. The bond
+// used to be left out, so a sender could queue a registration it could not
+// afford and the block carrying it would fail to apply.
+func spendUnits(tx Transaction) int64 {
+	units := AmountToUnits(tx.GetFee())
+	switch concrete := tx.(type) {
+	case *Bank:
+		units += AmountToUnits(concrete.Amount)
+	case *RegistrationTx:
+		if concrete.Kind == RegistrationKindPublisher && concrete.BondUnits > 0 {
+			units += concrete.BondUnits
+		}
+	}
+	return units
+}
+
+// AccountSnapshot reports an address's balances and nonces from one consistent
+// view: block acceptance holds the same lock, so a transaction cannot move from
+// the mempool to the chain between the reads.
+func (bc *Blockchain) AccountSnapshot(address string) AccountInfo {
+	bc.mux.Lock()
+	defer bc.mux.Unlock()
+
+	set := bc.ensureUTXOSetLocked()
+	info := AccountInfo{Address: address, BalanceUnits: set.BalanceUnits(address)}
+	info.LastNonce, info.HasNonce = set.LastNonce(address)
+	for _, tx := range bc.TransactionQueue {
+		if tx == nil {
+			continue
+		}
+		if sender, _ := transactionParties(tx); sender != address {
+			continue
+		}
+		if !info.HasPending || tx.GetNonce() > info.PendingNonce {
+			info.PendingNonce, info.HasPending = tx.GetNonce(), true
+		}
+	}
+	info.AvailableUnits = info.BalanceUnits - bc.pendingSpendUnitsLocked(address, "")
+	if info.AvailableUnits < 0 {
+		info.AvailableUnits = 0
+	}
+	return info
 }
 
 // CalculateTotalSupply calculates the total supply of tokens in the blockchain.

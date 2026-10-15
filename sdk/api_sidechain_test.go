@@ -5,6 +5,7 @@ package sdk
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -20,7 +21,12 @@ import (
 func newApplicationAPI(t *testing.T) (*Blockchain, *httptest.Server) {
 	t.Helper()
 	t.Setenv(envBlockchainAPIKey, apiKey)
-	t.Setenv(envServerSeed, "5f4dcc3b5aa765d61d8327deb882cf995f4dcc3b5aa765d61d8327deb882cf99")
+	// A fresh seed per test server: nothing about a test node's identity is fixed in source.
+	seed := make([]byte, 32)
+	if _, err := rand.Read(seed); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(envServerSeed, hex.EncodeToString(seed))
 
 	bc := forkTestChain(t, 2, uint32(genesisDifficulty))
 	api, err := NewAPIWithError(bc)

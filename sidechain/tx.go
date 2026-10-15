@@ -34,7 +34,25 @@ const (
 
 	// DefaultFee is the node's default transaction fee, in coins.
 	DefaultFee = 0.05
+
+	// UnitsPerCoin is how many base units make one coin.
+	UnitsPerCoin = 100_000_000
+	// MinPublisherBondUnits is the least a publisher registration may lock.
+	MinPublisherBondUnits int64 = 100 * UnitsPerCoin
+	// MaxPublisherNameLength bounds a publisher's or game's name, in bytes.
+	MaxPublisherNameLength = 128
 )
+
+// checkName applies the node's rule for publisher and game names.
+func checkName(name string) error {
+	if name == "" {
+		return fmt.Errorf("%w: name is empty", ErrInvalidTransaction)
+	}
+	if len(name) > MaxPublisherNameLength {
+		return fmt.Errorf("%w: name exceeds %d bytes", ErrInvalidTransaction, MaxPublisherNameLength)
+	}
+	return nil
+}
 
 // ErrInvalidTransaction is returned when a transaction can't be built.
 var ErrInvalidTransaction = errors.New("invalid transaction")
@@ -99,6 +117,12 @@ func NewPublisherRegistration(wallet, identity *Key, name string, bondUnits int6
 	if identity == nil {
 		return nil, fmt.Errorf("%w: no publisher identity", ErrInvalidTransaction)
 	}
+	if err := checkName(name); err != nil {
+		return nil, err
+	}
+	if bondUnits < MinPublisherBondUnits {
+		return nil, fmt.Errorf("%w: bond of %d units is below the %d minimum", ErrInvalidTransaction, bondUnits, MinPublisherBondUnits)
+	}
 	tx, err := newTransaction(ProtocolRegister, wallet, opts)
 	if err != nil {
 		return nil, err
@@ -118,6 +142,9 @@ func NewGameRegistration(wallet, identity *Key, publisherID uint64, name string,
 	}
 	if publisherID == 0 {
 		return nil, fmt.Errorf("%w: publisher id must not be zero", ErrInvalidTransaction)
+	}
+	if err := checkName(name); err != nil {
+		return nil, err
 	}
 	tx, err := newTransaction(ProtocolRegister, wallet, opts)
 	if err != nil {

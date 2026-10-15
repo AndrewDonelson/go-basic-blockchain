@@ -218,7 +218,9 @@ func VerifyAnchorSignature(publicKeyPEM string, anchor Anchor, signature []byte)
 // BuildAnchor produces the anchor committing a sidechain's pending range.
 //
 // It returns nil when there is nothing new to commit, which is the normal state
-// between blocks rather than an error.
+// between blocks rather than an error. A pending range longer than MaxAnchorSpan
+// is committed MaxAnchorSpan blocks at a time: once this anchor is recorded and
+// marked anchored, the next call builds the following range.
 func BuildAnchor(chain *Chain) (*Anchor, error) {
 	if chain == nil {
 		return nil, fmt.Errorf("%w: chain is nil", ErrInvalidAnchor)
@@ -227,6 +229,12 @@ func BuildAnchor(chain *Chain) (*Anchor, error) {
 	from, to, ok := chain.PendingAnchor()
 	if !ok {
 		return nil, nil
+	}
+	// One anchor covers at most MaxAnchorSpan blocks. A longer backlog is
+	// committed in several anchors: anchor this one, mark it anchored, and call
+	// BuildAnchor again for the next range.
+	if to-from+1 > MaxAnchorSpan {
+		to = from + MaxAnchorSpan - 1
 	}
 
 	tip, found := chain.BlockAt(to)
@@ -262,7 +270,6 @@ func BuildAnchor(chain *Chain) (*Anchor, error) {
 	return anchor, nil
 }
 
-// anchorState is the ledger's record for one sidechain.
 // VerifyAgainstChain checks that a sidechain's blocks actually produce an
 // anchor's commitment.
 //
@@ -272,6 +279,11 @@ func BuildAnchor(chain *Chain) (*Anchor, error) {
 func VerifyAgainstChain(anchor Anchor, chain *Chain) error {
 	if chain == nil {
 		return fmt.Errorf("%w: chain is nil", ErrInvalidAnchor)
+	}
+	// A malformed anchor (a backwards range, short hashes, an oversized span) is
+	// refused before its fields are used to size anything.
+	if err := anchor.Validate(); err != nil {
+		return err
 	}
 	if !chain.ID().Equal(anchor.SidechainID()) {
 		return fmt.Errorf("%w: anchor commits %s, chain is %s",

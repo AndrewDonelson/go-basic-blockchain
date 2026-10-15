@@ -402,7 +402,7 @@ must verify against that key), so the two endpoints cannot drift apart. An accep
 first attempt arrived, so a known id is a success rather than an error.
 
 `pending` means queued, not mined. Follow the transaction with
-`GET /v1/blockchain/transactions/{id}`.
+`GET /v1/transactions/{id}` (below), which `sidechain.Client.WaitConfirmed` polls.
 
 ### `GET /v1/publishers/{id}`
 
@@ -488,15 +488,20 @@ application can rebuild and resubmit. `sidechain.Client.WaitConfirmed` polls it.
 What an application needs to fund and sequence transactions it builds itself:
 
 ```json
-{ "address": "3f1c…", "balance_units": 12500000000,
+{ "address": "3f1c…", "balance_units": 12500000000, "available_units": 2490000000,
   "last_nonce": 6, "has_nonce": true, "pending_nonce": 7, "has_pending": true }
 ```
 
 `last_nonce` is the highest nonce the chain has confirmed for this sender
 (`has_nonce` false: none yet, and the first may be 0); `pending_nonce` is the
-highest waiting in this node's mempool. The next transaction carries one more
-than the larger (`sidechain.AccountInfo.NextNonce`). `400` unless the address is
-64 hex characters.
+highest waiting in this node's mempool. The next nonce is 0 when neither
+`has_nonce` nor `has_pending` is set, and otherwise one more than the larger of
+the values whose flag is set (`sidechain.AccountInfo.NextNonce`).
+`balance_units` is the confirmed balance; `available_units` subtracts what this
+sender's queued transactions will spend (fees, transfers, publisher bonds), and
+is what a new transaction can use. Both come from one snapshot, so a
+transaction can't be counted as neither pending nor confirmed. `400` unless the
+address is 64 hex characters.
 
 ---
 

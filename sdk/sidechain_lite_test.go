@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -278,4 +279,71 @@ func TestUnsetMinerAddressKeepsTheGeneratedMinerWallet(t *testing.T) {
 	} else if !IsAddress(cfg.MinerAddress) || bc.GetBalanceUnits(cfg.MinerAddress) <= 0 {
 		t.Fatalf("a generated, funded miner wallet was expected, got %q", cfg.MinerAddress)
 	}
+}
+
+// TestReviewFixes covers the node-side review findings on the sidechain-lite change.
+func TestReviewFixes(t *testing.T) {
+	if sidechain.UnitsPerCoin != UnitsPerToken || sidechain.MinPublisherBondUnits != MinPublisherBondUnits ||
+		sidechain.MaxPublisherNameLength != MaxPublisherNameLength {
+		t.Fatal("the sidechain package's limits must be the node's")
+	}
+
+	t.Run("AddTransaction(nil) is refused, not a panic", func(t *testing.T) {
+		bc, _ := newApplicationAPI(t)
+		bc.AddTransaction(nil)
+	})
+
+	t.Run("an absurd page number is an empty page", func(t *testing.T) {
+		bc, server := newApplicationAPI(t)
+		registry := bc.UTXOSet().Anchors().Registry()
+		identity, _ := NewPeerIdentity()
+		pub, err := registry.RegisterPublisher(identity.PublicPEM, "Studio", MinPublisherBondUnits, 1)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := registry.RegisterGame(pub, "Game", 2); err != nil {
+			t.Fatal(err)
+		}
+		status, body := appRequest(t, http.MethodGet, server.URL+"/v1/sidechains/1/1/anchors?page=9223372036854775807&limit=1000", nil)
+		if status != http.StatusOK || !bytes.Contains(body, []byte(`"anchors":[]`)) {
+			t.Fatalf("%d %s", status, body)
+		}
+	})
+
+	t.Run("pending bonds count against the balance", func(t *testing.T) {
+		bc, server := newApplicationAPI(t)
+		wallet, identity := liteKeys(t)
+		creditAddressForTest(t, bc, wallet.Address(), 150)
+		c, err := sidechain.NewClient(server.URL, apiKey)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ctx := context.Background()
+		reg, err := sidechain.NewPublisherRegistration(wallet, identity, "Studio", MinPublisherBondUnits,
+			sidechain.TxOptions{Nonce: 0, Fee: sidechain.DefaultFee})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := c.Submit(ctx, reg); err != nil {
+			t.Fatal(err)
+		}
+		acct, err := c.Account(ctx, wallet.Address())
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := AmountToUnits(150) - MinPublisherBondUnits - AmountToUnits(sidechain.DefaultFee)
+		if acct.BalanceUnits != AmountToUnits(150) || acct.AvailableUnits != want {
+			t.Fatalf("balance %d available %d, want available %d", acct.BalanceUnits, acct.AvailableUnits, want)
+		}
+		// A second registration (another key) can't spend the bond already committed.
+		_, other := liteKeys(t)
+		again, err := sidechain.NewPublisherRegistration(wallet, other, "Studio 2", MinPublisherBondUnits,
+			sidechain.TxOptions{Nonce: 1, Fee: sidechain.DefaultFee})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := c.Submit(ctx, again); err == nil || !strings.Contains(err.Error(), "insufficient") {
+			t.Fatalf("a registration the sender can't afford must be refused: %v", err)
+		}
+	})
 }
