@@ -191,6 +191,10 @@ go-basic-blockchain/
 │   ├── gbb-cli/            # Command-line interface
 │   ├── chaind/             # Blockchain daemon
 │   └── demo/               # Demo applications
+├── sidechain/              # Dependency-free package for applications: sidechain
+│                           #   blocks, anchors, proofs, file store, REGISTER/ANCHOR
+│                           #   transactions and a node client (stdlib only)
+├── client/                 # Node client (wraps sidechain.Client, submits sdk.Transaction)
 ├── internal/               # Core blockchain implementation
 │   ├── helios/             # Helios consensus algorithm
 │   ├── menu/               # User interface components

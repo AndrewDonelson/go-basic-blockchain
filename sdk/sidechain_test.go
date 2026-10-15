@@ -6,6 +6,8 @@ import (
 	"bytes"
 	"errors"
 	"testing"
+
+	"github.com/AndrewDonelson/go-basic-blockchain/sidechain"
 )
 
 // buildChain returns a sidechain carrying `count` blocks of trivial payloads.
@@ -410,7 +412,7 @@ func TestAnchorDetectsRewrittenHistory(t *testing.T) {
 		t.Fatal("no block at height 1")
 	}
 	victim.Payloads[0] = []byte("rewritten")
-	victim.Header.PayloadRoot = sidechainPayloadRoot(victim.Payloads)
+	victim.Header.PayloadRoot = sidechain.PayloadRoot(victim.Payloads)
 	victim.Hash = victim.ComputeHash()
 
 	if err := VerifyAgainstChain(*anchor, chain); err == nil {

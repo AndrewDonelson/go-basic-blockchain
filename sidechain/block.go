@@ -1,6 +1,5 @@
-// Package sdk is a software development kit for building blockchain applications.
-// File sdk/sidechain_block.go - Blocks in a sidechain's own block space.
-package sdk
+// File sidechain/block.go - Blocks in a sidechain's own block space.
+package sidechain
 
 import (
 	"bytes"
@@ -8,22 +7,24 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+
+	"github.com/AndrewDonelson/go-basic-blockchain/internal/merkle"
 )
 
-// sidechainBlockVersion is the header version these blocks are produced at.
-const sidechainBlockVersion uint32 = 1
+// BlockVersion is the header version these blocks are produced at.
+const BlockVersion uint32 = 1
 
-// maxSidechainPayloads bounds how many entries one block may carry.
+// MaxPayloads bounds how many entries one block may carry.
 //
 // The payloads come from a game's own traffic, so the bound is what stops a
 // misbehaving or compromised publisher node producing a block large enough to
 // exhaust memory in anything that reads it -- including the tooling that will
 // later verify anchors.
-const maxSidechainPayloads = 65536
+const MaxPayloads = 65536
 
-// sidechainPayloadDomain separates the payload tree from every other tree in the
+// PayloadDomain separates the payload tree from every other tree in the
 // system, so a proof for one can never be replayed against another.
-const sidechainPayloadDomain = "gbb/sidechain/payload"
+const PayloadDomain = "gbb/sidechain/payload"
 
 var (
 	// ErrInvalidSidechainBlock is returned for a structurally invalid block.
@@ -34,14 +35,14 @@ var (
 	ErrSidechainNotContiguous = errors.New("sidechain block does not follow the tip")
 )
 
-// SidechainBlockHeader is the committed part of a sidechain block.
+// BlockHeader is the committed part of a sidechain block.
 //
 // Every field is fixed-width or a fixed-length hash, so the serialisation is
 // unambiguous without delimiters and maps onto protobuf scalars directly. The
 // timestamp is Unix nanoseconds rather than a time.Time: a wire format has no
 // business carrying a monotonic clock reading or a timezone, and this project has
 // already been bitten once by a Time whose String() form changed a block's hash.
-type SidechainBlockHeader struct {
+type BlockHeader struct {
 	Version           uint32
 	PublisherID       uint64
 	GameID            uint64
@@ -52,21 +53,21 @@ type SidechainBlockHeader struct {
 	PayloadCount      uint32
 }
 
-// SidechainBlock is one block in a game's block space.
+// Block is one block in a game's block space.
 //
 // Payloads are opaque here. What a game writes -- an achievement unlock, a
 // leaderboard entry, an inventory change -- is the concern of the service that
 // produced it; this layer's job is to order it, chain it, and make it committable
 // to the main chain.
-type SidechainBlock struct {
-	Header   SidechainBlockHeader
+type Block struct {
+	Header   BlockHeader
 	Hash     []byte
 	Payloads [][]byte
 }
 
-// SidechainID returns the identity this block belongs to.
-func (b *SidechainBlock) SidechainID() SidechainID {
-	return SidechainID{PublisherID: b.Header.PublisherID, GameID: b.Header.GameID}
+// ID returns the identity this block belongs to.
+func (b *Block) SidechainID() ID {
+	return ID{PublisherID: b.Header.PublisherID, GameID: b.Header.GameID}
 }
 
 // headerBytes serialises the header for hashing.
@@ -75,7 +76,7 @@ func (b *SidechainBlock) SidechainID() SidechainID {
 // fields without prefixes is how two distinct headers end up with one preimage,
 // which is the collision the main chain's header serialisation had to be fixed
 // for.
-func (h SidechainBlockHeader) headerBytes() []byte {
+func (h BlockHeader) headerBytes() []byte {
 	var buf bytes.Buffer
 
 	writeU32 := func(v uint32) {
@@ -115,18 +116,18 @@ func (h SidechainBlockHeader) headerBytes() []byte {
 // The payloads are committed through PayloadRoot, so the hash covers them without
 // the hash function ever touching them -- which is what lets a verifier check a
 // chain of headers without holding the data.
-func (b *SidechainBlock) ComputeHash() []byte {
+func (b *Block) ComputeHash() []byte {
 	digest := sha256.Sum256(b.Header.headerBytes())
 	return digest[:]
 }
 
-// sidechainPayloadRoot computes the Merkle root over a block's payloads.
+// PayloadRoot computes the Merkle root over a block's payloads.
 //
 // Domain-separated leaves and interior nodes, for the reason the main chain's
 // Merkle tree is: without separation, an interior node can be presented as a leaf
 // and two different payload sets can produce one root.
-func sidechainPayloadRoot(payloads [][]byte) []byte {
-	return merkleRoot(sidechainPayloadDomain, payloads)
+func PayloadRoot(payloads [][]byte) []byte {
+	return merkle.Root(PayloadDomain, payloads)
 }
 
 // PayloadProof returns the inclusion proof for one of a block's payloads.
@@ -134,25 +135,25 @@ func sidechainPayloadRoot(payloads [][]byte) []byte {
 // This is what makes an availability challenge answerable: a publisher can prove
 // a single payload against the committed root without producing the rest of the
 // block, and a verifier can check it without holding the block at all.
-func (b *SidechainBlock) PayloadProof(index int) ([][]byte, error) {
-	return merkleProof(sidechainPayloadDomain, b.Payloads, index)
+func (b *Block) PayloadProof(index int) ([][]byte, error) {
+	return merkle.Proof(PayloadDomain, b.Payloads, index)
 }
 
 // VerifyPayload checks a payload against a block's committed payload root.
 func VerifyPayloadInclusion(payloadRoot, payload []byte, index, count int, path [][]byte) bool {
-	return merkleVerify(sidechainPayloadDomain, payloadRoot, payload, index, count, path)
+	return merkle.Verify(PayloadDomain, payloadRoot, payload, index, count, path)
 }
 
-// NewSidechainBlock builds the next block for a sidechain.
+// NewBlock builds the next block for a sidechain.
 //
 // previous may be nil, which produces the sidechain's genesis block at height 0.
-func NewSidechainBlock(id SidechainID, previous *SidechainBlock, payloads [][]byte, timestampUnixNano int64) (*SidechainBlock, error) {
+func NewBlock(id ID, previous *Block, payloads [][]byte, timestampUnixNano int64) (*Block, error) {
 	if err := id.Validate(); err != nil {
 		return nil, err
 	}
-	if len(payloads) > maxSidechainPayloads {
+	if len(payloads) > MaxPayloads {
 		return nil, fmt.Errorf("%w: %d payloads exceeds the %d limit",
-			ErrInvalidSidechainBlock, len(payloads), maxSidechainPayloads)
+			ErrInvalidSidechainBlock, len(payloads), MaxPayloads)
 	}
 
 	var height uint64
@@ -167,16 +168,16 @@ func NewSidechainBlock(id SidechainID, previous *SidechainBlock, payloads [][]by
 		previousHash = append([]byte{}, previous.Hash...)
 	}
 
-	block := &SidechainBlock{
-		Header: SidechainBlockHeader{
-			Version:           sidechainBlockVersion,
+	block := &Block{
+		Header: BlockHeader{
+			Version:           BlockVersion,
 			PublisherID:       id.PublisherID,
 			GameID:            id.GameID,
 			Height:            height,
 			PreviousHash:      previousHash,
-			PayloadRoot:       sidechainPayloadRoot(payloads),
+			PayloadRoot:       PayloadRoot(payloads),
 			TimestampUnixNano: timestampUnixNano,
-			// Bounded by maxSidechainPayloads above, which is far below the
+			// Bounded by MaxPayloads above, which is far below the
 			// uint32 ceiling.
 			PayloadCount: uint32(len(payloads)), //nolint:gosec // bounded above
 		},
@@ -192,7 +193,7 @@ func NewSidechainBlock(id SidechainID, previous *SidechainBlock, payloads [][]by
 // This is the parent-independent half: shape, self-consistency, and that the
 // payloads are the ones the header commits to. Whether it follows the tip is a
 // question for the chain that holds it.
-func (b *SidechainBlock) Validate() error {
+func (b *Block) Validate() error {
 	if b == nil {
 		return fmt.Errorf("%w: block is nil", ErrInvalidSidechainBlock)
 	}
@@ -202,9 +203,9 @@ func (b *SidechainBlock) Validate() error {
 	if b.Header.Version == 0 {
 		return fmt.Errorf("%w: header version is zero", ErrInvalidSidechainBlock)
 	}
-	if len(b.Payloads) > maxSidechainPayloads {
+	if len(b.Payloads) > MaxPayloads {
 		return fmt.Errorf("%w: %d payloads exceeds the %d limit",
-			ErrInvalidSidechainBlock, len(b.Payloads), maxSidechainPayloads)
+			ErrInvalidSidechainBlock, len(b.Payloads), MaxPayloads)
 	}
 	if int(b.Header.PayloadCount) != len(b.Payloads) {
 		return fmt.Errorf("%w: header declares %d payloads, block carries %d",
@@ -213,7 +214,7 @@ func (b *SidechainBlock) Validate() error {
 
 	// The root must be the one these payloads produce, or the header commits to
 	// data the block does not contain.
-	if !bytes.Equal(b.Header.PayloadRoot, sidechainPayloadRoot(b.Payloads)) {
+	if !bytes.Equal(b.Header.PayloadRoot, PayloadRoot(b.Payloads)) {
 		return fmt.Errorf("%w: payload root does not match the payloads",
 			ErrInvalidSidechainBlock)
 	}
@@ -238,7 +239,7 @@ func (b *SidechainBlock) Validate() error {
 }
 
 // Follows reports whether this block extends the given tip.
-func (b *SidechainBlock) Follows(tip *SidechainBlock) error {
+func (b *Block) Follows(tip *Block) error {
 	if tip == nil {
 		if b.Header.Height != 0 {
 			return fmt.Errorf("%w: height %d has no predecessor to follow",

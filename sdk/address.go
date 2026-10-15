@@ -76,3 +76,13 @@ func (a *Address) GetAddressHash() string {
 	hash := sha256.Sum256([]byte(a.PrependedAddress))
 	return hex.EncodeToString(hash[:])
 }
+
+// IsAddress reports whether s has the shape of an account address: the 64-hex
+// SHA-256 of a public key (PeerIDFromPublicPEM).
+func IsAddress(s string) bool {
+	if len(s) != 64 {
+		return false
+	}
+	_, err := hex.DecodeString(s)
+	return err == nil
+}

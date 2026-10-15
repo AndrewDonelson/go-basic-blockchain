@@ -39,6 +39,8 @@ func (api *API) registerVersionedOnly(r *mux.Router) {
 	r.HandleFunc("/publishers", api.handleFindPublisher).Methods("GET")
 	r.HandleFunc("/publishers/{id}", api.handleViewPublisher).Methods("GET")
 	r.HandleFunc("/sidechains/{publisherID}/{gameID}/anchors", api.handleSidechainAnchors).Methods("GET")
+	r.HandleFunc("/transactions/{id}", api.handleTransactionStatus).Methods("GET")
+	r.HandleFunc("/accounts/{address}", api.handleAccount).Methods("GET")
 }
 
 // registerInto attaches every route to a router, so the same table can be

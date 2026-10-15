@@ -1,6 +1,5 @@
-// Package sdk is a software development kit for building blockchain applications.
-// File sdk/sidechain_codec.go - Stable JSON encoding for sidechain blocks.
-package sdk
+// File sidechain/codec.go - Stable JSON encoding for sidechain blocks.
+package sidechain
 
 import (
 	"encoding/hex"
@@ -24,7 +23,7 @@ import (
 // which a JavaScript number stops being exact, and a block whose timestamp was
 // rounded by a non-Go reader no longer hashes to its own Hash.
 //
-// The header's own JSON encoding is NOT changed. SidechainBlockHeader is already
+// The header's own JSON encoding is NOT changed. BlockHeader is already
 // embedded in AvailabilityProof, which travels inside AVAILABILITY transactions
 // stored in mined blocks; giving the header a MarshalJSON would silently change
 // how those historic transactions decode. The wire shape lives here, private,
@@ -43,7 +42,7 @@ type sidechainHeaderWire struct {
 }
 
 // headerToWire projects a header onto its pinned JSON shape.
-func headerToWire(h SidechainBlockHeader) sidechainHeaderWire {
+func headerToWire(h BlockHeader) sidechainHeaderWire {
 	return sidechainHeaderWire{
 		Version:           h.Version,
 		PublisherID:       h.PublisherID,
@@ -59,20 +58,20 @@ func headerToWire(h SidechainBlockHeader) sidechainHeaderWire {
 // headerFromWire rebuilds a header from its pinned JSON shape.
 //
 // It decodes; it does not judge. Whether the header is consistent with anything
-// is the business of Validate, RestoreSidechain and the proof verifiers, which
+// is the business of Validate, Restore and the proof verifiers, which
 // is where a caller expects that question to be answered.
-func headerFromWire(w sidechainHeaderWire) (SidechainBlockHeader, error) {
+func headerFromWire(w sidechainHeaderWire) (BlockHeader, error) {
 	previous, err := hex.DecodeString(w.PreviousHash)
 	if err != nil {
-		return SidechainBlockHeader{}, fmt.Errorf("%w: previous hash is not valid hex: %w",
+		return BlockHeader{}, fmt.Errorf("%w: previous hash is not valid hex: %w",
 			ErrInvalidSidechainBlock, err)
 	}
 	root, err := hex.DecodeString(w.PayloadRoot)
 	if err != nil {
-		return SidechainBlockHeader{}, fmt.Errorf("%w: payload root is not valid hex: %w",
+		return BlockHeader{}, fmt.Errorf("%w: payload root is not valid hex: %w",
 			ErrInvalidSidechainBlock, err)
 	}
-	return SidechainBlockHeader{
+	return BlockHeader{
 		Version:           w.Version,
 		PublisherID:       w.PublisherID,
 		GameID:            w.GameID,
@@ -97,7 +96,7 @@ type sidechainBlockWire struct {
 //	           "previous_hash":"","payload_root":"<hex>",
 //	           "timestamp_unix_nano":"1700000000000000000","payload_count":1},
 //	 "hash":"<hex>","payloads":["<hex>", ...]}
-func (b SidechainBlock) MarshalJSON() ([]byte, error) {
+func (b Block) MarshalJSON() ([]byte, error) {
 	payloads := make([]string, 0, len(b.Payloads))
 	for _, payload := range b.Payloads {
 		payloads = append(payloads, hex.EncodeToString(payload))
@@ -114,8 +113,8 @@ func (b SidechainBlock) MarshalJSON() ([]byte, error) {
 // The decoded block is not validated here: decoding and judging are separate
 // steps, so a caller can inspect a block that fails validation (to report what
 // is wrong with it) rather than receiving only a parse error. Append and
-// RestoreSidechain validate before anything is trusted.
-func (b *SidechainBlock) UnmarshalJSON(data []byte) error {
+// Restore validate before anything is trusted.
+func (b *Block) UnmarshalJSON(data []byte) error {
 	var w sidechainBlockWire
 	if err := json.Unmarshal(data, &w); err != nil {
 		return err
@@ -129,9 +128,9 @@ func (b *SidechainBlock) UnmarshalJSON(data []byte) error {
 	if err != nil {
 		return fmt.Errorf("%w: hash is not valid hex: %w", ErrInvalidSidechainBlock, err)
 	}
-	if len(w.Payloads) > maxSidechainPayloads {
+	if len(w.Payloads) > MaxPayloads {
 		return fmt.Errorf("%w: %d payloads exceeds the %d limit",
-			ErrInvalidSidechainBlock, len(w.Payloads), maxSidechainPayloads)
+			ErrInvalidSidechainBlock, len(w.Payloads), MaxPayloads)
 	}
 
 	payloads := make([][]byte, 0, len(w.Payloads))

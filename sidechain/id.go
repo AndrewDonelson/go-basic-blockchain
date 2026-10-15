@@ -1,6 +1,5 @@
-// Package sdk is a software development kit for building blockchain applications.
-// File sdk/sidechain_id.go - Sidechain identity: (publisher, game).
-package sdk
+// File sidechain/id.go - Chain identity: (publisher, game).
+package sidechain
 
 import (
 	"encoding/binary"
@@ -9,7 +8,7 @@ import (
 	"fmt"
 )
 
-// SidechainID names one game's block space.
+// ID names one game's block space.
 //
 // A publisher registers once and receives a PublisherID; each of their games
 // receives a GameID. The pair is the sidechain, and it is the unit of isolation:
@@ -21,7 +20,7 @@ import (
 // protobuf round trip unchanged -- a numeric identity does all of that without a
 // canonicalisation question (is "Acme" the same publisher as "acme"?) attached to
 // every comparison.
-type SidechainID struct {
+type ID struct {
 	PublisherID uint64
 	GameID      uint64
 }
@@ -34,29 +33,29 @@ var (
 	ErrSidechainMismatch = errors.New("block belongs to a different sidechain")
 )
 
-// NewSidechainID builds an identity, rejecting the zero values.
+// NewID builds an identity, rejecting the zero values.
 //
 // Zero is reserved: it is what an unset protobuf field decodes to, so allowing it
 // would make "no publisher" and "publisher 0" the same value, and a message that
 // simply omitted the field would address a real sidechain.
-func NewSidechainID(publisherID, gameID uint64) (SidechainID, error) {
+func NewID(publisherID, gameID uint64) (ID, error) {
 	if publisherID == 0 {
-		return SidechainID{}, fmt.Errorf("%w: publisher id must not be zero", ErrInvalidSidechainID)
+		return ID{}, fmt.Errorf("%w: publisher id must not be zero", ErrInvalidSidechainID)
 	}
 	if gameID == 0 {
-		return SidechainID{}, fmt.Errorf("%w: game id must not be zero", ErrInvalidSidechainID)
+		return ID{}, fmt.Errorf("%w: game id must not be zero", ErrInvalidSidechainID)
 	}
-	return SidechainID{PublisherID: publisherID, GameID: gameID}, nil
+	return ID{PublisherID: publisherID, GameID: gameID}, nil
 }
 
 // Validate reports whether the identity is usable.
-func (id SidechainID) Validate() error {
-	_, err := NewSidechainID(id.PublisherID, id.GameID)
+func (id ID) Validate() error {
+	_, err := NewID(id.PublisherID, id.GameID)
 	return err
 }
 
 // IsZero reports whether the identity is unset.
-func (id SidechainID) IsZero() bool {
+func (id ID) IsZero() bool {
 	return id.PublisherID == 0 && id.GameID == 0
 }
 
@@ -64,7 +63,7 @@ func (id SidechainID) IsZero() bool {
 //
 // Fixed width, so two identities can never produce the same bytes -- the hazard a
 // delimited text form would carry, where "1|23" and "12|3" collide.
-func (id SidechainID) Bytes() []byte {
+func (id ID) Bytes() []byte {
 	out := make([]byte, 16)
 	binary.BigEndian.PutUint64(out[0:8], id.PublisherID)
 	binary.BigEndian.PutUint64(out[8:16], id.GameID)
@@ -72,28 +71,28 @@ func (id SidechainID) Bytes() []byte {
 }
 
 // String returns a human-readable form, used in logs and as a map key.
-func (id SidechainID) String() string {
+func (id ID) String() string {
 	return fmt.Sprintf("%d:%d", id.PublisherID, id.GameID)
 }
 
 // Hex returns the canonical encoding as hex, for use in APIs and storage paths.
-func (id SidechainID) Hex() string {
+func (id ID) Hex() string {
 	return hex.EncodeToString(id.Bytes())
 }
 
-// SidechainIDFromBytes decodes the canonical encoding.
-func SidechainIDFromBytes(data []byte) (SidechainID, error) {
+// IDFromBytes decodes the canonical encoding.
+func IDFromBytes(data []byte) (ID, error) {
 	if len(data) != 16 {
-		return SidechainID{}, fmt.Errorf("%w: expected 16 bytes, got %d",
+		return ID{}, fmt.Errorf("%w: expected 16 bytes, got %d",
 			ErrInvalidSidechainID, len(data))
 	}
-	return NewSidechainID(
+	return NewID(
 		binary.BigEndian.Uint64(data[0:8]),
 		binary.BigEndian.Uint64(data[8:16]),
 	)
 }
 
 // Equal reports whether two identities name the same sidechain.
-func (id SidechainID) Equal(other SidechainID) bool {
+func (id ID) Equal(other ID) bool {
 	return id.PublisherID == other.PublisherID && id.GameID == other.GameID
 }

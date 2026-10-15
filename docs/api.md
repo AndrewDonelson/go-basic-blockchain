@@ -371,8 +371,9 @@ These exist **only under `/v1`** and require the same API key as everything else
 limit). They are what an application uses to put its own transactions on chain
 and read back what consensus made of them — see
 [Using sidechains from an application](sidechains.md#-using-sidechains-from-an-application)
-for the end-to-end walk-through, and the [`client`](../client) package for a Go
-client.
+for the end-to-end walk-through, and the dependency-free
+[`sidechain`](../sidechain) package (`sidechain.Client`) for a Go client that
+doesn't link the node.
 
 ### `POST /v1/transactions` — submit a signed transaction
 
@@ -466,8 +467,36 @@ reports whether the sidechain has ever exceeded `MaxAnchorGap`.
 
 An unregistered `(publisher, game)` pair is a `404`; a registered one with
 nothing anchored yet is a `200` with `"anchors": []` — "no such sidechain" and
-"not anchored yet" are different answers. `sdk.AnchorInfo.Anchor()` converts an
-entry back into the `SidechainAnchor` that `sdk.VerifyRecord` checks against.
+"not anchored yet" are different answers. `AnchorInfo.Anchor()` (package `sidechain`) converts an
+entry back into the `Anchor` that `sidechain.VerifyRecord` checks against.
+
+### `GET /v1/transactions/{id}`
+
+Whether a submitted transaction is still waiting or has been mined:
+
+```json
+{ "id": "0:0:0:4712", "status": "confirmed", "block_index": 88, "confirmations": 3 }
+```
+
+`status` is `pending` (in this node's mempool) or `confirmed` (in a block on this
+node's chain, with its index and how many blocks are on top of it). An id this
+node doesn't know — never seen, or dropped from the mempool — is a `404`, so an
+application can rebuild and resubmit. `sidechain.Client.WaitConfirmed` polls it.
+
+### `GET /v1/accounts/{address}`
+
+What an application needs to fund and sequence transactions it builds itself:
+
+```json
+{ "address": "3f1c…", "balance_units": 12500000000,
+  "last_nonce": 6, "has_nonce": true, "pending_nonce": 7, "has_pending": true }
+```
+
+`last_nonce` is the highest nonce the chain has confirmed for this sender
+(`has_nonce` false: none yet, and the first may be 0); `pending_nonce` is the
+highest waiting in this node's mempool. The next transaction carries one more
+than the larger (`sidechain.AccountInfo.NextNonce`). `400` unless the address is
+64 hex characters.
 
 ---
 

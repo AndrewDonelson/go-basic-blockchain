@@ -218,6 +218,26 @@ components:
               description: Oldest first
               items: { $ref: '#/components/schemas/AnchorInfo' }
 
+    TransactionInfo:
+      type: object
+      required: [id, status]
+      properties:
+        id: { type: string }
+        status: { type: string, enum: [pending, confirmed] }
+        block_index: { type: integer, format: int64, description: The main-chain block carrying a confirmed transaction }
+        confirmations: { type: integer, format: int64, description: That block plus every block mined on top of it }
+
+    AccountInfo:
+      type: object
+      required: [address, balance_units, last_nonce, has_nonce, pending_nonce, has_pending]
+      properties:
+        address: { type: string }
+        balance_units: { type: integer, format: int64, description: Spendable balance in base units }
+        last_nonce: { type: integer, format: int64, description: Highest nonce the chain has confirmed for this sender }
+        has_nonce: { type: boolean, description: False when the chain has confirmed none (the first nonce may be 0) }
+        pending_nonce: { type: integer, format: int64, description: Highest nonce waiting in this node's mempool }
+        has_pending: { type: boolean }
+
   responses:
     Unauthorized:
       description: Missing, malformed or unrecognised credential
@@ -723,6 +743,51 @@ paths:
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '404': { $ref: '#/components/responses/NotFound' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+
+  /v1/transactions/{id}:
+    get:
+      tags: [Applications]
+      summary: Whether a submitted transaction is pending or mined, and where
+      description: |
+        An id this node doesn't know (never seen, or dropped from the mempool)
+        is a 404, so an application can rebuild and resubmit.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TransactionInfo' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+
+  /v1/accounts/{address}:
+    get:
+      tags: [Applications]
+      summary: An address's spendable balance and nonces
+      description: |
+        What an application needs to fund and sequence transactions it builds
+        itself: the next transaction carries one more than the larger of
+        last_nonce and pending_nonce.
+      parameters:
+        - name: address
+          in: path
+          required: true
+          schema: { type: string, pattern: '^[0-9a-fA-F]{64}$' }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AccountInfo' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
         '429': { $ref: '#/components/responses/RateLimited' }
 
   /v1/sidechains/{publisherID}/{gameID}/anchors:

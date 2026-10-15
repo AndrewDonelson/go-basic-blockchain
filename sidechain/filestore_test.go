@@ -1,6 +1,5 @@
-// Package sdk is a software development kit for building blockchain applications.
-// File sdk/sidechain_filestore_test.go - Tests for sidechain persistence.
-package sdk
+// File sidechain/filestore_test.go - Tests for sidechain persistence.
+package sidechain
 
 import (
 	"bytes"
@@ -12,9 +11,9 @@ import (
 )
 
 // chainBlocks returns a sidechain's blocks in height order.
-func chainBlocks(t *testing.T, chain *Sidechain) []*SidechainBlock {
+func chainBlocks(t *testing.T, chain *Chain) []*Block {
 	t.Helper()
-	blocks := make([]*SidechainBlock, 0, chain.Len())
+	blocks := make([]*Block, 0, chain.Len())
 	for height := 0; height < chain.Len(); height++ {
 		block, ok := chain.BlockAt(uint64(height))
 		if !ok {
@@ -26,13 +25,13 @@ func chainBlocks(t *testing.T, chain *Sidechain) []*SidechainBlock {
 }
 
 // jsonRoundTrip encodes and decodes a block, as a store would.
-func jsonRoundTrip(t *testing.T, block *SidechainBlock) *SidechainBlock {
+func jsonRoundTrip(t *testing.T, block *Block) *Block {
 	t.Helper()
 	encoded, err := json.Marshal(block)
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
 	}
-	var decoded SidechainBlock
+	var decoded Block
 	if err := json.Unmarshal(encoded, &decoded); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
@@ -40,7 +39,7 @@ func jsonRoundTrip(t *testing.T, block *SidechainBlock) *SidechainBlock {
 }
 
 func TestSidechainBlockJSONRoundTrip(t *testing.T) {
-	id := SidechainID{PublisherID: 1, GameID: 2}
+	id := ID{PublisherID: 1, GameID: 2}
 	chain := buildRichChain(t, id, 3, 3)
 
 	for _, block := range chainBlocks(t, chain) {
@@ -70,18 +69,18 @@ func TestSidechainBlockJSONRoundTrip(t *testing.T) {
 }
 
 func TestRestoreSidechainRebuildsPersistedHistory(t *testing.T) {
-	id := SidechainID{PublisherID: 1, GameID: 2}
+	id := ID{PublisherID: 1, GameID: 2}
 	original := buildRichChain(t, id, 5, 2)
 
-	var persisted []*SidechainBlock
+	var persisted []*Block
 	for _, block := range chainBlocks(t, original) {
 		persisted = append(persisted, jsonRoundTrip(t, block))
 	}
 
 	anchored := uint64(2)
-	restored, err := RestoreSidechain(id, persisted, &anchored)
+	restored, err := Restore(id, persisted, &anchored)
 	if err != nil {
-		t.Fatalf("RestoreSidechain: %v", err)
+		t.Fatalf("Restore: %v", err)
 	}
 	if !bytes.Equal(restored.Tip().Hash, original.Tip().Hash) {
 		t.Fatal("the restored tip is not the original tip")
@@ -99,56 +98,56 @@ func TestRestoreSidechainRebuildsPersistedHistory(t *testing.T) {
 }
 
 func TestRestoreSidechainRefusesAnythingThatDoesNotCheckOut(t *testing.T) {
-	id := SidechainID{PublisherID: 1, GameID: 2}
+	id := ID{PublisherID: 1, GameID: 2}
 
-	fresh := func() []*SidechainBlock {
-		var out []*SidechainBlock
+	fresh := func() []*Block {
+		var out []*Block
 		for _, block := range chainBlocks(t, buildChain(t, id, 4)) {
 			out = append(out, jsonRoundTrip(t, block))
 		}
 		return out
 	}
-	foreign := chainBlocks(t, buildChain(t, SidechainID{PublisherID: 7, GameID: 2}, 1))
+	foreign := chainBlocks(t, buildChain(t, ID{PublisherID: 7, GameID: 2}, 1))
 
 	beyondTip := uint64(9)
 
 	cases := []struct {
 		name     string
-		id       SidechainID
-		blocks   func() []*SidechainBlock
+		id       ID
+		blocks   func() []*Block
 		anchored *uint64
 		want     error
 	}{
-		{"zero id", SidechainID{}, fresh, nil, ErrInvalidSidechainID},
-		{"another publisher's genesis", id, func() []*SidechainBlock { return foreign }, nil,
+		{"zero id", ID{}, fresh, nil, ErrInvalidSidechainID},
+		{"another publisher's genesis", id, func() []*Block { return foreign }, nil,
 			ErrSidechainMismatch},
-		{"missing genesis", id, func() []*SidechainBlock { return fresh()[1:] }, nil,
+		{"missing genesis", id, func() []*Block { return fresh()[1:] }, nil,
 			ErrSidechainNotContiguous},
-		{"gap", id, func() []*SidechainBlock {
+		{"gap", id, func() []*Block {
 			b := fresh()
 			return append(b[:2], b[3:]...)
 		}, nil, ErrSidechainNotContiguous},
-		{"reordered", id, func() []*SidechainBlock {
+		{"reordered", id, func() []*Block {
 			b := fresh()
 			b[1], b[2] = b[2], b[1]
 			return b
 		}, nil, ErrSidechainNotContiguous},
-		{"payload edited", id, func() []*SidechainBlock {
+		{"payload edited", id, func() []*Block {
 			b := fresh()
 			b[2].Payloads[0] = []byte("rewritten")
 			return b
 		}, nil, ErrInvalidSidechainBlock},
-		{"header edited", id, func() []*SidechainBlock {
+		{"header edited", id, func() []*Block {
 			b := fresh()
 			b[2].Header.TimestampUnixNano++
 			return b
 		}, nil, ErrInvalidSidechainBlock},
-		{"broken hash link", id, func() []*SidechainBlock {
+		{"broken hash link", id, func() []*Block {
 			b := fresh()
 			// A self-consistent block whose predecessor is not the one stored.
-			relinked, err := NewSidechainBlock(id, b[1], [][]byte{[]byte("x")}, 1)
+			relinked, err := NewBlock(id, b[1], [][]byte{[]byte("x")}, 1)
 			if err != nil {
-				t.Fatalf("NewSidechainBlock: %v", err)
+				t.Fatalf("NewBlock: %v", err)
 			}
 			relinked.Header.PreviousHash = bytes.Repeat([]byte{1}, 32)
 			relinked.Hash = relinked.ComputeHash()
@@ -160,7 +159,7 @@ func TestRestoreSidechainRefusesAnythingThatDoesNotCheckOut(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if _, err := RestoreSidechain(tc.id, tc.blocks(), tc.anchored); !errors.Is(err, tc.want) {
+			if _, err := Restore(tc.id, tc.blocks(), tc.anchored); !errors.Is(err, tc.want) {
 				t.Fatalf("expected %v, got %v", tc.want, err)
 			}
 		})
@@ -168,7 +167,7 @@ func TestRestoreSidechainRefusesAnythingThatDoesNotCheckOut(t *testing.T) {
 }
 
 func TestSidechainMarkAnchoredOnlyMovesForward(t *testing.T) {
-	chain := buildChain(t, SidechainID{PublisherID: 1, GameID: 1}, 4)
+	chain := buildChain(t, ID{PublisherID: 1, GameID: 1}, 4)
 
 	if err := chain.MarkAnchored(2); err != nil {
 		t.Fatalf("MarkAnchored(2): %v", err)
@@ -189,10 +188,10 @@ func TestSidechainMarkAnchoredOnlyMovesForward(t *testing.T) {
 
 func TestFileSidechainStoreSurvivesReopening(t *testing.T) {
 	dir := t.TempDir()
-	id := SidechainID{PublisherID: 4, GameID: 1}
-	other := SidechainID{PublisherID: 4, GameID: 2}
+	id := ID{PublisherID: 4, GameID: 1}
+	other := ID{PublisherID: 4, GameID: 2}
 
-	store, err := OpenFileSidechainStore(dir)
+	store, err := OpenFileStore(dir)
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
@@ -211,7 +210,7 @@ func TestFileSidechainStoreSurvivesReopening(t *testing.T) {
 	}
 
 	// A fresh store over the same directory: what a restarted process sees.
-	reopened, err := OpenFileSidechainStore(dir)
+	reopened, err := OpenFileStore(dir)
 	if err != nil {
 		t.Fatalf("reopen: %v", err)
 	}
@@ -235,26 +234,26 @@ func TestFileSidechainStoreSurvivesReopening(t *testing.T) {
 	}
 
 	// And the reopened store carries on from the tip it read back.
-	next, err := NewSidechainBlock(id, loaded.Tip(), [][]byte{[]byte("after restart")}, 9)
+	next, err := NewBlock(id, loaded.Tip(), [][]byte{[]byte("after restart")}, 9)
 	if err != nil {
-		t.Fatalf("NewSidechainBlock: %v", err)
+		t.Fatalf("NewBlock: %v", err)
 	}
 	if err := reopened.AppendBlock(next); err != nil {
 		t.Fatalf("AppendBlock after reopen: %v", err)
 	}
 
-	empty, err := reopened.Load(SidechainID{PublisherID: 99, GameID: 1})
+	empty, err := reopened.Load(ID{PublisherID: 99, GameID: 1})
 	if err != nil || empty.Len() != 0 {
 		t.Fatalf("an unknown sidechain should load empty, got %v, %v", empty, err)
 	}
 }
 
 func TestFileSidechainStoreRefusesBlocksThatDoNotFollow(t *testing.T) {
-	store, err := OpenFileSidechainStore(t.TempDir())
+	store, err := OpenFileStore(t.TempDir())
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
-	id := SidechainID{PublisherID: 4, GameID: 1}
+	id := ID{PublisherID: 4, GameID: 1}
 	blocks := chainBlocks(t, buildChain(t, id, 3))
 
 	if err := store.AppendBlock(blocks[1]); !errors.Is(err, ErrSidechainNotContiguous) {
@@ -271,13 +270,13 @@ func TestFileSidechainStoreRefusesBlocksThatDoNotFollow(t *testing.T) {
 	}
 
 	// Same height, different history.
-	fork, err := NewSidechainBlock(id, nil, [][]byte{[]byte("fork")}, 1)
+	fork, err := NewBlock(id, nil, [][]byte{[]byte("fork")}, 1)
 	if err != nil {
-		t.Fatalf("NewSidechainBlock: %v", err)
+		t.Fatalf("NewBlock: %v", err)
 	}
-	forkChild, err := NewSidechainBlock(id, fork, nil, 2)
+	forkChild, err := NewBlock(id, fork, nil, 2)
 	if err != nil {
-		t.Fatalf("NewSidechainBlock: %v", err)
+		t.Fatalf("NewBlock: %v", err)
 	}
 	if err := store.AppendBlock(forkChild); !errors.Is(err, ErrSidechainNotContiguous) {
 		t.Fatalf("a block from another history should be refused, got %v", err)
@@ -296,10 +295,10 @@ func TestFileSidechainStoreRefusesBlocksThatDoNotFollow(t *testing.T) {
 
 func TestFileSidechainStoreCutsOffATornWrite(t *testing.T) {
 	dir := t.TempDir()
-	id := SidechainID{PublisherID: 4, GameID: 1}
+	id := ID{PublisherID: 4, GameID: 1}
 	blocks := chainBlocks(t, buildChain(t, id, 3))
 
-	store, err := OpenFileSidechainStore(dir)
+	store, err := OpenFileStore(dir)
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
@@ -310,8 +309,8 @@ func TestFileSidechainStoreCutsOffATornWrite(t *testing.T) {
 	}
 
 	// Simulate a crash part-way through writing the third block.
-	path := filepath.Join(dir, id.Hex()+sidechainFileExtension)
-	whole, _ := json.Marshal(sidechainLogRecord{Block: blocks[2]})
+	path := filepath.Join(dir, id.Hex()+fileExtension)
+	whole, _ := json.Marshal(logRecord{Block: blocks[2]})
 	file, err := os.OpenFile(path, os.O_WRONLY|os.O_APPEND, 0o600)
 	if err != nil {
 		t.Fatalf("open file: %v", err)
@@ -321,7 +320,7 @@ func TestFileSidechainStoreCutsOffATornWrite(t *testing.T) {
 	}
 	_ = file.Close()
 
-	reopened, err := OpenFileSidechainStore(dir)
+	reopened, err := OpenFileStore(dir)
 	if err != nil {
 		t.Fatalf("reopen: %v", err)
 	}
@@ -337,7 +336,7 @@ func TestFileSidechainStoreCutsOffATornWrite(t *testing.T) {
 	if err := reopened.AppendBlock(blocks[2]); err != nil {
 		t.Fatalf("AppendBlock after repair: %v", err)
 	}
-	again, err := OpenFileSidechainStore(dir)
+	again, err := OpenFileStore(dir)
 	if err != nil {
 		t.Fatalf("reopen: %v", err)
 	}
@@ -348,10 +347,10 @@ func TestFileSidechainStoreCutsOffATornWrite(t *testing.T) {
 
 func TestFileSidechainStoreRefusesCorruption(t *testing.T) {
 	dir := t.TempDir()
-	id := SidechainID{PublisherID: 4, GameID: 1}
+	id := ID{PublisherID: 4, GameID: 1}
 	blocks := chainBlocks(t, buildChain(t, id, 3))
 
-	store, err := OpenFileSidechainStore(dir)
+	store, err := OpenFileStore(dir)
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
@@ -361,7 +360,7 @@ func TestFileSidechainStoreRefusesCorruption(t *testing.T) {
 		}
 	}
 
-	path := filepath.Join(dir, id.Hex()+sidechainFileExtension)
+	path := filepath.Join(dir, id.Hex()+fileExtension)
 	original, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatalf("read: %v", err)
@@ -376,7 +375,7 @@ func TestFileSidechainStoreRefusesCorruption(t *testing.T) {
 			return bytes.Join([][]byte{lines[0], []byte("{not json\n"), lines[2]}, nil)
 		}},
 		{"edited payload", func() []byte {
-			var record sidechainLogRecord
+			var record logRecord
 			if err := json.Unmarshal(lines[1], &record); err != nil {
 				t.Fatalf("decode: %v", err)
 			}
@@ -394,15 +393,15 @@ func TestFileSidechainStoreRefusesCorruption(t *testing.T) {
 			if err := os.WriteFile(path, tc.mutate(), 0o600); err != nil {
 				t.Fatalf("write: %v", err)
 			}
-			reopened, err := OpenFileSidechainStore(dir)
+			reopened, err := OpenFileStore(dir)
 			if err != nil {
 				t.Fatalf("reopen: %v", err)
 			}
-			if _, err := reopened.Load(id); !errors.Is(err, ErrSidechainStoreCorrupt) {
-				t.Fatalf("expected ErrSidechainStoreCorrupt, got %v", err)
+			if _, err := reopened.Load(id); !errors.Is(err, ErrStoreCorrupt) {
+				t.Fatalf("expected ErrStoreCorrupt, got %v", err)
 			}
 			// And it will not append on top of a history it cannot vouch for.
-			if err := reopened.AppendBlock(blocks[0]); !errors.Is(err, ErrSidechainStoreCorrupt) {
+			if err := reopened.AppendBlock(blocks[0]); !errors.Is(err, ErrStoreCorrupt) {
 				t.Fatalf("expected appends to be refused, got %v", err)
 			}
 		})

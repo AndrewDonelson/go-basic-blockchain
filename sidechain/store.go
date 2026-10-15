@@ -1,13 +1,12 @@
-// Package sdk is a software development kit for building blockchain applications.
-// File sdk/sidechain_store.go - A sidechain's block space.
-package sdk
+// File sidechain/store.go - A sidechain's block space.
+package sidechain
 
 import (
 	"fmt"
 	"sync"
 )
 
-// Sidechain is one game's block space.
+// Chain is one game's block space.
 //
 // SINGLE WRITER BY DESIGN. The publisher's own node produces these blocks; there
 // is no consensus here and none is wanted. A publisher does not need to be
@@ -19,11 +18,11 @@ import (
 // main chain is where that guarantee comes from -- see sdk/sidechain_anchor.go.
 // Until a range is anchored the publisher can reorder or drop within it, and that
 // is the honest description of the trust model rather than a gap in it.
-type Sidechain struct {
+type Chain struct {
 	mu sync.RWMutex
 
-	id     SidechainID
-	blocks []*SidechainBlock
+	id     ID
+	blocks []*Block
 
 	// anchoredHeight is the highest height committed to the main chain, and
 	// anchored reports whether any range has been. Height 0 is a real height, so
@@ -32,19 +31,19 @@ type Sidechain struct {
 	anchored       bool
 }
 
-// NewSidechain creates an empty block space for an identity.
-func NewSidechain(id SidechainID) (*Sidechain, error) {
+// NewChain creates an empty block space for an identity.
+func NewChain(id ID) (*Chain, error) {
 	if err := id.Validate(); err != nil {
 		return nil, err
 	}
-	return &Sidechain{id: id}, nil
+	return &Chain{id: id}, nil
 }
 
 // ID returns the sidechain's identity.
-func (s *Sidechain) ID() SidechainID { return s.id }
+func (s *Chain) ID() ID { return s.id }
 
 // Height returns the tip height, and whether the chain has any blocks.
-func (s *Sidechain) Height() (uint64, bool) {
+func (s *Chain) Height() (uint64, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	if len(s.blocks) == 0 {
@@ -54,13 +53,13 @@ func (s *Sidechain) Height() (uint64, bool) {
 }
 
 // Tip returns the most recent block, or nil.
-func (s *Sidechain) Tip() *SidechainBlock {
+func (s *Chain) Tip() *Block {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.tipLocked()
 }
 
-func (s *Sidechain) tipLocked() *SidechainBlock {
+func (s *Chain) tipLocked() *Block {
 	if len(s.blocks) == 0 {
 		return nil
 	}
@@ -73,7 +72,7 @@ func (s *Sidechain) tipLocked() *SidechainBlock {
 // follow the current tip. The identity check is the isolation boundary: it is
 // what stops one publisher's block being appended to another's space, and it is
 // cheap enough that there is no reason to trust the caller instead.
-func (s *Sidechain) Append(block *SidechainBlock) error {
+func (s *Chain) Append(block *Block) error {
 	if block == nil {
 		return fmt.Errorf("%w: block is nil", ErrInvalidSidechainBlock)
 	}
@@ -97,7 +96,7 @@ func (s *Sidechain) Append(block *SidechainBlock) error {
 }
 
 // BlockAt returns the block at a height.
-func (s *Sidechain) BlockAt(height uint64) (*SidechainBlock, bool) {
+func (s *Chain) BlockAt(height uint64) (*Block, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -109,7 +108,7 @@ func (s *Sidechain) BlockAt(height uint64) (*SidechainBlock, bool) {
 }
 
 // AnchoredHeight returns the highest anchored height, and whether any exists.
-func (s *Sidechain) AnchoredHeight() (uint64, bool) {
+func (s *Chain) AnchoredHeight() (uint64, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.anchoredHeight, s.anchored
@@ -119,7 +118,7 @@ func (s *Sidechain) AnchoredHeight() (uint64, bool) {
 //
 // It reports whether there is anything to anchor, so a caller does not have to
 // reason about the height-zero-is-a-real-height case itself.
-func (s *Sidechain) PendingAnchor() (from, to uint64, ok bool) {
+func (s *Chain) PendingAnchor() (from, to uint64, ok bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -151,7 +150,7 @@ func (s *Sidechain) PendingAnchor() (from, to uint64, ok bool) {
 // and consensus refuses overlaps; moving it past the tip would claim history is
 // committed that does not exist yet. Repeating the current height is a no-op,
 // so a confirmation handled twice is harmless.
-func (s *Sidechain) MarkAnchored(height uint64) error {
+func (s *Chain) MarkAnchored(height uint64) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -171,7 +170,7 @@ func (s *Sidechain) MarkAnchored(height uint64) error {
 }
 
 // markAnchored records that a range has been committed to the main chain.
-func (s *Sidechain) markAnchored(height uint64) {
+func (s *Chain) AdvanceAnchored(height uint64) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -183,13 +182,13 @@ func (s *Sidechain) markAnchored(height uint64) {
 }
 
 // Len returns the number of blocks held.
-func (s *Sidechain) Len() int {
+func (s *Chain) Len() int {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return len(s.blocks)
 }
 
-// RestoreSidechain rebuilds a sidechain from blocks an application persisted
+// Restore rebuilds a sidechain from blocks an application persisted
 // itself.
 //
 // Nothing read back from storage is trusted. Every block goes through Append, so
@@ -205,8 +204,8 @@ func (s *Sidechain) Len() int {
 // A chain that does not check out is refused whole. Handing back the valid
 // prefix would quietly lose the rest, and the application -- which is the only
 // party holding this data -- is the one that needs to know.
-func RestoreSidechain(id SidechainID, blocks []*SidechainBlock, anchoredThrough *uint64) (*Sidechain, error) {
-	chain, err := NewSidechain(id)
+func Restore(id ID, blocks []*Block, anchoredThrough *uint64) (*Chain, error) {
+	chain, err := NewChain(id)
 	if err != nil {
 		return nil, err
 	}
@@ -225,24 +224,24 @@ func RestoreSidechain(id SidechainID, blocks []*SidechainBlock, anchoredThrough 
 	return chain, nil
 }
 
-// SidechainSet holds the block spaces a node is serving.
+// Set holds the block spaces a node is serving.
 //
 // A publisher's node carries its own games' chains; it has no reason to hold
 // anyone else's, which is the point of the design -- the main chain sees anchors,
 // not game traffic, so it scales with the number of publishers rather than with
 // the number of players.
-type SidechainSet struct {
+type Set struct {
 	mu     sync.RWMutex
-	chains map[string]*Sidechain
+	chains map[string]*Chain
 }
 
-// NewSidechainSet creates an empty set.
-func NewSidechainSet() *SidechainSet {
-	return &SidechainSet{chains: map[string]*Sidechain{}}
+// NewSet creates an empty set.
+func NewSet() *Set {
+	return &Set{chains: map[string]*Chain{}}
 }
 
 // GetOrCreate returns the block space for an identity, creating it if needed.
-func (set *SidechainSet) GetOrCreate(id SidechainID) (*Sidechain, error) {
+func (set *Set) GetOrCreate(id ID) (*Chain, error) {
 	if err := id.Validate(); err != nil {
 		return nil, err
 	}
@@ -256,7 +255,7 @@ func (set *SidechainSet) GetOrCreate(id SidechainID) (*Sidechain, error) {
 		return chain, nil
 	}
 
-	chain, err := NewSidechain(id)
+	chain, err := NewChain(id)
 	if err != nil {
 		return nil, err
 	}
@@ -265,7 +264,7 @@ func (set *SidechainSet) GetOrCreate(id SidechainID) (*Sidechain, error) {
 }
 
 // Get returns an existing block space.
-func (set *SidechainSet) Get(id SidechainID) (*Sidechain, bool) {
+func (set *Set) Get(id ID) (*Chain, bool) {
 	set.mu.RLock()
 	defer set.mu.RUnlock()
 	chain, ok := set.chains[id.String()]
@@ -273,11 +272,11 @@ func (set *SidechainSet) Get(id SidechainID) (*Sidechain, bool) {
 }
 
 // IDs returns the identities held.
-func (set *SidechainSet) IDs() []SidechainID {
+func (set *Set) IDs() []ID {
 	set.mu.RLock()
 	defer set.mu.RUnlock()
 
-	out := make([]SidechainID, 0, len(set.chains))
+	out := make([]ID, 0, len(set.chains))
 	for _, chain := range set.chains {
 		out = append(out, chain.ID())
 	}

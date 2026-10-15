@@ -154,7 +154,7 @@ func TestRevertingABlockRollsBackItsAnchor(t *testing.T) {
 	if _, err := f.set.ApplyBlock(blockOne, utxoTestSplit()); err != nil {
 		t.Fatalf("apply first: %v", err)
 	}
-	f.chain.markAnchored(first.Anchor.ToHeight)
+	f.chain.AdvanceAnchored(first.Anchor.ToHeight)
 
 	for i := 0; i < 2; i++ {
 		block, err := NewSidechainBlock(f.id, f.chain.Tip(), [][]byte{[]byte("more")}, int64(500+i))

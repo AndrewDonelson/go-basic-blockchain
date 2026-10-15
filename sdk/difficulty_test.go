@@ -5,6 +5,8 @@ import (
 	"math/big"
 	"testing"
 	"time"
+
+	"github.com/AndrewDonelson/go-basic-blockchain/internal/helios/difficulty"
 )
 
 // difficultyTestChain builds a chain with a controlled retarget window and
@@ -357,5 +359,53 @@ func TestRetargetedWorkIsReflectedInChainWork(t *testing.T) {
 	if ChainWork(hard).Cmp(ChainWork(easy)) <= 0 {
 		t.Fatal("a retarget upward must increase the chain's cumulative work, " +
 			"or fork choice cannot tell the branches apart")
+	}
+}
+
+// TestNewBlockchainRetargetsTowardsTheConfiguredBlockTime: a node built by NewBlockchain aims for
+// its configured BLOCK_TIME. Its adjuster used to get the package default, so a 1-second chain
+// treated 1.5-second blocks as too fast and raised difficulty until it could no longer mine.
+func TestNewBlockchainRetargetsTowardsTheConfiguredBlockTime(t *testing.T) {
+	cfg := NewConfig()
+	cfg.DataPath = t.TempDir()
+	cfg.BlockTime, cfg.BlockTimeSet = 1, true
+	if err := NewLocalStorage(cfg.DataPath); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = NewLocalStorage("./test_data") })
+	bc := NewBlockchain(cfg)
+	if bc == nil {
+		t.Fatal("NewBlockchain failed")
+	}
+	if got := bc.retarget(9, 1500*time.Millisecond); got > 9 {
+		t.Fatalf("blocks slower than the 1 s target raised difficulty 9 -> %d", got)
+	}
+	if got := bc.retarget(9, 100*time.Millisecond); got <= 9 {
+		t.Fatalf("blocks far faster than the 1 s target should raise difficulty, got %d", got)
+	}
+}
+
+// TestUnsetBlockTimeKeepsTheDefaultAdjuster: with BLOCK_TIME unset a node retargets exactly as
+// it always has (the adjuster's own defaults), so the fix above changes nothing for nodes that
+// don't configure it.
+func TestUnsetBlockTimeKeepsTheDefaultAdjuster(t *testing.T) {
+	cfg := NewConfig()
+	cfg.DataPath = t.TempDir()
+	if cfg.BlockTimeSet {
+		t.Skip("BLOCK_TIME is set in this environment")
+	}
+	if err := NewLocalStorage(cfg.DataPath); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = NewLocalStorage("./test_data") })
+	bc := NewBlockchain(cfg)
+	if bc == nil {
+		t.Fatal("NewBlockchain failed")
+	}
+	reference := &Blockchain{cfg: cfg, difficultyAdjuster: difficulty.NewDifficultyAdjuster(difficulty.DefaultDifficultyAdjustmentConfig())}
+	for _, avg := range []time.Duration{100 * time.Millisecond, 1500 * time.Millisecond, 10 * time.Second, time.Minute} {
+		if got, want := bc.retarget(9, avg), reference.retarget(9, avg); got != want {
+			t.Fatalf("average %s: retarget %d, the default adjuster gives %d", avg, got, want)
+		}
 	}
 }

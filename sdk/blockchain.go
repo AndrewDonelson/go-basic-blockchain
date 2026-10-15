@@ -75,7 +75,7 @@ type Blockchain struct {
 	// txIDIndex answers "have I seen this transaction?" without scanning every
 	// block. txIndexedBlocks and txIndexedTipHash track how much of the chain it
 	// covers, on the same basis as blockIndex above.
-	txIDIndex        map[string]struct{}
+	txIDIndex        map[string]int64 // transaction id → main-chain block index
 	txIndexedBlocks  int
 	txIndexedTipHash string
 
@@ -122,8 +122,17 @@ func NewBlockchain(cfg *Config) *Blockchain {
 	bc.heliosAlgorithm = algorithm.NewHeliosAlgorithm(heliosConfig)
 	bc.heliosValidator = validation.NewProofValidator(bc.heliosAlgorithm)
 
-	difficultyConfig := difficulty.DefaultDifficultyAdjustmentConfig()
-	bc.difficultyAdjuster = difficulty.NewDifficultyAdjuster(difficultyConfig)
+	// With BLOCK_TIME configured, the adjuster aims for it (and the configured
+	// window). It used to get the package defaults whatever was configured, so a
+	// node set for 1-second blocks retargeted towards the default interval: it saw
+	// blocks arriving "too fast", raised difficulty every window, and soon could
+	// not mine a block within its timeout. Unset, the defaults stay, so existing
+	// nodes behave exactly as before.
+	if cfg.BlockTimeSet {
+		bc.difficultyAdjuster = difficulty.NewDifficultyAdjuster(bc.difficultyConfig())
+	} else {
+		bc.difficultyAdjuster = difficulty.NewDifficultyAdjuster(difficulty.DefaultDifficultyAdjustmentConfig())
+	}
 
 	bc.sidechainRouter = sidechain.NewProtocolRouter()
 

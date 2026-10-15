@@ -59,7 +59,7 @@ func newAvailabilityFixture(t *testing.T) *availabilityFixture {
 	if _, err := set.ApplyBlock(block, utxoTestSplit()); err != nil {
 		t.Fatalf("apply anchor: %v", err)
 	}
-	chain.markAnchored(anchor.ToHeight)
+	chain.AdvanceAnchored(anchor.ToHeight)
 
 	return &availabilityFixture{
 		id: id, chain: chain, identity: identity,

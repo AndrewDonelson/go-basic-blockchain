@@ -1,6 +1,5 @@
-// Package sdk is a software development kit for building blockchain applications.
-// File sdk/sidechain_proof.go - Portable inclusion proofs for sidechain records.
-package sdk
+// File sidechain/proof.go - Portable inclusion proofs for sidechain records.
+package sidechain
 
 import (
 	"bytes"
@@ -9,6 +8,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+
+	"github.com/AndrewDonelson/go-basic-blockchain/internal/merkle"
 )
 
 // WHAT THESE PROOFS ARE FOR
@@ -87,18 +88,18 @@ func (p *PayloadProof) UnmarshalJSON(data []byte) error {
 // The block is validated first. Proving against a block whose root does not
 // match its own payloads would produce a proof that fails for the person it is
 // handed to, which is a worse place to discover the problem than here.
-func (b *SidechainBlock) ProvePayload(index int) (PayloadProof, error) {
+func (b *Block) ProvePayload(index int) (PayloadProof, error) {
 	if err := b.Validate(); err != nil {
 		return PayloadProof{}, err
 	}
-	path, err := merkleProof(sidechainPayloadDomain, b.Payloads, index)
+	path, err := merkle.Proof(PayloadDomain, b.Payloads, index)
 	if err != nil {
 		return PayloadProof{}, fmt.Errorf("%w: %w", ErrInvalidSidechainProof, err)
 	}
 	return PayloadProof{
-		// Both bounded by maxSidechainPayloads, which Validate enforced above.
-		Index: uint32(index),           //nolint:gosec // bounded by maxSidechainPayloads
-		Count: uint32(len(b.Payloads)), //nolint:gosec // bounded by maxSidechainPayloads
+		// Both bounded by MaxPayloads, which Validate enforced above.
+		Index: uint32(index),           //nolint:gosec // bounded by MaxPayloads
+		Count: uint32(len(b.Payloads)), //nolint:gosec // bounded by MaxPayloads
 		Path:  path,
 	}, nil
 }
@@ -110,11 +111,11 @@ func VerifyPayloadProof(payload []byte, proof PayloadProof, payloadRoot []byte) 
 		return fmt.Errorf("%w: payload root is %d bytes, expected %d",
 			ErrInvalidSidechainProof, len(payloadRoot), sha256.Size)
 	}
-	if proof.Count == 0 || proof.Count > maxSidechainPayloads {
+	if proof.Count == 0 || proof.Count > MaxPayloads {
 		return fmt.Errorf("%w: a block of %d payloads cannot be proved against",
 			ErrInvalidSidechainProof, proof.Count)
 	}
-	if !merkleVerify(sidechainPayloadDomain, payloadRoot, payload,
+	if !merkle.Verify(PayloadDomain, payloadRoot, payload,
 		int(proof.Index), int(proof.Count), proof.Path) {
 		return fmt.Errorf("%w: the payload does not sit at index %d of the payload root",
 			ErrInvalidSidechainProof, proof.Index)
@@ -168,7 +169,7 @@ func (p *BlockProof) UnmarshalJSON(data []byte) error {
 // reproduce the anchor -- a rewritten block, the wrong sidechain, an anchor
 // from somewhere else -- would otherwise yield a proof that silently fails for
 // whoever receives it.
-func ProveBlock(chain *Sidechain, anchor SidechainAnchor, height uint64) (BlockProof, error) {
+func ProveBlock(chain *Chain, anchor Anchor, height uint64) (BlockProof, error) {
 	if chain == nil {
 		return BlockProof{}, fmt.Errorf("%w: chain is nil", ErrInvalidSidechainProof)
 	}
@@ -180,7 +181,7 @@ func ProveBlock(chain *Sidechain, anchor SidechainAnchor, height uint64) (BlockP
 			ErrSidechainMismatch, anchor.SidechainID(), chain.ID())
 	}
 
-	index, _, ok := anchor.offsetOf(height)
+	index, _, ok := anchor.Offset(height)
 	if !ok {
 		return BlockProof{}, fmt.Errorf("%w: height %d is outside the anchored range %d..%d",
 			ErrInvalidSidechainProof, height, anchor.FromHeight, anchor.ToHeight)
@@ -195,13 +196,13 @@ func ProveBlock(chain *Sidechain, anchor SidechainAnchor, height uint64) (BlockP
 		}
 		hashes = append(hashes, block.Hash)
 	}
-	if !bytes.Equal(merkleRoot(sidechainHeaderDomain, hashes), anchor.HeaderRoot) {
+	if !bytes.Equal(merkle.Root(HeaderDomain, hashes), anchor.HeaderRoot) {
 		return BlockProof{}, fmt.Errorf("%w: the chain's blocks do not reproduce the "+
 			"anchor's header root; this is not the history that was anchored",
 			ErrInvalidSidechainProof)
 	}
 
-	path, err := merkleProof(sidechainHeaderDomain, hashes, index)
+	path, err := merkle.Proof(HeaderDomain, hashes, index)
 	if err != nil {
 		return BlockProof{}, fmt.Errorf("%w: %w", ErrInvalidSidechainProof, err)
 	}
@@ -215,7 +216,7 @@ func ProveBlock(chain *Sidechain, anchor SidechainAnchor, height uint64) (BlockP
 // have computed blockHash from a header it holds (see VerifyRecord) rather than
 // to have accepted one from the prover: a hash on its own says nothing about
 // which header produced it.
-func VerifyBlockProof(blockHash []byte, proof BlockProof, anchor SidechainAnchor) error {
+func VerifyBlockProof(blockHash []byte, proof BlockProof, anchor Anchor) error {
 	if err := anchor.Validate(); err != nil {
 		return err
 	}
@@ -224,12 +225,12 @@ func VerifyBlockProof(blockHash []byte, proof BlockProof, anchor SidechainAnchor
 			ErrInvalidSidechainProof, len(blockHash), sha256.Size)
 	}
 
-	index, count, ok := anchor.offsetOf(proof.Height)
+	index, count, ok := anchor.Offset(proof.Height)
 	if !ok {
 		return fmt.Errorf("%w: height %d is outside the anchored range %d..%d",
 			ErrInvalidSidechainProof, proof.Height, anchor.FromHeight, anchor.ToHeight)
 	}
-	if !merkleVerify(sidechainHeaderDomain, anchor.HeaderRoot, blockHash, index, count, proof.Path) {
+	if !merkle.Verify(HeaderDomain, anchor.HeaderRoot, blockHash, index, count, proof.Path) {
 		return fmt.Errorf("%w: block %d does not sit in the anchor's header root",
 			ErrInvalidSidechainProof, proof.Height)
 	}
@@ -246,7 +247,7 @@ func VerifyBlockProof(blockHash []byte, proof BlockProof, anchor SidechainAnchor
 // same reasoning AvailabilityProof follows, for the same attack.
 type RecordProof struct {
 	// Header is the header of the block holding the payload.
-	Header SidechainBlockHeader
+	Header BlockHeader
 	// Payload proves the payload sits in Header.PayloadRoot.
 	Payload PayloadProof
 	// Block proves Header's hash sits in the anchor's HeaderRoot.
@@ -264,7 +265,7 @@ type recordProofWire struct {
 // MarshalJSON encodes the proof in its stable wire form.
 //
 //	{"version":1,
-//	 "header":{...as in a SidechainBlock...},
+//	 "header":{...as in a Block...},
 //	 "payload_proof":{"index":0,"count":3,"path":["<hex>", ...]},
 //	 "block_proof":{"height":7,"path":["<hex>", ...]}}
 func (p RecordProof) MarshalJSON() ([]byte, error) {
@@ -296,7 +297,7 @@ func (p *RecordProof) UnmarshalJSON(data []byte) error {
 
 // ProveRecord builds the proof that the payload at index, in the block at
 // height, is part of the history the anchor commits.
-func ProveRecord(chain *Sidechain, anchor SidechainAnchor, height uint64, index int) (*RecordProof, error) {
+func ProveRecord(chain *Chain, anchor Anchor, height uint64, index int) (*RecordProof, error) {
 	blockProof, err := ProveBlock(chain, anchor, height)
 	if err != nil {
 		return nil, err
@@ -324,7 +325,7 @@ func ProveRecord(chain *Sidechain, anchor SidechainAnchor, height uint64, index 
 // payload must sit in that same header's PayloadRoot, in a tree of the size the
 // header declares. Pass all of them and the payload is bound, through the
 // anchor, to a mined main-chain block.
-func VerifyRecord(payload []byte, proof *RecordProof, anchor SidechainAnchor) error {
+func VerifyRecord(payload []byte, proof *RecordProof, anchor Anchor) error {
 	if proof == nil {
 		return fmt.Errorf("%w: proof is nil", ErrInvalidSidechainProof)
 	}
@@ -343,7 +344,7 @@ func VerifyRecord(payload []byte, proof *RecordProof, anchor SidechainAnchor) er
 	}
 
 	// Recomputed, never supplied: see RecordProof.
-	blockHash := (&SidechainBlock{Header: header}).ComputeHash()
+	blockHash := (&Block{Header: header}).ComputeHash()
 	if err := VerifyBlockProof(blockHash, proof.Block, anchor); err != nil {
 		return err
 	}
