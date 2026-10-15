@@ -115,10 +115,23 @@ func (bc *Blockchain) admitTransactionLocal(transaction Transaction) error {
 	id := transaction.GetID()
 
 	bc.mux.Lock()
-	for _, queued := range bc.TransactionQueue {
-		if queued.GetID() == id {
+	for _, queued := range bc.pendingLocked() {
+		if queued != nil && queued.GetID() == id {
 			bc.mux.Unlock()
 			return fmt.Errorf("%w: %s", ErrTransactionAlreadyQueued, id)
+		}
+	}
+	// A transaction in the block being mined can't be replaced: its nonce is
+	// spoken for until that block lands or fails (and is requeued).
+	if sender, _ := transactionParties(transaction); sender != "" {
+		for _, inBlock := range bc.mining {
+			if inBlock == nil {
+				continue
+			}
+			if s, _ := transactionParties(inBlock); s == sender && inBlock.GetNonce() == transaction.GetNonce() {
+				bc.mux.Unlock()
+				return fmt.Errorf("%w: nonce %d is in the block being mined", ErrDuplicateNonce, transaction.GetNonce())
+			}
 		}
 	}
 	// The mempool is bounded and admission is fee-competitive. It used to be an

@@ -25,6 +25,12 @@ type Blockchain struct {
 	cfg               *Config          // Configuration for the blockchain
 	Blocks            []*Block         // Slice of blocks in the blockchain
 	TransactionQueue  []Transaction    // Queue of transactions to be added to the blockchain
+	// mining holds the transactions taken from the queue for the block this node
+	// is mining right now. They are still pending -- in no block yet -- and every
+	// "is it known / pending / spent" question has to see them: while a block was
+	// being mined they used to be in neither the mempool nor the chain, so a
+	// status lookup reported them unknown and a client resubmitted them.
+	mining []Transaction
 	TXLookup          *TXLookupManager // Map of Block Number/Index (Key) and Transaction ID (Value)
 	mux               sync.Mutex       // Mutex to protect concurrent access to the blockchain
 	CurrentBlockIndex int              // Current block index

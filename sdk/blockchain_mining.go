@@ -254,6 +254,7 @@ func (bc *Blockchain) createNewBlock(difficulty int) {
 	// than draining the whole mempool into an unbounded block. Anything that does
 	// not fit stays queued for the next one.
 	queuedTransactions := bc.selectBlockTransactionsLocked()
+	bc.mining = queuedTransactions
 	nextBlockIndex := bc.NextBlockIndex
 	// Difficulty is derived from the chain's own history, so every node agrees on
 	// what this block was required to meet.
@@ -326,6 +327,8 @@ func (bc *Blockchain) createNewBlock(difficulty int) {
 func (bc *Blockchain) commitMinedBlock(newBlock *Block, txCount int) {
 	bc.mux.Lock()
 	defer bc.mux.Unlock()
+	// Whatever happens below, the block is no longer being mined.
+	bc.mining = nil
 
 	{
 		if _, err := bc.ensureUTXOSetLocked().ApplyBlock(newBlock, bc.feeSplitFor()); err != nil {
@@ -365,6 +368,7 @@ func (bc *Blockchain) requeueTransactions(txs []Transaction) {
 
 	bc.mux.Lock()
 	defer bc.mux.Unlock()
+	bc.mining = nil
 	bc.TransactionQueue = append(txs, bc.TransactionQueue...)
 	bc.trimMempoolLocked()
 }

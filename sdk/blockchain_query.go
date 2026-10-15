@@ -2,13 +2,25 @@
 // File sdk/blockchain_query.go - Read-only queries over blocks and transactions.
 package sdk
 
+// pendingLocked returns every transaction waiting to be in a block: the mempool
+// and the transactions in the block this node is mining. The caller must hold
+// bc.mux.
+func (bc *Blockchain) pendingLocked() []Transaction {
+	if len(bc.mining) == 0 {
+		return bc.TransactionQueue
+	}
+	out := make([]Transaction, 0, len(bc.mining)+len(bc.TransactionQueue))
+	out = append(out, bc.mining...)
+	return append(out, bc.TransactionQueue...)
+}
+
 // HasTransaction checks if a transaction with the given ID exists in the blockchain.
 func (bc *Blockchain) HasTransaction(id *PUID) bool {
 	bc.mux.Lock()
 	defer bc.mux.Unlock()
 
-	for _, tx := range bc.TransactionQueue {
-		if tx.GetID() == id.String() {
+	for _, tx := range bc.pendingLocked() {
+		if tx != nil && tx.GetID() == id.String() {
 			return true
 		}
 	}
@@ -35,7 +47,7 @@ func (bc *Blockchain) HasTransactionID(id string) bool {
 	defer bc.mux.Unlock()
 
 	// The mempool is small and changes constantly, so it is scanned directly.
-	for _, tx := range bc.TransactionQueue {
+	for _, tx := range bc.pendingLocked() {
 		if tx != nil && tx.GetID() == id {
 			return true
 		}
@@ -171,7 +183,7 @@ func (bc *Blockchain) GetTransactionByID(id string) Transaction {
 	defer bc.mux.Unlock()
 
 	// First, check the transaction queue
-	for _, tx := range bc.TransactionQueue {
+	for _, tx := range bc.pendingLocked() {
 		if tx.GetID() == id {
 			return tx
 		}
@@ -224,8 +236,9 @@ func (bc *Blockchain) GetPendingTransactions() []Transaction {
 
 	// Return a copy. Handing out the live slice let callers read (and append to)
 	// mutex-guarded state after the lock was released.
-	out := make([]Transaction, len(bc.TransactionQueue))
-	copy(out, bc.TransactionQueue)
+	pending := bc.pendingLocked()
+	out := make([]Transaction, len(pending))
+	copy(out, pending)
 	return out
 }
 

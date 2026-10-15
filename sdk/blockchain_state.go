@@ -58,7 +58,7 @@ func (bc *Blockchain) NextNonceFor(address string) uint64 {
 
 	bc.mux.Lock()
 	defer bc.mux.Unlock()
-	for _, tx := range bc.TransactionQueue {
+	for _, tx := range bc.pendingLocked() {
 		if tx == nil {
 			continue
 		}
@@ -221,7 +221,7 @@ func (bc *Blockchain) pendingSpendUnits(address, excludeID string) int64 {
 // pendingSpendUnitsLocked is pendingSpendUnits for a caller holding bc.mux.
 func (bc *Blockchain) pendingSpendUnitsLocked(address, excludeID string) int64 {
 	var total int64
-	for _, tx := range bc.TransactionQueue {
+	for _, tx := range bc.pendingLocked() {
 		if tx == nil || tx.GetID() == excludeID {
 			continue
 		}
@@ -260,7 +260,7 @@ func (bc *Blockchain) AccountSnapshot(address string) AccountInfo {
 	set := bc.ensureUTXOSetLocked()
 	info := AccountInfo{Address: address, BalanceUnits: set.BalanceUnits(address)}
 	info.LastNonce, info.HasNonce = set.LastNonce(address)
-	for _, tx := range bc.TransactionQueue {
+	for _, tx := range bc.pendingLocked() {
 		if tx == nil {
 			continue
 		}
