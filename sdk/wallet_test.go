@@ -239,7 +239,10 @@ func TestWallet_EncryptDecrypt(t *testing.T) {
 	passphrase := "securepassphrase"
 	data := []byte("test data to encrypt and decrypt")
 
-	wallet := &Wallet{}
+	// The test build's cheap scrypt profile (testsupport_test.go): a bare Wallet{}
+	// would fall back to the production profile, which is what costs seconds per
+	// derivation, and the round trip is what is under test here.
+	wallet := &Wallet{EncryptionParams: NewDefaultEncryptionParams()}
 	encryptedData, err := wallet.encrypt([]byte(passphrase), data)
 	if err != nil {
 		t.Fatalf("Failed to encrypt data: %v", err)
@@ -257,7 +260,7 @@ func TestWallet_EncryptDecrypt(t *testing.T) {
 
 func TestWallet_DeriveKey(t *testing.T) {
 	passphrase := "anothersecurepassphrase"
-	wallet := &Wallet{}
+	wallet := &Wallet{EncryptionParams: NewDefaultEncryptionParams()} // the test build's cheap profile
 
 	key, salt, err := wallet.deriveKey([]byte(passphrase), nil)
 	if err != nil {
@@ -306,5 +309,18 @@ func TestWallet_PublicBytesAndAddress(t *testing.T) {
 	address := wallet.GetAddress()
 	if address == "" {
 		t.Errorf("Expected non-empty address")
+	}
+}
+
+// TestWalletsWithoutRecordedParamsUseTheProductionProfile: a wallet written before scrypt
+// parameters were persisted still derives with the production profile (checked without paying
+// for a production-strength derivation).
+func TestWalletsWithoutRecordedParamsUseTheProductionProfile(t *testing.T) {
+	var none *EncryptionParams
+	if none.scrypt() != productionScryptParams || (&EncryptionParams{}).scrypt() != productionScryptParams {
+		t.Fatal("missing parameters must mean the production profile")
+	}
+	if productionScryptParams.N < 1<<20 {
+		t.Fatal("the production scrypt profile was weakened")
 	}
 }

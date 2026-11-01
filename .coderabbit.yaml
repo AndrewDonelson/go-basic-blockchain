@@ -1,0 +1,4 @@
+# Automatic reviews are off (owner, 2026-10-15). Ask for one with "@coderabbitai review" on a PR.
+reviews:
+  auto_review:
+    enabled: false
