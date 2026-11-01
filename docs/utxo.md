@@ -89,9 +89,10 @@ that same coinbase.
 
 ### Fees are paid out
 
-Fees become real outputs to `MinerAddress` and `DevAddress`, split by
-`MINER_REWARD_PCT` / `DEV_REWARD_PCT`. Any rounding remainder goes to the miner,
-so the units balance exactly.
+Fees become real outputs to the block's `Header.Miner` and the genesis block's
+developer address, split by the genesis `DevRewardPCT` (see
+[supply.md](supply.md#-how-miners-are-paid)). Any rounding remainder goes to the
+miner, so the units balance exactly.
 
 Fees used to be deducted from the sender and credited to nobody — every
 transaction quietly destroyed value.

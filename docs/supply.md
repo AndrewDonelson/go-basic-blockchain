@@ -32,12 +32,25 @@ Guarded by `TestCoinbaseOutsideGenesisIsRejected` and the rest of
 ## 💵 How miners are paid
 
 Every transaction carries a fee, and `UTXOSet.emitFees` splits it between the
-miner and developer addresses on the configured percentages:
+block's miner and the developer address:
+
+- **The miner is the block's `Header.Miner`.** It is part of the block hash and
+  the proof-of-work preimage, so nobody relaying a block can redirect its fees,
+  and a block subsidy must pay the same address. A block naming no miner gives
+  the miner's share to the developer.
+- **The developer address and share come from the genesis block** (its
+  coinbase's `DevAddress` / `DevRewardPCT`), not from the node's environment.
+  `DEV_ADDRESS` / `DEV_REWARD_PCT` only matter when a node *creates* a genesis:
 
 ```
-MINER_REWARD_PCT=50.00
-DEV_REWARD_PCT=50.00
+DEV_REWARD_PCT=50.00   # written into genesis; the miner gets the rest
 ```
+
+Both used to be read from each node's own config, so a block from a peer paid
+its fees to the *accepting* node's miner and developer, a different address on
+every node, and the network's UTXO sets disagreed from the first transaction on
+(`TestPeerBlockFeesGoToTheMinerItNames`, `TestNodesAgreeOnFeesWhateverTheirConfig`).
+`MINER_REWARD_PCT` is not consulted: the miner takes whatever the developer does not.
 
 That is the whole incentive model. Fees are paid out of the sender's inputs, so
 they move existing coins rather than creating new ones — the supply is unchanged

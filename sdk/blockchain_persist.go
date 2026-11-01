@@ -233,6 +233,9 @@ func (bc *Blockchain) GenerateGenesisBlock(txs []Transaction) {
 		genesisBlock := NewBlock(txs, "")
 		genesisBlock.Index = *big.NewInt(0)
 		genesisBlock.Header.Difficulty = uint32(genesisDifficulty)
+		if bc.cfg != nil && IsAddress(bc.cfg.MinerAddress) {
+			genesisBlock.Header.Miner = bc.cfg.MinerAddress
+		}
 
 		mined, err := bc.Mine(genesisBlock, 1)
 		if err != nil {
@@ -248,7 +251,7 @@ func (bc *Blockchain) GenerateGenesisBlock(txs []Transaction) {
 
 		bc.Blocks = append(bc.Blocks, genesisBlock)
 		bc.mux.Lock()
-		if _, err := bc.ensureUTXOSetLocked().ApplyBlock(genesisBlock, bc.feeSplitFor()); err != nil {
+		if _, err := bc.ensureUTXOSetLocked().ApplyBlock(genesisBlock, bc.feePolicyLocked()); err != nil {
 			log.Printf("Error applying genesis block to the UTXO set: %v", err)
 		}
 		bc.mux.Unlock()

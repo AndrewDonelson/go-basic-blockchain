@@ -217,6 +217,14 @@ func (bc *Blockchain) validateSubsidyLocked(block *Block) error {
 		return nil // genesis is allocation, not subsidy
 	}
 
+	// The miner the header names is who the fees go to, so it must be an address
+	// someone can actually spend from. Empty is allowed: the block simply gives up
+	// the miner's share (see BlockHeader.Miner).
+	if block.Header.Miner != "" && !IsAddress(block.Header.Miner) {
+		return fmt.Errorf("block %s names %q as its miner, which is not an address",
+			block.Index.String(), block.Header.Miner)
+	}
+
 	var subsidies int
 	for i, tx := range block.Transactions {
 		coinbase, ok := tx.(*Coinbase)
@@ -244,9 +252,17 @@ func (bc *Blockchain) validateSubsidyLocked(block *Block) error {
 			return fmt.Errorf("subsidy in block %s declares height %d",
 				block.Index.String(), coinbase.BlockHeight)
 		}
-		if sender, _ := transactionParties(tx); sender != bc.reserveAddress() {
+		sender, recipient := transactionParties(tx)
+		if sender != bc.reserveAddress() {
 			return fmt.Errorf("subsidy in block %s is not drawn from the reserve",
 				block.Index.String())
+		}
+		// The subsidy and the fees go to the same miner. Otherwise a block could
+		// pay its subsidy to one address while naming another for the fees, and
+		// "who mined this block" would have two answers.
+		if recipient != block.Header.Miner {
+			return fmt.Errorf("subsidy in block %s pays %s but the header names %q as the miner",
+				block.Index.String(), recipient, block.Header.Miner)
 		}
 	}
 

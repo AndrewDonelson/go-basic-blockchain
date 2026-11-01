@@ -343,8 +343,8 @@ DIFFICULTY=4                 # 1..255
 BLOCK_TIME=20                # seconds
 MAX_BLOCK_SIZE=1000000
 TRANSACTION_FEE=0.05
-MINER_REWARD_PCT=50.00
-DEV_REWARD_PCT=50.00
+DEV_REWARD_PCT=50.00         # fixed into genesis when this node creates one
+MINER_ADDRESS=               # 64-hex; fees and subsidy for blocks this node mines
 
 # Security -- REQUIRED, no defaults
 BLOCKCHAIN_API_KEY=          # hex; without it the API rejects everything

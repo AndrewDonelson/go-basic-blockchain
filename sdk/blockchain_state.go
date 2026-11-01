@@ -120,9 +120,9 @@ func (bc *Blockchain) ensureUTXOSetLocked() *UTXOSet {
 	}
 
 	set := NewUTXOSet()
-	split := bc.feeSplitFor()
+	policy := bc.feePolicyLocked()
 	for _, block := range bc.Blocks {
-		if _, err := set.ApplyBlock(block, split); err != nil {
+		if _, err := set.ApplyBlock(block, policy); err != nil {
 			LogVerbosef("Could not replay block %s into the UTXO set: %v",
 				block.Index.String(), err)
 		}
@@ -131,17 +131,36 @@ func (bc *Blockchain) ensureUTXOSetLocked() *UTXOSet {
 	return set
 }
 
-// feeSplitFor returns where fees are paid, from the chain config.
-func (bc *Blockchain) feeSplitFor() feeSplit {
-	if bc.cfg == nil {
-		return feeSplit{}
+// feePolicyLocked returns the chain's fee policy, as fixed by its genesis block.
+//
+// The developer address and share are consensus parameters: every node must
+// apply the same ones or their UTXO sets diverge. They used to be read from each
+// node's own configuration (DEV_ADDRESS, DEV_REWARD_PCT), so a node configured
+// differently -- or not at all -- paid the developer share somewhere else. They
+// now come from the genesis coinbase, which every node on a network shares (sync
+// refuses a peer with a different genesis), and a node's environment cannot
+// change them.
+//
+// A chain whose genesis carries no policy (test chains built by hand) pays the
+// whole fee to the miner.
+func (bc *Blockchain) feePolicyLocked() feePolicy {
+	if len(bc.Blocks) == 0 || bc.Blocks[0] == nil {
+		return feePolicy{}
 	}
-	return feeSplit{
-		MinerAddress: bc.cfg.MinerAddress,
-		MinerPercent: bc.cfg.MinerRewardPCT,
-		DevAddress:   bc.cfg.DevAddress,
-		DevPercent:   bc.cfg.DevRewardPCT,
+	return genesisFeePolicy(bc.Blocks[0])
+}
+
+// genesisFeePolicy reads the fee policy from a genesis block's first coinbase
+// that names a developer address.
+func genesisFeePolicy(genesis *Block) feePolicy {
+	for _, tx := range genesis.Transactions {
+		cb, ok := tx.(*Coinbase)
+		if !ok || cb.DevAddress == "" {
+			continue
+		}
+		return feePolicy{DevAddress: cb.DevAddress, DevPercent: cb.DevRewardPCT}
 	}
+	return feePolicy{}
 }
 
 // RebuildUTXOSet replays the chain to reconstruct the set from scratch.
@@ -153,12 +172,12 @@ func (bc *Blockchain) RebuildUTXOSet() error {
 	bc.mux.Lock()
 	blocks := make([]*Block, len(bc.Blocks))
 	copy(blocks, bc.Blocks)
-	split := bc.feeSplitFor()
+	policy := bc.feePolicyLocked()
 	bc.mux.Unlock()
 
 	rebuilt := NewUTXOSet()
 	for _, block := range blocks {
-		if _, err := rebuilt.ApplyBlock(block, split); err != nil {
+		if _, err := rebuilt.ApplyBlock(block, policy); err != nil {
 			return fmt.Errorf("replaying block %s: %w", block.Index.String(), err)
 		}
 	}

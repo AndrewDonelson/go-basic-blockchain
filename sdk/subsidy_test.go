@@ -135,6 +135,7 @@ func TestOverpaidSubsidyIsRejected(t *testing.T) {
 	// The honest claim passes, so the failures below are about the amount.
 	honest := NewBlock([]Transaction{subsidy}, bc.HeadHash())
 	honest.Index = *big.NewInt(1)
+	honest.Header.Miner = miner.GetAddress()
 	if err := bc.validateSubsidyLocked(honest); err != nil {
 		t.Fatalf("a correctly-sized subsidy was refused: %v", err)
 	}
@@ -150,6 +151,7 @@ func TestOverpaidSubsidyIsRejected(t *testing.T) {
 
 		block := NewBlock([]Transaction{&greedy}, bc.HeadHash())
 		block.Index = *big.NewInt(1)
+		block.Header.Miner = miner.GetAddress()
 
 		err := bc.validateSubsidyLocked(block)
 		if err == nil {
@@ -174,6 +176,7 @@ func TestSubsidyMustComeFromTheReserve(t *testing.T) {
 
 	block := NewBlock([]Transaction{subsidy}, bc.HeadHash())
 	block.Index = *big.NewInt(1)
+	block.Header.Miner = miner.GetAddress()
 
 	if err := bc.validateSubsidyLocked(block); err == nil {
 		t.Fatal("a subsidy drawn from an address other than the reserve was accepted")
@@ -191,6 +194,7 @@ func TestSubsidyMustDeclareItsOwnHeight(t *testing.T) {
 
 	block := NewBlock([]Transaction{subsidy}, bc.HeadHash())
 	block.Index = *big.NewInt(1)
+	block.Header.Miner = miner.GetAddress()
 
 	if err := bc.validateSubsidyLocked(block); err == nil {
 		t.Fatal("a subsidy declaring the wrong height was accepted")
@@ -361,29 +365,6 @@ func TestMinerIsActuallyPaid(t *testing.T) {
 	if drawn != paid {
 		t.Fatalf("the reserve fell by %s but the miner gained %s; the two must match",
 			formatUnits(drawn), formatUnits(paid))
-	}
-}
-
-// TestNlaakFeeShareStillApplies. The platform's per-transaction cut is the fee
-// split, which the subsidy does not disturb.
-func TestNlaakFeeShareStillApplies(t *testing.T) {
-	bc := integrationChain(t, t.TempDir())
-
-	if bc.cfg.DevAddress == "" {
-		t.Skip("no developer address configured")
-	}
-	if bc.cfg.DevRewardPCT <= 0 {
-		t.Skip("developer share is zero")
-	}
-
-	split := bc.feeSplitFor()
-	if split.DevAddress != bc.cfg.DevAddress {
-		t.Fatalf("the fee split names %q as the developer address, config says %q",
-			split.DevAddress, bc.cfg.DevAddress)
-	}
-	if split.DevPercent != bc.cfg.DevRewardPCT {
-		t.Fatalf("the fee split takes %.2f%%, config says %.2f%%",
-			split.DevPercent, bc.cfg.DevRewardPCT)
 	}
 }
 

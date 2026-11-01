@@ -309,12 +309,13 @@ func (s *UTXOSet) removeLocked(outpoint Outpoint) (*UTXO, bool) {
 	return utxo, true
 }
 
-// feeSplit describes where transaction fees are paid.
-type feeSplit struct {
-	MinerAddress string
-	MinerPercent float64
-	DevAddress   string
-	DevPercent   float64
+// feePolicy is the chain-wide part of where transaction fees are paid: the
+// developer's address and share. It is fixed by the genesis block (see
+// Blockchain.feePolicyLocked) so every node applies the same one. The miner's
+// address is not here: it is per block, from Header.Miner.
+type feePolicy struct {
+	DevAddress string
+	DevPercent float64
 }
 
 // formatUnits renders base units as a token amount for error messages.
@@ -327,7 +328,7 @@ func formatUnits(units int64) string {
 // Either the whole block applies or nothing does: the changes are staged and only
 // committed once every transaction has been processed. A partially applied block
 // would leave the set describing a state no chain ever had.
-func (s *UTXOSet) ApplyBlock(block *Block, split feeSplit) (*BlockUndo, error) {
+func (s *UTXOSet) ApplyBlock(block *Block, policy feePolicy) (*BlockUndo, error) {
 	if block == nil {
 		return nil, errors.New("block is nil")
 	}
@@ -354,7 +355,7 @@ func (s *UTXOSet) ApplyBlock(block *Block, split feeSplit) (*BlockUndo, error) {
 		if tx == nil {
 			return nil, errors.New("block contains a nil transaction")
 		}
-		if err := s.applyTransactionLocked(tx, blockIndex, split, staged, undo); err != nil {
+		if err := s.applyTransactionLocked(tx, blockIndex, block.Header.Miner, policy, staged, undo); err != nil {
 			return nil, fmt.Errorf("block %s, transaction %s: %w",
 				block.Index.String(), tx.GetID(), err)
 		}
@@ -374,7 +375,7 @@ func (s *UTXOSet) ApplyBlock(block *Block, split feeSplit) (*BlockUndo, error) {
 }
 
 // applyTransactionLocked applies a single transaction.
-func (s *UTXOSet) applyTransactionLocked(tx Transaction, blockIndex int64, split feeSplit, staged *stagedChanges, undo *BlockUndo) error {
+func (s *UTXOSet) applyTransactionLocked(tx Transaction, blockIndex int64, miner string, policy feePolicy, staged *stagedChanges, undo *BlockUndo) error {
 	txID := tx.GetID()
 	if txID == "" {
 		return errors.New("transaction has no ID")
@@ -495,7 +496,7 @@ func (s *UTXOSet) applyTransactionLocked(tx Transaction, blockIndex int64, split
 		}
 
 		emit(recipient, amountUnits, false)
-		s.emitFees(feeUnits, split, emit)
+		s.emitFees(feeUnits, miner, policy, emit)
 
 		// Change back to the sender.
 		if change := totalIn - amountUnits - feeUnits; change > 0 {
@@ -537,7 +538,7 @@ func (s *UTXOSet) applyTransactionLocked(tx Transaction, blockIndex int64, split
 			}
 
 			emit(bondAddress, concrete.BondUnits, false)
-			s.emitFees(feeUnits, split, emit)
+			s.emitFees(feeUnits, miner, policy, emit)
 			if change := totalIn - concrete.BondUnits - feeUnits; change > 0 {
 				emit(sender, change, false)
 			}
@@ -563,7 +564,7 @@ func (s *UTXOSet) applyTransactionLocked(tx Transaction, blockIndex int64, split
 			if err != nil {
 				return err
 			}
-			s.emitFees(feeUnits, split, emit)
+			s.emitFees(feeUnits, miner, policy, emit)
 			if change := totalIn - feeUnits; change > 0 {
 				emit(sender, change, false)
 			}
@@ -594,7 +595,7 @@ func (s *UTXOSet) applyTransactionLocked(tx Transaction, blockIndex int64, split
 			}
 
 			emit(escrow, AvailabilityChallengeFeeUnits, false)
-			s.emitFees(feeUnits, split, emit)
+			s.emitFees(feeUnits, miner, policy, emit)
 			if change := totalIn - AvailabilityChallengeFeeUnits - feeUnits; change > 0 {
 				emit(sender, change, false)
 			}
@@ -625,7 +626,7 @@ func (s *UTXOSet) applyTransactionLocked(tx Transaction, blockIndex int64, split
 				if err != nil {
 					return err
 				}
-				s.emitFees(feeUnits, split, emit)
+				s.emitFees(feeUnits, miner, policy, emit)
 				if change := totalIn - feeUnits; change > 0 {
 					emit(sender, change, false)
 				}
@@ -659,7 +660,7 @@ func (s *UTXOSet) applyTransactionLocked(tx Transaction, blockIndex int64, split
 			return err
 		}
 
-		s.emitFees(feeUnits, split, emit)
+		s.emitFees(feeUnits, miner, policy, emit)
 		if change := totalIn - feeUnits; change > 0 {
 			emit(sender, change, false)
 		}
@@ -676,7 +677,7 @@ func (s *UTXOSet) applyTransactionLocked(tx Transaction, blockIndex int64, split
 			return err
 		}
 
-		s.emitFees(feeUnits, split, emit)
+		s.emitFees(feeUnits, miner, policy, emit)
 		if change := totalIn - feeUnits; change > 0 {
 			emit(sender, change, false)
 		}
@@ -684,32 +685,40 @@ func (s *UTXOSet) applyTransactionLocked(tx Transaction, blockIndex int64, split
 	}
 }
 
-// emitFees pays a transaction fee to the miner and developer addresses.
+// emitFees pays a transaction fee to the block's miner and the developer address.
 //
 // Fees used to be subtracted from the sender and credited to nobody, so every
 // transaction quietly destroyed value. Any remainder from the percentage split
-// goes to the miner, so the units always balance exactly.
-func (s *UTXOSet) emitFees(feeUnits int64, split feeSplit, emit func(string, int64, bool)) {
+// goes to the miner, so the units always balance exactly. A block that names no
+// miner gives the miner's share to the developer; with neither address set (a
+// test chain with no genesis policy) the fee is burned, as before.
+func (s *UTXOSet) emitFees(feeUnits int64, miner string, policy feePolicy, emit func(string, int64, bool)) {
 	if feeUnits <= 0 {
 		return
 	}
 
-	devUnits := int64(float64(feeUnits) * split.DevPercent / 100.0)
-	if devUnits < 0 {
-		devUnits = 0
+	devUnits := int64(0)
+	// The comparison is written so NaN fails it too.
+	if policy.DevPercent > 0 && policy.DevPercent <= 100 {
+		devUnits = int64(float64(feeUnits) * policy.DevPercent / 100.0)
 	}
 	if devUnits > feeUnits {
 		devUnits = feeUnits
 	}
 	minerUnits := feeUnits - devUnits
 
-	if split.DevAddress != "" {
-		emit(split.DevAddress, devUnits, false)
-	} else {
-		minerUnits = feeUnits
+	switch {
+	case policy.DevAddress == "":
+		minerUnits, devUnits = feeUnits, 0
+	case miner == "":
+		minerUnits, devUnits = 0, feeUnits
 	}
-	if split.MinerAddress != "" {
-		emit(split.MinerAddress, minerUnits, false)
+
+	if devUnits > 0 {
+		emit(policy.DevAddress, devUnits, false)
+	}
+	if minerUnits > 0 && miner != "" {
+		emit(miner, minerUnits, false)
 	}
 }
 

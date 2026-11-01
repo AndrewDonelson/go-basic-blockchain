@@ -83,6 +83,16 @@ type Tx struct {
 	Data      []byte            `json:"data"`
 }
 
+// shortAddress abbreviates an address for logs. It must not slice past the end:
+// a node reloading its chain kept the "MINER" placeholder as its miner address,
+// and slicing that to eight characters panicked on the first block it mined.
+func shortAddress(address string) string {
+	if len(address) <= 8 {
+		return address
+	}
+	return address[:8]
+}
+
 // NewTransaction creates a new transaction with the specified protocol, sender wallet, and recipient wallet.
 func NewTransaction(protocol string, from *Wallet, to *Wallet) (*Tx, error) {
 	if err := isValidProtocol(protocol); err != nil {
@@ -93,7 +103,7 @@ func NewTransaction(protocol string, from *Wallet, to *Wallet) (*Tx, error) {
 		return nil, fmt.Errorf("wallets can't be nil")
 	}
 
-	LogInfof("Creating %s transaction: %s → %s", protocol, from.GetAddress()[:8], to.GetAddress()[:8])
+	LogInfof("Creating %s transaction: %s → %s", protocol, shortAddress(from.GetAddress()), shortAddress(to.GetAddress()))
 
 	if to.ID == nil {
 		return nil, fmt.Errorf("to wallet PUID can't be empty")

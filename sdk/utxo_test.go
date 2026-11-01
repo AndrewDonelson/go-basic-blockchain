@@ -12,13 +12,14 @@ import (
 // Helpers
 // -----------------------------------------------------------------------------
 
-// utxoTestSplit pays fees 50/50 to two fixed addresses.
-func utxoTestSplit() feeSplit {
-	return feeSplit{
-		MinerAddress: "miner-address",
-		MinerPercent: 50,
-		DevAddress:   "dev-address",
-		DevPercent:   50,
+// utxoTestMiner is the miner every utxoBlock names in its header.
+const utxoTestMiner = "6d696e65722d61646472657373000000000000000000000000000000000000ee"
+
+// utxoTestSplit pays fees 50/50 between utxoTestMiner and a fixed dev address.
+func utxoTestSplit() feePolicy {
+	return feePolicy{
+		DevAddress: "dev-address",
+		DevPercent: 50,
 	}
 }
 
@@ -32,6 +33,7 @@ func utxoBlock(t *testing.T, index int64, previousHash string, txs ...Transactio
 	b.Index = *big.NewInt(index)
 	b.Header.Difficulty = 4
 	b.Header.Nonce = uint32(index)
+	b.Header.Miner = utxoTestMiner
 	b.Header.MerkleRoot = b.CalculateMerkleRoot()
 	b.Hash = b.CalculateHash()
 	return b
@@ -200,7 +202,7 @@ func TestBankTransferMovesValueAndPaysFees(t *testing.T) {
 		t.Fatalf("sender balance = %s, want %s", formatUnits(got), formatUnits(wantAlice))
 	}
 
-	minerUnits := set.BalanceUnits(split.MinerAddress)
+	minerUnits := set.BalanceUnits(utxoTestMiner)
 	devUnits := set.BalanceUnits(split.DevAddress)
 	if minerUnits+devUnits != feeUnits {
 		t.Fatalf("fees paid out (%s) do not match the fee charged (%s) -- fees used to "+
@@ -441,7 +443,7 @@ func TestInputSelectionIsDeterministic(t *testing.T) {
 	fingerprintOf := func(set *UTXOSet) []string {
 		var out []string
 		for _, addr := range []string{alice.GetAddress(), bob.GetAddress(),
-			split.MinerAddress, split.DevAddress} {
+			utxoTestMiner, split.DevAddress} {
 			for _, u := range set.OutputsFor(addr) {
 				out = append(out, u.Outpoint.String()+"="+formatUnits(u.Units))
 			}

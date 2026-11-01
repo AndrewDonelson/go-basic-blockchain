@@ -52,6 +52,16 @@ type BlockHeader struct {
 	Timestamp    time.Time `json:"timestamp"`
 	Difficulty   uint32    `json:"difficulty"`
 	Nonce        uint32    `json:"nonce"`
+	// Miner is the address this block's transaction fees (and subsidy) are paid
+	// to. It is part of the header hash and the proof-of-work preimage, so it is
+	// fixed by the work: a peer relaying the block cannot redirect the fees.
+	//
+	// Every node pays a block's fees to the address the block names. Reading it
+	// from each node's own MINER_ADDRESS instead, as this chain once did, paid
+	// the same fees to a different address on every node and split the UTXO set
+	// across the network. Empty means the block claims no miner share: the whole
+	// fee goes to the developer address.
+	Miner string `json:"miner,omitempty"`
 }
 
 // Block represents a block in the blockchain.
@@ -410,12 +420,13 @@ func (b *Block) CalculateTotalFees() float64 {
 // createBlockHeaderForMining creates a block header for Helios mining
 func (b *Block) createBlockHeaderForMining() []byte {
 	// Create a serialized representation of the block header for mining
-	headerData := fmt.Sprintf("%d:%s:%s:%d:%d",
+	headerData := fmt.Sprintf("%d:%s:%s:%d:%d:%s",
 		b.Header.Version,
 		b.Header.PreviousHash,
 		hex.EncodeToString(b.Header.MerkleRoot),
 		b.Header.Timestamp.Unix(),
-		b.Header.Difficulty)
+		b.Header.Difficulty,
+		b.Header.Miner)
 
 	return []byte(headerData)
 }
@@ -588,6 +599,7 @@ func (b *Block) CalculateHash() string {
 	writeInt64(b.Header.Timestamp.UTC().UnixNano())
 	writeUint32(b.Header.Difficulty)
 	writeUint32(b.Header.Nonce)
+	writeBytes([]byte(b.Header.Miner))
 
 	hashed := sha256.Sum256(buf.Bytes())
 	return hex.EncodeToString(hashed[:])

@@ -314,8 +314,8 @@ Requires the wallet passphrase; a wrong one returns `401`.
 ```
 
 Balance is derived from the chain: coinbase output is credited to its recipient,
-bank transfers move value between parties, and fees are paid out to the miner and
-developer addresses per `MINER_REWARD_PCT` / `DEV_REWARD_PCT`.
+bank transfers move value between parties, and fees are paid out to each block's
+miner (`header.miner`) and the developer address fixed by the genesis block.
 
 ### `GET /blockchain/wallets/{id}/transactions`
 

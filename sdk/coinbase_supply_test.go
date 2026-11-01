@@ -136,7 +136,7 @@ func TestUTXOSetRefusesACoinbaseOutsideGenesis(t *testing.T) {
 	block.Index = *big.NewInt(7)
 
 	set := NewUTXOSet()
-	if _, err := set.ApplyBlock(block, feeSplit{}); err == nil {
+	if _, err := set.ApplyBlock(block, feePolicy{}); err == nil {
 		t.Fatal("the UTXO set applied a coinbase from block 7")
 	}
 
@@ -161,7 +161,7 @@ func TestGenesisCoinbaseStillApplies(t *testing.T) {
 	block.Index = *big.NewInt(0)
 
 	set := NewUTXOSet()
-	if _, err := set.ApplyBlock(block, feeSplit{}); err != nil {
+	if _, err := set.ApplyBlock(block, feePolicy{}); err != nil {
 		t.Fatalf("the genesis coinbase was refused: %v", err)
 	}
 

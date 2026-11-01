@@ -270,7 +270,15 @@ func (bc *Blockchain) createNewBlock(difficulty int) {
 	// check on one element instead of a scan, and gives every block an
 	// unambiguous shape for anything reading it later.
 	allTransactions := queuedTransactions
-	if subsidy, err := bc.buildSubsidyTransaction(int64(nextBlockIndex), bc.cfg.MinerAddress); err != nil {
+	// Only a real address can be paid. A node that reloads an existing chain
+	// without MINER_ADDRESS set still holds the "MINER" placeholder; it mines
+	// with no subsidy and no miner, which every peer accepts, rather than
+	// producing a block naming an address nobody can spend from.
+	miner := ""
+	if IsAddress(bc.cfg.MinerAddress) {
+		miner = bc.cfg.MinerAddress
+	}
+	if subsidy, err := bc.buildSubsidyTransaction(int64(nextBlockIndex), miner); err != nil {
 		LogInfof("Could not build the block subsidy: %v", err)
 	} else if subsidy != nil {
 		allTransactions = append([]Transaction{subsidy}, queuedTransactions...)
@@ -278,6 +286,10 @@ func (bc *Blockchain) createNewBlock(difficulty int) {
 
 	newBlock := NewBlock(allTransactions, previousHash)
 	newBlock.Index = *big.NewInt(int64(nextBlockIndex))
+	// The fees go where the header says, on every node. Set before mining: the
+	// miner is part of the proof-of-work preimage. With no usable address it is
+	// left empty, which gives the fees to the developer.
+	newBlock.Header.Miner = miner
 	// Stamp the difficulty this block is required to meet.
 	//
 	// Header.Difficulty used to be left at the InitialDifficulty constant while
@@ -333,7 +345,7 @@ func (bc *Blockchain) commitMinedBlock(newBlock *Block, txCount int) {
 	bc.mining = withoutIDs(bc.mining, txIDSet(newBlock.Transactions))
 
 	{
-		if _, err := bc.ensureUTXOSetLocked().ApplyBlock(newBlock, bc.feeSplitFor()); err != nil {
+		if _, err := bc.ensureUTXOSetLocked().ApplyBlock(newBlock, bc.feePolicyLocked()); err != nil {
 			// The block cannot be applied, so it must not join the chain. Its
 			// transactions were validated on the way into the mempool, so this
 			// means they conflict with each other.

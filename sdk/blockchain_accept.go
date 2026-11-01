@@ -163,7 +163,7 @@ func (bc *Blockchain) acceptBlockLocked(block *Block) (ReorgResult, []*Block, []
 		// Apply to the UTXO set BEFORE committing the block. A block that cannot
 		// be applied -- a double spend, or a spend of outputs that do not exist --
 		// must not join the chain, and ApplyBlock is all-or-nothing.
-		if _, err := bc.ensureUTXOSetLocked().ApplyBlock(block, bc.feeSplitFor()); err != nil {
+		if _, err := bc.ensureUTXOSetLocked().ApplyBlock(block, bc.feePolicyLocked()); err != nil {
 			return result, nil, nil, fmt.Errorf("block rejected by the UTXO set: %w", err)
 		}
 
@@ -259,7 +259,7 @@ func (bc *Blockchain) acceptBlockLocked(block *Block) (ReorgResult, []*Block, []
 // the chain untouched.
 func (bc *Blockchain) utxoSetForBranchLocked(candidate branch) (*UTXOSet, error) {
 	set := bc.ensureUTXOSetLocked().Clone()
-	split := bc.feeSplitFor()
+	policy := bc.feePolicyLocked()
 
 	// Revert the blocks being disconnected, newest first.
 	for i := len(bc.Blocks) - 1; i > candidate.forkAt; i-- {
@@ -270,7 +270,7 @@ func (bc *Blockchain) utxoSetForBranchLocked(candidate branch) (*UTXOSet, error)
 
 	// Apply the branch in order.
 	for _, block := range candidate.blocks {
-		if _, err := set.ApplyBlock(block, split); err != nil {
+		if _, err := set.ApplyBlock(block, policy); err != nil {
 			return nil, fmt.Errorf("applying branch block %s: %w", block.Index.String(), err)
 		}
 	}
