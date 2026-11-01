@@ -254,6 +254,9 @@ func (bc *Blockchain) createNewBlock(difficulty int) {
 	// than draining the whole mempool into an unbounded block. Anything that does
 	// not fit stays queued for the next one.
 	queuedTransactions := bc.selectBlockTransactionsLocked()
+	// Appended, not assigned: should two mining attempts overlap, each keeps its
+	// own transactions visible until it finishes.
+	bc.mining = append(bc.mining, queuedTransactions...)
 	nextBlockIndex := bc.NextBlockIndex
 	// Difficulty is derived from the chain's own history, so every node agrees on
 	// what this block was required to meet.
@@ -326,6 +329,8 @@ func (bc *Blockchain) createNewBlock(difficulty int) {
 func (bc *Blockchain) commitMinedBlock(newBlock *Block, txCount int) {
 	bc.mux.Lock()
 	defer bc.mux.Unlock()
+	// Whatever happens below, this block's transactions are no longer being mined.
+	bc.mining = withoutIDs(bc.mining, txIDSet(newBlock.Transactions))
 
 	{
 		if _, err := bc.ensureUTXOSetLocked().ApplyBlock(newBlock, bc.feeSplitFor()); err != nil {
@@ -365,6 +370,19 @@ func (bc *Blockchain) requeueTransactions(txs []Transaction) {
 
 	bc.mux.Lock()
 	defer bc.mux.Unlock()
-	bc.TransactionQueue = append(txs, bc.TransactionQueue...)
+	// A transaction a peer's block confirmed meanwhile is not pending any more.
+	// (txs may share its backing array with bc.mining, so it is read first.)
+	bc.indexTransactionsLocked()
+	back := make([]Transaction, 0, len(txs))
+	for _, tx := range txs {
+		if tx == nil {
+			continue
+		}
+		if _, mined := bc.txIDIndex[tx.GetID()]; !mined {
+			back = append(back, tx)
+		}
+	}
+	bc.mining = withoutIDs(bc.mining, txIDSet(back))
+	bc.TransactionQueue = append(back, bc.TransactionQueue...)
 	bc.trimMempoolLocked()
 }

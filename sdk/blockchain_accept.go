@@ -333,25 +333,14 @@ func (bc *Blockchain) validateStandalone(block *Block) error {
 
 // removeMinedTransactionsLocked drops from the mempool anything now in a block.
 func (bc *Blockchain) removeMinedTransactionsLocked(block *Block) {
-	if len(bc.TransactionQueue) == 0 || len(block.Transactions) == 0 {
+	if len(block.Transactions) == 0 {
 		return
 	}
-
-	mined := map[string]struct{}{}
-	for _, tx := range block.Transactions {
-		if tx != nil {
-			mined[tx.GetID()] = struct{}{}
-		}
-	}
-
-	remaining := bc.TransactionQueue[:0]
-	for _, tx := range bc.TransactionQueue {
-		if _, ok := mined[tx.GetID()]; ok {
-			continue
-		}
-		remaining = append(remaining, tx)
-	}
-	bc.TransactionQueue = remaining
+	mined := txIDSet(block.Transactions)
+	bc.TransactionQueue = withoutIDs(bc.TransactionQueue, mined)
+	// A peer's block can confirm transactions this node is still mining: they
+	// are no longer pending (their spends are in the UTXO set now).
+	bc.mining = withoutIDs(bc.mining, mined)
 }
 
 // ValidateChain validates the entire blockchain.

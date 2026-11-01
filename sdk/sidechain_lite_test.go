@@ -347,3 +347,141 @@ func TestReviewFixes(t *testing.T) {
 		}
 	})
 }
+
+// TestTransactionsInTheBlockBeingMinedStayPending: while a block is mined, its transactions are
+// out of the mempool and in no block. They used to be reported unknown then, so a client that
+// polled its transaction resubmitted it (and an application registered the same game twice).
+func TestTransactionsInTheBlockBeingMinedStayPending(t *testing.T) {
+	bc, server := newApplicationAPI(t)
+	wallet, identity := liteKeys(t)
+	creditAddressForTest(t, bc, wallet.Address(), 500)
+	c, err := sidechain.NewClient(server.URL, apiKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	reg, err := sidechain.NewPublisherRegistration(wallet, identity, "Studio", MinPublisherBondUnits,
+		sidechain.TxOptions{Nonce: 0, Fee: sidechain.DefaultFee})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.Submit(ctx, reg); err != nil {
+		t.Fatal(err)
+	}
+
+	// What createNewBlock does first: take the block's transactions out of the mempool.
+	bc.mux.Lock()
+	bc.mining = bc.selectBlockTransactionsLocked()
+	inBlock := len(bc.mining)
+	bc.mux.Unlock()
+	if inBlock != 1 || bc.GetMempoolSize() != 0 {
+		t.Fatalf("the registration should be in the block being mined (%d), not the mempool (%d)", inBlock, bc.GetMempoolSize())
+	}
+
+	info, err := c.Transaction(ctx, reg.ID())
+	if err != nil || info.Status != SubmissionPending {
+		t.Fatalf("a transaction being mined is pending, not unknown: %+v %v", info, err)
+	}
+	again, err := c.Submit(ctx, reg)
+	if err != nil || !again.Known {
+		t.Fatalf("resubmitting it is a known no-op: %+v %v", again, err)
+	}
+	if bc.GetMempoolSize() != 0 {
+		t.Fatal("resubmitting must not queue a second copy")
+	}
+	acct, err := c.Account(ctx, wallet.Address())
+	if err != nil || acct.NextNonce() != 1 || acct.AvailableUnits >= acct.BalanceUnits {
+		t.Fatalf("the account must count the transaction being mined: %+v %v", acct, err)
+	}
+	if bc.NextNonceFor(wallet.Address()) != 1 {
+		t.Fatal("NextNonceFor must skip a nonce in the block being mined")
+	}
+	_, other := liteKeys(t)
+	clash, err := sidechain.NewPublisherRegistration(wallet, other, "Studio 2", MinPublisherBondUnits,
+		sidechain.TxOptions{Nonce: 0, Fee: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.Submit(ctx, clash); err == nil {
+		t.Fatal("a transaction can't take the nonce of one being mined")
+	}
+
+	// Mining failed: back to the mempool, still pending.
+	bc.requeueTransactions(bc.mining)
+	if bc.GetMempoolSize() != 1 || len(bc.mining) != 0 {
+		t.Fatal("a failed block's transactions return to the mempool")
+	}
+	if info, err := c.Transaction(ctx, reg.ID()); err != nil || info.Status != SubmissionPending {
+		t.Fatalf("after requeue: %+v %v", info, err)
+	}
+}
+
+// TestBlocksBeingMinedAndPeerBlocks: a peer's block that confirms transactions this node is still
+// mining makes them confirmed, not pending (their spend isn't counted twice); overlapping mining
+// attempts each keep their transactions visible; a failed attempt doesn't requeue what a peer
+// already mined.
+func TestBlocksBeingMinedAndPeerBlocks(t *testing.T) {
+	bc, server := newApplicationAPI(t)
+	c, err := sidechain.NewClient(server.URL, apiKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	submit := func(t *testing.T) (*sidechain.Key, *sidechain.Transaction) {
+		t.Helper()
+		wallet, identity := liteKeys(t)
+		creditAddressForTest(t, bc, wallet.Address(), 500)
+		reg, err := sidechain.NewPublisherRegistration(wallet, identity, "Studio", MinPublisherBondUnits,
+			sidechain.TxOptions{Nonce: 0, Fee: sidechain.DefaultFee})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := c.Submit(ctx, reg); err != nil {
+			t.Fatal(err)
+		}
+		return wallet, reg
+	}
+	take := func() []Transaction { // what createNewBlock does first
+		bc.mux.Lock()
+		defer bc.mux.Unlock()
+		selected := bc.selectBlockTransactionsLocked()
+		bc.mining = append(bc.mining, selected...)
+		return selected
+	}
+
+	_, first := submit(t)
+	attemptA := take()
+	_, second := submit(t)
+	attemptB := take()
+	for _, tx := range []*sidechain.Transaction{first, second} {
+		if info, err := c.Transaction(ctx, tx.ID()); err != nil || info.Status != SubmissionPending {
+			t.Fatalf("overlapping attempts: %s should be pending: %+v %v", tx.ID(), info, err)
+		}
+	}
+
+	// Attempt B fails: its transaction returns to the mempool, A's stays in flight.
+	bc.requeueTransactions(attemptB)
+	if bc.GetMempoolSize() != 1 || len(bc.mining) != len(attemptA) {
+		t.Fatalf("mempool %d, mining %d", bc.GetMempoolSize(), len(bc.mining))
+	}
+
+	// A peer's block confirms A's transaction while this node is still mining it.
+	peer := &Block{Transactions: attemptA}
+	bc.mux.Lock()
+	bc.removeMinedTransactionsLocked(peer)
+	inFlight := len(bc.mining)
+	bc.mux.Unlock()
+	if inFlight != 0 {
+		t.Fatal("a transaction a peer's block confirmed is no longer being mined here")
+	}
+	// The local attempt then fails: what the peer mined must not come back (marked mined in the
+	// index the way an accepted block does).
+	bc.mux.Lock()
+	bc.indexTransactionsLocked()
+	bc.txIDIndex[first.ID()] = 7
+	bc.mux.Unlock()
+	bc.requeueTransactions(attemptA)
+	if bc.GetMempoolSize() != 1 {
+		t.Fatalf("a mined transaction was requeued: mempool %d", bc.GetMempoolSize())
+	}
+}
